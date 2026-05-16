@@ -21,7 +21,7 @@ import "./index.css";
   Gallery Produksi
   - Pesanan dari Gallery Kerudung: orders
   - Kain dari Gallery Kerudung: materials
-  - Pengiriman link ke Gallery Kerudung: transfersOut
+  - Pengiriman link ke Gallery Kerudung: shipments
   - Produksi lokal: produksi
   - Tarif borongan: work_rates
   - Hasil borongan: production_entries
@@ -33,7 +33,7 @@ const provider = new GoogleAuthProvider();
 const C = {
   ORDERS: "orders",
   MATERIALS: "materials",
-  TRANSFERS_OUT: "transfersOut",
+  SHIPMENTS: "shipments",
   PRODUKSI: "produksi",
   WORK_RATES: "work_rates",
   PRODUCTION_ENTRIES: "production_entries",
@@ -382,6 +382,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const [orders, setOrders] = useState([]);
   const [produksi, setProduksi] = useState([]);
@@ -446,7 +447,7 @@ export default function App() {
     const unsubRates = onSnapshot(collection(db, C.WORK_RATES), (snap) => setWorkRates(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unsubEntries = onSnapshot(collection(db, C.PRODUCTION_ENTRIES), (snap) => setProductionEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unsubMaterials = onSnapshot(collection(db, C.MATERIALS), (snap) => setMaterials(snap.docs.map((d) => safeMaterial({ id: d.id, ...d.data() }))));
-    const unsubShipments = onSnapshot(collection(db, C.TRANSFERS_OUT), (snap) => setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }))));
+    const unsubShipments = onSnapshot(collection(db, C.SHIPMENTS), (snap) => setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }))));
     const unsubPayroll = onSnapshot(collection(db, C.PAYROLL_EXPENSES), (snap) => setPayrollExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
 
     return () => {
@@ -877,7 +878,7 @@ function findRate(productType, model, process) {
 
     setIsSaving(true);
     try {
-      await addDoc(collection(db, C.TRANSFERS_OUT), {
+      await addDoc(collection(db, C.SHIPMENTS), {
         pesananId: order.id,
         orderId: order.id,
         customer: order.customer,
@@ -939,11 +940,17 @@ function findRate(productType, model, process) {
   }
 
   async function deleteRate(id) {
-    if (!confirm("Hapus tarif ini?")) return;
+    setConfirmDelete({ type: "rate", id });
+  }
+
+  async function confirmDeleteAction() {
+    if (!confirmDelete) return;
+    const { type, id } = confirmDelete;
+    setConfirmDelete(null);
     try {
-      await deleteDoc(doc(db, C.WORK_RATES, id));
+      if (type === "rate") await deleteDoc(doc(db, C.WORK_RATES, id));
     } catch (e) {
-      alert("Gagal hapus tarif: " + e.message);
+      alert("Gagal hapus: " + e.message);
     }
   }
 
@@ -1461,6 +1468,31 @@ function findRate(productType, model, process) {
             </Button>
           </div>
         </Modal>
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
+            <div className="text-xl font-bold mb-2" style={{ color: "#1e293b" }}>Hapus Data?</div>
+            <div className="text-sm mb-6" style={{ color: "#64748b" }}>Data yang dihapus tidak bisa dikembalikan.</div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                className="flex-1 rounded-2xl border py-3 font-semibold"
+                style={{ borderColor: "#e2e8f0", color: "#64748b" }}
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmDeleteAction}
+                className="flex-1 rounded-2xl py-3 font-semibold text-white"
+                style={{ background: "#e11d48" }}
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {isSaving && (
