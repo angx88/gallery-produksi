@@ -76,6 +76,47 @@ function fmtQty(value) {
   return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
 }
 
+function materialNameFromItem(item) {
+  return (
+    item?.mainMaterial ||
+    item?.materialName ||
+    item?.kain ||
+    item?.namaKain ||
+    item?.material ||
+    ""
+  );
+}
+
+function materialQtyPerPcsFromItem(item) {
+  return Number(
+    item?.materialQtyPerPcs ??
+    item?.kebutuhanKainPerPcs ??
+    item?.kebutuhanKain ??
+    item?.kainPerPcs ??
+    item?.qtyKainPerPcs ??
+    0
+  );
+}
+
+function orderItemsForMaterial(order) {
+  const rawItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
+    ? order.raw.items
+    : Array.isArray(order?.items) && order.items.length > 0
+      ? order.items
+      : [order?.raw || order];
+
+  return rawItems.map((it) => ({
+    name: it?.name || it?.item || order?.item || "-",
+    qty: Number(it?.qty ?? it?.quantity ?? order?.qty ?? 0),
+    mainMaterial: materialNameFromItem(it) || materialNameFromItem(order?.raw) || materialNameFromItem(order),
+    materialQtyPerPcs: materialQtyPerPcsFromItem(it) || materialQtyPerPcsFromItem(order?.raw) || materialQtyPerPcsFromItem(order),
+  }));
+}
+
+function normalizeKey(value) {
+  return lower(value).replace(/[^a-z0-9]/g, "");
+}
+
 function todayStr() {
   return new Date().toISOString().split("T")[0];
 }
@@ -492,9 +533,56 @@ export default function App() {
       });
   }, [productionEntries, q]);
 
+
+  const materialUsageByName = useMemo(() => {
+    const usage = {};
+
+    orders.forEach((order) => {
+      // Dipotong otomatis dari Gallery Kerudung:
+      // qty pesanan x kebutuhan kain per pcs.
+      // Dipakai hanya untuk order yang sudah masuk produksi / selesai / dikirim,
+      // supaya order baru yang belum produksi tidak langsung mengurangi sisa kain.
+      const isProductionRelated =
+        produksiByOrderId.has(order.id) ||
+        isDoneStatus(order.status) ||
+        isSentStatus(order.status);
+
+      if (!isProductionRelated) return;
+
+      orderItemsForMaterial(order).forEach((item) => {
+        const materialName = item.mainMaterial;
+        const qtyPerPcs = Number(item.materialQtyPerPcs || 0);
+        const qtyOrder = Number(item.qty || 0);
+        if (!materialName || qtyPerPcs <= 0 || qtyOrder <= 0) return;
+
+        const key = normalizeKey(materialName);
+        usage[key] = (usage[key] || 0) + qtyOrder * qtyPerPcs;
+      });
+    });
+
+    return usage;
+  }, [orders, produksiByOrderId]);
+
   const filteredMaterials = useMemo(() => {
-    return materials.filter((k) => q === "" || `${k.namaKain} ${k.satuan}`.toLowerCase().includes(q));
-  }, [materials, q]);
+    return materials
+      .filter((k) => q === "" || `${k.namaKain} ${k.satuan}`.toLowerCase().includes(q))
+      .map((k) => {
+        const usage = Number(materialUsageByName[normalizeKey(k.namaKain)] || 0);
+        return {
+          ...k,
+          warnas: (k.warnas || []).map((w, idx) => {
+            const currentDipotong = Number(w.dipotong || 0);
+            const autoDipotong = idx === 0 ? usage : 0;
+            const dipotong = Math.max(currentDipotong, autoDipotong);
+            return {
+              ...w,
+              dipotong,
+              sisa: Number(w.stok || 0) - dipotong,
+            };
+          }),
+        };
+      });
+  }, [materials, q, materialUsageByName]);
 
   const filteredShipments = useMemo(() => {
     return orders
@@ -546,7 +634,37 @@ export default function App() {
     };
   }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi]);
 
-  function findRate(productType, model, process) {
+  
+  const workerNameOptions = useMemo(() => {
+    const names = new Set();
+    productionEntries.forEach((e) => {
+      if (e.employeeName) names.add(e.employeeName);
+    });
+    produksi.forEach((p) => {
+      (p.workers || []).forEach((w) => {
+        if (w.employeeName) names.add(w.employeeName);
+      });
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [productionEntries, produksi]);
+
+  function processQtyForOrder(orderId, process) {
+    return productionEntries
+      .filter((e) => e.orderId === orderId && e.process === process)
+      .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+  }
+
+  function isDuplicateEntry(payload) {
+    return productionEntries.some((e) =>
+      lower(e.employeeName) === lower(payload.employeeName) &&
+      e.orderId === payload.orderId &&
+      e.process === payload.process &&
+      lower(e.model) === lower(payload.model) &&
+      String(e.tanggal || "") === String(payload.tanggal || "")
+    );
+  }
+
+function findRate(productType, model, process) {
     return workRates.find((r) => {
       const sameType = lower(r.productType) === lower(productType);
       const sameProcess = lower(r.process) === lower(process);
@@ -643,6 +761,31 @@ export default function App() {
     const order = orders.find((o) => o.id === entryForm.orderId);
     const prod = order ? produksiByOrderId.get(order.id) : null;
     const totalWage = Number(entryForm.qty) * Number(rate.rate || 0);
+
+    const draftPayloadForCheck = {
+      employeeName: entryForm.employeeName.trim(),
+      orderId: entryForm.orderId || "",
+      process: entryForm.process,
+      model: entryForm.process === "QC Packing" ? "" : entryForm.model.trim(),
+      tanggal: entryForm.tanggal,
+    };
+
+    if (isDuplicateEntry(draftPayloadForCheck)) {
+      return alert("Data borongan ini sudah pernah diinput untuk pekerja, proses, tanggal, dan pesanan yang sama.");
+    }
+
+    if (order) {
+      const alreadyQty = processQtyForOrder(order.id, entryForm.process);
+      const nextQty = alreadyQty + Number(entryForm.qty || 0);
+      if (nextQty > Number(order.qty || 0)) {
+        return alert(
+          `Qty ${entryForm.process} melebihi qty pesanan.\n` +
+          `Pesanan: ${order.qty} pcs\n` +
+          `Sudah input: ${alreadyQty} pcs\n` +
+          `Input baru: ${entryForm.qty} pcs`
+        );
+      }
+    }
 
     setIsSaving(true);
     try {
@@ -1186,7 +1329,29 @@ export default function App() {
       {modal === "borongan" && (
         <Modal title="💪 Input Hasil Borongan" onClose={() => setModal(null)}>
           <div className="space-y-3">
-            <Input label="Nama Pekerja" value={entryForm.employeeName} onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: v }))} placeholder="Contoh: Teh Emy" />
+            <div>
+              <Input
+                label="Nama Pekerja"
+                value={entryForm.employeeName}
+                onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: v }))}
+                placeholder="Contoh: Teh Emy"
+              />
+              {workerNameOptions.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {workerNameOptions.slice(0, 8).map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setEntryForm((f) => ({ ...f, employeeName: name }))}
+                      className="rounded-full px-3 py-1 text-xs font-bold"
+                      style={{ background: "#fdf2f8", color: "#a855f7", border: "1px solid #f9a8d4" }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <Select
               label="Pesanan terkait"
               value={entryForm.orderId}
