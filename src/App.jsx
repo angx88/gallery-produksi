@@ -830,21 +830,7 @@ function findRate(productType, model, process) {
         });
       }
 
-      await addDoc(collection(db, C.PAYROLL_EXPENSES), {
-        source: "gallery-produksi",
-        type: "gaji_borongan",
-        employeeName: entryPayload.employeeName,
-        orderId: entryPayload.orderId,
-        invoice: entryPayload.invoice,
-        productType: entryPayload.productType,
-        model: entryPayload.model,
-        process: entryPayload.process,
-        totalPcs: entryPayload.qty,
-        totalAmount: totalWage,
-        status: "belum_dibayar",
-        tanggal: entryPayload.tanggal,
-        createdAt: todayStr(),
-      });
+      // Payroll TIDAK dibuat di sini — dibuat saat pekerja setor hasil
 
       setEntryForm({
         employeeName: "",
@@ -874,15 +860,42 @@ function findRate(productType, model, process) {
         `Total setor + reject (${qtySetor + qtyReject} pcs) melebihi qty awal (${setorModal.qty} pcs).`
       );
     }
+    const rate = Number(setorModal.rate || 0);
+    const totalWageSetor = qtySetor * rate;
+    const tanggalSetor = setorForm.tanggalSetor || todayStr();
+
     setIsSaving(true);
     try {
+      // Update entry dengan hasil setor
       await updateDoc(doc(db, C.PRODUCTION_ENTRIES, setorModal.id), {
         qtySetor,
         qtyReject,
+        totalWageSetor,
         statusSetor: "sudah_setor",
-        tanggalSetor: setorForm.tanggalSetor || todayStr(),
+        tanggalSetor,
         catatanSetor: setorForm.catatan || "",
       });
+
+      // Buat payroll berdasarkan qty yang disetor (bukan qty awal)
+      await addDoc(collection(db, C.PAYROLL_EXPENSES), {
+        source: "gallery-produksi",
+        type: "gaji_borongan",
+        employeeName: setorModal.employeeName,
+        orderId: setorModal.orderId || "",
+        invoice: setorModal.invoice || "",
+        productType: setorModal.productType,
+        model: setorModal.model || "",
+        process: setorModal.process,
+        totalPcs: qtySetor,
+        totalAmount: totalWageSetor,
+        status: "belum_dibayar",
+        tanggal: tanggalSetor,
+        createdAt: todayStr(),
+        entryId: setorModal.id,
+        qtyAwal: setorModal.qty,
+        qtyReject,
+      });
+
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
     } catch (e) {
@@ -1286,6 +1299,9 @@ function findRate(productType, model, process) {
                     {qtyReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
                     {selisih > 0 && <span>⚠️ Kurang: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
                   </div>
+                  {e.totalWageSetor > 0 && (
+                    <div className="text-sm font-bold" style={{ color: "#a855f7" }}>💰 Gaji: {money(e.totalWageSetor)}</div>
+                  )}
                   {e.catatanSetor && <div className="text-xs" style={{ color: "#64748b" }}>📝 {e.catatanSetor}</div>}
                 </div>
               ) : (
@@ -1480,6 +1496,12 @@ function findRate(productType, model, process) {
             {(Number(setorForm.qtySetor) || 0) + (Number(setorForm.qtyReject) || 0) < setorModal.qty && (Number(setorForm.qtySetor) > 0) && (
               <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>
                 ⚠️ Kurang {setorModal.qty - (Number(setorForm.qtySetor) || 0) - (Number(setorForm.qtyReject) || 0)} pcs dari qty awal
+              </div>
+            )}
+            {Number(setorForm.qtySetor) > 0 && Number(setorModal.rate) > 0 && (
+              <div className="rounded-xl px-3 py-2 text-sm font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>
+                💰 Gaji: {money(Number(setorForm.qtySetor) * Number(setorModal.rate))}
+                <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs × {money(setorModal.rate)})</span>
               </div>
             )}
             <Input
