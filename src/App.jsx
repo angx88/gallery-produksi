@@ -383,6 +383,8 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
+  const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
 
   const [orders, setOrders] = useState([]);
   const [produksi, setProduksi] = useState([]);
@@ -862,6 +864,34 @@ function findRate(productType, model, process) {
     }
   }
 
+  async function simpanSetor() {
+    if (!setorModal) return;
+    const qtySetor = Number(setorForm.qtySetor);
+    const qtyReject = Number(setorForm.qtyReject || 0);
+    if (!qtySetor || qtySetor <= 0) return alert("Qty setor wajib diisi.");
+    if (qtySetor + qtyReject > setorModal.qty) {
+      return alert(
+        `Total setor + reject (${qtySetor + qtyReject} pcs) melebihi qty awal (${setorModal.qty} pcs).`
+      );
+    }
+    setIsSaving(true);
+    try {
+      await updateDoc(doc(db, C.PRODUCTION_ENTRIES, setorModal.id), {
+        qtySetor,
+        qtyReject,
+        statusSetor: "sudah_setor",
+        tanggalSetor: setorForm.tanggalSetor || todayStr(),
+        catatanSetor: setorForm.catatan || "",
+      });
+      setSetorModal(null);
+      setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
+    } catch (e) {
+      alert("Gagal simpan setor: " + e.message);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function addPengiriman() {
     if (!kirimForm.pesananId) return alert("Pilih pesanan dulu");
     if (!kirimForm.penerima.trim()) return alert("Penerima wajib diisi");
@@ -1227,8 +1257,13 @@ function findRate(productType, model, process) {
             <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{stats.boronganPcs} pcs</div>
             <div className="text-xs" style={{ color: "#94a3b8" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
           </div>
-          {filteredEntries.map((e) => (
-            <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+          {filteredEntries.map((e) => {
+            const sudahSetor = e.statusSetor === "sudah_setor";
+            const qtyReject = Number(e.qtyReject || 0);
+            const qtySetor = Number(e.qtySetor || 0);
+            const selisih = Number(e.qty) - qtySetor - qtyReject;
+            return (
+            <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : "#fde68a"}` }}>
               <div className="flex justify-between">
                 <div>
                   <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {e.employeeName}</div>
@@ -1238,11 +1273,36 @@ function findRate(productType, model, process) {
                 </div>
                 <div className="text-right">
                   <div className="text-2xl font-bold" style={{ color: "#10b981" }}>{e.qty}</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>pcs</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
                 </div>
               </div>
+
+              {/* Status setor */}
+              {sudahSetor ? (
+                <div className="mt-3 rounded-2xl p-3 space-y-1" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                  <div className="text-xs font-bold" style={{ color: "#16a34a" }}>✅ Sudah Setor — {e.tanggalSetor}</div>
+                  <div className="flex gap-4 text-sm">
+                    <span>✔️ Setor: <strong>{qtySetor} pcs</strong></span>
+                    {qtyReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
+                    {selisih > 0 && <span>⚠️ Kurang: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
+                  </div>
+                  {e.catatanSetor && <div className="text-xs" style={{ color: "#64748b" }}>📝 {e.catatanSetor}</div>}
+                </div>
+              ) : (
+                <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
+                  <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
+                  <button
+                    onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(e.qty), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                    className="rounded-xl px-3 py-1 text-xs font-bold text-white"
+                    style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                  >
+                    Setor Hasil
+                  </button>
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1389,6 +1449,53 @@ function findRate(productType, model, process) {
             <Input label="Catatan" value={entryForm.catatan} onChange={(v) => setEntryForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
             <Button onClick={addProductionEntry} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
               Simpan Hasil Borongan
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal Setor Hasil Borongan */}
+      {setorModal && (
+        <Modal title="📦 Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
+          <div className="space-y-3">
+            <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {setorModal.employeeName}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType} · {setorModal.process}{setorModal.model ? ` · ${setorModal.model}` : ""}</div>
+              <div className="text-xs" style={{ color: "#94a3b8" }}>Qty diberikan: <strong>{setorModal.qty} pcs</strong></div>
+            </div>
+            <Input
+              label="Qty Disetor (pcs)"
+              type="number"
+              value={setorForm.qtySetor}
+              onChange={(v) => setSetorForm((f) => ({ ...f, qtySetor: v }))}
+              placeholder={`Maks ${setorModal.qty} pcs`}
+            />
+            <Input
+              label="Qty Reject (pcs) — opsional"
+              type="number"
+              value={setorForm.qtyReject}
+              onChange={(v) => setSetorForm((f) => ({ ...f, qtyReject: v }))}
+              placeholder="0 jika tidak ada reject"
+            />
+            {(Number(setorForm.qtySetor) || 0) + (Number(setorForm.qtyReject) || 0) < setorModal.qty && (Number(setorForm.qtySetor) > 0) && (
+              <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>
+                ⚠️ Kurang {setorModal.qty - (Number(setorForm.qtySetor) || 0) - (Number(setorForm.qtyReject) || 0)} pcs dari qty awal
+              </div>
+            )}
+            <Input
+              label="Tanggal Setor"
+              type="date"
+              value={setorForm.tanggalSetor}
+              onChange={(v) => setSetorForm((f) => ({ ...f, tanggalSetor: v }))}
+            />
+            <Input
+              label="Catatan"
+              value={setorForm.catatan}
+              onChange={(v) => setSetorForm((f) => ({ ...f, catatan: v }))}
+              placeholder="Opsional"
+            />
+            <Button onClick={simpanSetor} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
+              Simpan Setor
             </Button>
           </div>
         </Modal>
