@@ -505,11 +505,27 @@ export default function App() {
   }
 
   const filteredOrders = useMemo(() => {
-    return orders.filter((o) => {
-      const txt = `${o.customer} ${o.item} ${o.invoice} ${o.status} ${o.warna}`.toLowerCase();
-      return q === "" || txt.includes(q);
-    });
-  }, [orders, q]);
+    const isBelumProduksi = (o) => {
+      const alreadyInProduction = produksiByOrderId.has(o.id);
+      const alreadyShipped = shipmentByOrderId.has(o.id) || lower(o.status) === "dikirim";
+      const doneInGK = ["selesai", "lunas"].includes(lower(o.status));
+      return !alreadyInProduction && !alreadyShipped && !doneInGK;
+    };
+
+    return orders
+      .filter((o) => {
+        const txt = `${o.customer} ${o.item} ${o.invoice} ${o.status} ${o.warna}`.toLowerCase();
+        return q === "" || txt.includes(q);
+      })
+      .sort((a, b) => {
+        const aBelum = isBelumProduksi(a) ? 0 : 1;
+        const bBelum = isBelumProduksi(b) ? 0 : 1;
+        // Belum produksi naik ke atas
+        if (aBelum !== bBelum) return aBelum - bBelum;
+        // Dalam grup yang sama: terbaru di atas (descending)
+        return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+      });
+  }, [orders, q, produksiByOrderId, shipmentByOrderId]);
 
   const ordersBelumProduksi = useMemo(() => {
     return orders.filter((o) => {
