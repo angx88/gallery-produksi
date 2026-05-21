@@ -463,7 +463,25 @@ export default function App() {
     };
   }, [user]);
 
-  const q = search.toLowerCase();
+  // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total
+  useEffect(() => {
+    if (produksi.length === 0 || orders.length === 0) return;
+    const needsMigration = produksi.filter((p) => !Array.isArray(p.items) || p.items.length === 0);
+    if (needsMigration.length === 0) return;
+
+    needsMigration.forEach(async (p) => {
+      const order = orders.find((o) => o.id === p.orderId);
+      if (!order) return;
+      const orderItems = Array.isArray(order.items) && order.items.length > 0
+        ? order.items.map((it) => ({ name: it.name || "", qty: Number(it.qty || 0) }))
+        : [{ name: order.item || p.item || "Pesanan", qty: Number(order.qty || p.qty || 0) }];
+      try {
+        await updateDoc(doc(db, C.PRODUKSI, p.id), { items: orderItems });
+      } catch (_) {}
+    });
+  }, [produksi, orders]);
+
+
 
   const produksiByOrderId = useMemo(() => {
     const map = new Map();
@@ -692,12 +710,24 @@ function findRate(productType, model, process) {
     });
   }
 
+  function getRateForEmployee(productType, model, process, employeeName) {
+    const rate = findRate(productType, model, process);
+    if (!rate) return null;
+    const isKonveksi = lower(employeeName || "").includes("konveksi");
+    return { ...rate, rate: isKonveksi ? Number(rate.rate) - 500 : Number(rate.rate) };
+  }
+
   async function addProduksi() {
     if (!prodForm.orderId) return alert("Pilih pesanan dulu");
 
     const order = orders.find((o) => o.id === prodForm.orderId);
     if (!order) return alert("Pesanan tidak ditemukan");
     if (produksiByOrderId.has(order.id)) return alert("Pesanan ini sudah masuk produksi");
+
+    // Ambil items per model dari pesanan (bukan total)
+    const orderItems = Array.isArray(order.items) && order.items.length > 0
+      ? order.items.map((it) => ({ name: it.name || "", qty: Number(it.qty || 0), price: it.price || 0 }))
+      : [{ name: order.item || "Pesanan", qty: Number(order.qty || 0), price: order.hargaPcs || 0 }];
 
     setIsSaving(true);
     try {
@@ -707,6 +737,7 @@ function findRate(productType, model, process) {
         customer: order.customer,
         item: order.item,
         qty: order.qty,
+        items: orderItems, // per model
         warna: order.warna || "",
         ukuran: order.ukuran || "",
         status: "Antri",
@@ -731,6 +762,15 @@ function findRate(productType, model, process) {
     const item = produksi.find((p) => p.id === id);
     if (!item || item.status === newStatus) return;
 
+    // Mapping status produksi → status pesanan di Gallery Kerudung
+    const statusOrderMap = {
+      "Antri": "Proses",
+      "Jahit": "Proses",
+      "QC": "Proses",
+      "Packing": "Proses",
+      "Selesai": "Selesai Produksi",
+    };
+
     setIsSaving(true);
     try {
       await updateDoc(doc(db, C.PRODUKSI, id), {
@@ -738,6 +778,21 @@ function findRate(productType, model, process) {
         updatedAt: todayStr(),
         history: [...(item.history || []), { tanggal: todayStr(), status: newStatus, catatan: "" }],
       });
+
+      // Sync ke Gallery Kerudung — update status di collection orders
+      if (item.orderId) {
+        const orderStatusBaru = statusOrderMap[newStatus];
+        if (orderStatusBaru) {
+          try {
+            await updateDoc(doc(db, C.ORDERS, item.orderId), {
+              statusProduksi: newStatus,
+              ...(newStatus === "Selesai" ? { status: "Selesai Produksi" } : {}),
+            });
+          } catch (_) {
+            // Jika order tidak ditemukan, abaikan (mungkin sudah dihapus)
+          }
+        }
+      }
     } catch (e) {
       alert("Gagal update status: " + e.message);
     } finally {
@@ -774,7 +829,7 @@ function findRate(productType, model, process) {
     if (!entryForm.qty || Number(entryForm.qty) <= 0) return alert("Qty wajib diisi");
     if (entryForm.process !== "QC Packing" && !entryForm.model.trim()) return alert("Model wajib diisi");
 
-    const rate = findRate(entryForm.productType, entryForm.model, entryForm.process);
+    const rate = getRateForEmployee(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName);
     if (!rate) return alert("Tarif belum ada. Tambahkan dulu di menu Tarif.");
 
     const order = orders.find((o) => o.id === entryForm.orderId);
@@ -1233,7 +1288,17 @@ function findRate(productType, model, process) {
               <div className="flex justify-between items-start">
                 <div className="flex-1">
                   <div className="font-bold" style={{ color: "#2d1b69" }}>{p.customer}</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>{p.invoice} · {p.item} · {p.qty} pcs</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>{p.invoice} · {p.qty} pcs total</div>
+                  {/* Breakdown per model */}
+                  {Array.isArray(p.items) && p.items.length > 1 ? (
+                    <div className="mt-1 space-y-0.5">
+                      {p.items.map((it, i) => (
+                        <div key={i} className="text-xs" style={{ color: "#7c3aed" }}>• {it.name}: <strong>{it.qty} pcs</strong></div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>{p.item}</div>
+                  )}
                   {p.tanggalMulai && <div className="text-xs" style={{ color: "#94a3b8" }}>📅 Mulai: {p.tanggalMulai}</div>}
                 </div>
                 <StatusBadge status={p.status} />
@@ -1286,6 +1351,44 @@ function findRate(productType, model, process) {
             <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{stats.boronganPcs} pcs</div>
             <div className="text-xs" style={{ color: "#94a3b8" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
           </div>
+
+          {/* Rekap per nama pekerja */}
+          {(() => {
+            const rekapMap = {};
+            filteredEntries.forEach((e) => {
+              const nama = e.employeeName || "Tidak diketahui";
+              if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0 };
+              rekapMap[nama].pcsAwal += Number(e.qty || 0);
+              if (e.statusSetor === "sudah_setor") {
+                rekapMap[nama].pcsSetor += Number(e.qtySetor || 0);
+                rekapMap[nama].pcsReject += Number(e.qtyReject || 0);
+                rekapMap[nama].gaji += Number(e.totalWageSetor || 0);
+              } else {
+                rekapMap[nama].belumSetor += Number(e.qty || 0);
+              }
+            });
+            const rekap = Object.entries(rekapMap).sort((a, b) => b[1].gaji - a[1].gaji);
+            if (rekap.length === 0) return null;
+            return (
+              <div className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="text-xs font-bold mb-2" style={{ color: "#7c3aed" }}>📊 Rekap Gaji per Pekerja</div>
+                {rekap.map(([nama, r]) => (
+                  <div key={nama} className="rounded-xl p-3" style={{ background: "#fdf4ff", border: "1px solid #f3e8ff" }}>
+                    <div className="flex justify-between items-start">
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
+                      <div className="text-sm font-bold" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
+                    </div>
+                    <div className="flex gap-3 mt-1 text-xs" style={{ color: "#64748b" }}>
+                      <span>Diberikan: <strong>{r.pcsAwal}</strong></span>
+                      <span>Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
+                      {r.pcsReject > 0 && <span>Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
+                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}>⏳ Belum setor: <strong>{r.belumSetor}</strong></span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           {filteredEntries.map((e) => {
             const sudahSetor = e.statusSetor === "sudah_setor";
             const qtyReject = Number(e.qtyReject || 0);
