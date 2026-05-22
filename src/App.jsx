@@ -1650,9 +1650,11 @@ function findRate(productType, model, process) {
           } else {
             rekapMap[nama].belumSetor += Number(e.qty || 0);
           }
+          // Fallback customer dari orders jika entry lama tidak punya field customer
+          const entryOrder = orders.find(o => o.id === e.orderId);
           rekapMap[nama].detail.push({
-            customer: e.customer || "-",
-            invoice: e.invoice || "",
+            customer: e.customer || entryOrder?.customer || "-",
+            invoice: e.invoice || entryOrder?.invoice || "",
             model: e.model || "-",
             process: e.process || "",
             qty: Number(e.qty || 0),
