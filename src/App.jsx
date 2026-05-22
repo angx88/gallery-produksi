@@ -380,6 +380,11 @@ export default function App() {
   const [tab, setTab] = useState("pesanan");
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
+  const [rekapDari, setRekapDari] = useState(() => {
+    const d = new Date(); d.setDate(1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [rekapSampai, setRekapSampai] = useState(() => new Date().toISOString().slice(0, 10));
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -466,7 +471,15 @@ export default function App() {
   // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total
   useEffect(() => {
     if (produksi.length === 0 || orders.length === 0) return;
-    const needsMigration = produksi.filter((p) => !Array.isArray(p.items) || p.items.length === 0);
+    const needsMigration = produksi.filter((p) => {
+      if (!Array.isArray(p.items) || p.items.length === 0) return true;
+      // Juga migrasi jika hanya 1 item dengan qty sama dengan total (fallback lama)
+      if (p.items.length === 1 && Number(p.items[0].qty) === Number(p.qty)) {
+        const order = orders.find((o) => o.id === p.orderId);
+        if (order && Array.isArray(order.items) && order.items.length > 1) return true;
+      }
+      return false;
+    });
     if (needsMigration.length === 0) return;
 
     needsMigration.forEach(async (p) => {
@@ -1192,6 +1205,7 @@ function findRate(productType, model, process) {
           { id: "pesanan", label: "Pesanan", icon: "📋", badge: stats.belum },
           { id: "produksi", label: "Produksi", icon: "🧵" },
           { id: "borongan", label: "Borongan", icon: "💪" },
+          { id: "rekap", label: "Rekap", icon: "📊" },
           { id: "kain", label: "Kain", icon: "🎨" },
           { id: "kirim", label: "Kirim", icon: "🚚" },
           { id: "tarif", label: "Tarif", icon: "🏷️" },
@@ -1283,94 +1297,77 @@ function findRate(productType, model, process) {
             🧵 + Tambah ke Produksi
           </Button>
           {filteredProduksi.length === 0 && <Empty text="Tidak ada data produksi" />}
-          {filteredProduksi.map((p) => (
-            <div key={p.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
-              <div className="flex justify-between items-start">
-                <div className="flex-1">
-                  <div className="font-bold" style={{ color: "#2d1b69" }}>{p.customer}</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>{p.invoice} · {p.qty} pcs total</div>
-                  {/* Breakdown per model */}
-                  {Array.isArray(p.items) && p.items.length > 1 ? (
-                    <div className="mt-1 space-y-0.5">
-                      {p.items.map((it, i) => (
-                        <div key={i} className="text-xs" style={{ color: "#7c3aed" }}>• {it.name}: <strong>{it.qty} pcs</strong></div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>{p.item}</div>
-                  )}
-                  {p.tanggalMulai && <div className="text-xs" style={{ color: "#94a3b8" }}>📅 Mulai: {p.tanggalMulai}</div>}
-
-                  {/* Rekap proses: Potong, Jahit, QC Packing vs qty pesanan */}
-                  {(() => {
-                    const qtyPesanan = Number(p.qty || 0);
-                    const rekap = [
-                      { label: "✂️ Potong", qty: processQtyForOrder(p.orderId, "Potong") },
-                      { label: "🧵 Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
-                      { label: "📦 QC Packing", qty: processQtyForOrder(p.orderId, "QC Packing") },
-                    ].filter((r) => r.qty > 0);
-                    if (rekap.length === 0) return null;
-                    return (
-                      <div className="mt-2 rounded-xl p-2 space-y-1" style={{ background: "#fdf4ff", border: "1px solid #e9d5ff" }}>
-                        <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>Rekap Proses</div>
-                        {rekap.map((r) => {
-                          const sesuai = r.qty >= qtyPesanan;
-                          const pct = Math.min(Math.round((r.qty / qtyPesanan) * 100), 100);
-                          return (
-                            <div key={r.label}>
-                              <div className="flex justify-between text-xs">
-                                <span style={{ color: "#64748b" }}>{r.label}</span>
-                                <span style={{ color: sesuai ? "#16a34a" : "#f59e0b", fontWeight: "bold" }}>
-                                  {r.qty}/{qtyPesanan} pcs {sesuai ? "✅" : `(${pct}%)`}
-                                </span>
-                              </div>
-                              <div className="mt-0.5 h-1.5 rounded-full w-full" style={{ background: "#e9d5ff" }}>
-                                <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: sesuai ? "#16a34a" : "#a855f7" }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
+          {filteredProduksi.map((p) => {
+            const qtyPesanan = Number(p.qty || 0);
+            const rekapProses = [
+              { label: "✂️ Potong", qty: processQtyForOrder(p.orderId, "Potong") },
+              { label: "🧵 Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
+              { label: "📦 QC", qty: processQtyForOrder(p.orderId, "QC Packing") },
+            ].filter((r) => r.qty > 0);
+            return (
+            <div key={p.id} className="rounded-2xl bg-white shadow-sm overflow-hidden" style={{ border: "1px solid #fce7f3" }}>
+              {/* Header compact */}
+              <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-sm truncate" style={{ color: "#2d1b69" }}>{p.customer}</div>
+                  <div className="text-xs truncate" style={{ color: "#94a3b8" }}>{p.invoice}</div>
                 </div>
-                <StatusBadge status={p.status} />
+                <div className="flex items-center gap-2 ml-2">
+                  <div className="text-right">
+                    <div className="text-lg font-bold" style={{ color: "#ec4899" }}>{p.qty}</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>pcs</div>
+                  </div>
+                  <StatusBadge status={p.status} />
+                </div>
               </div>
-              <ProgressBar status={p.status} />
-              {(p.workers || []).length > 0 && (
-                <div className="mt-3 rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
-                  <div className="text-xs font-bold mb-2" style={{ color: "#a855f7" }}>👥 Pembagian pekerja</div>
-                  {(p.workers || []).map((w, idx) => (
-                    <div key={idx} className="flex justify-between text-xs py-1" style={{ borderTop: idx > 0 ? "1px solid #fce7f3" : "none" }}>
-                      <span style={{ color: "#2d1b69" }}>{w.employeeName}</span>
-                      <span style={{ color: "#7c3aed", fontWeight: 700 }}>
-                        {w.process}{w.model ? ` · ${w.model}` : ""} · {w.qty} pcs
-                      </span>
-                    </div>
+
+              {/* Per model — compact */}
+              {Array.isArray(p.items) && p.items.length > 0 && (
+                <div className="px-4 pb-2 flex flex-wrap gap-1">
+                  {p.items.map((it, i) => (
+                    <span key={i} className="rounded-full px-2 py-0.5 text-xs" style={{ background: "#ede9fe", color: "#5b21b6" }}>
+                      {it.name}: {it.qty} pcs
+                    </span>
                   ))}
                 </div>
               )}
-              <div className="mt-3">
-                <div className="text-xs font-bold mb-2" style={{ color: "#a855f7" }}>Ubah status:</div>
-                <div className="flex flex-wrap gap-1">
+
+              <ProgressBar status={p.status} />
+
+              {/* Rekap proses — compact grid */}
+              {rekapProses.length > 0 && (
+                <div className="px-4 py-2 grid grid-cols-3 gap-1">
+                  {rekapProses.map((r) => {
+                    const sesuai = r.qty >= qtyPesanan;
+                    return (
+                      <div key={r.label} className="rounded-xl p-2 text-center" style={{ background: sesuai ? "#dcfce7" : "#fef3c7" }}>
+                        <div className="text-xs font-bold" style={{ color: sesuai ? "#16a34a" : "#b45309" }}>{r.qty}</div>
+                        <div className="text-xs" style={{ color: "#94a3b8" }}>{r.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Ubah status — compact pills */}
+              <div className="px-4 pb-3">
+                <div className="flex gap-1 flex-wrap">
                   {PROD_STATUS.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => updateProduksiStatus(p.id, s)}
+                    <button key={s} onClick={() => updateProduksiStatus(p.id, s)}
                       className="rounded-full px-2 py-1 text-xs font-semibold"
                       style={{
-                        background: p.status === s ? "linear-gradient(135deg,#ec4899,#a855f7)" : "white",
+                        background: p.status === s ? "linear-gradient(135deg,#ec4899,#a855f7)" : "#fdf2f8",
                         color: p.status === s ? "white" : "#a855f7",
                         border: "1px solid #f9a8d4",
-                      }}
-                    >
+                      }}>
                       {PROD_COLORS[s]?.icon} {s}
                     </button>
                   ))}
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1473,6 +1470,118 @@ function findRate(productType, model, process) {
           })}
         </div>
       )}
+
+      {tab === "rekap" && (() => {
+        const inRange = (tanggal) => {
+          if (!tanggal) return false;
+          return tanggal >= rekapDari && tanggal <= rekapSampai;
+        };
+        const filtered = productionEntries.filter((e) => inRange(e.tanggalSetor || e.tanggal));
+        const byProses = {};
+        filtered.forEach((e) => {
+          const p = e.process || "Lainnya";
+          if (!byProses[p]) byProses[p] = { qty: 0, qtySetor: 0, qtyReject: 0, gaji: 0 };
+          byProses[p].qty += Number(e.qty || 0);
+          byProses[p].qtySetor += Number(e.qtySetor || 0);
+          byProses[p].qtyReject += Number(e.qtyReject || 0);
+          byProses[p].gaji += Number(e.totalWageSetor || 0);
+        });
+        const totalQty = filtered.reduce((s, e) => s + Number(e.qty || 0), 0);
+        const totalSetor = filtered.reduce((s, e) => s + Number(e.qtySetor || 0), 0);
+        const totalReject = filtered.reduce((s, e) => s + Number(e.qtyReject || 0), 0);
+        const totalGaji = filtered.reduce((s, e) => s + Number(e.totalWageSetor || 0), 0);
+        const prosesOrder = ["Potong", "Jahit", "QC Packing"];
+        const prosesKeys = [...prosesOrder.filter((p) => byProses[p]), ...Object.keys(byProses).filter((p) => !prosesOrder.includes(p))];
+        return (
+          <div className="space-y-3 p-4">
+            {/* Filter tanggal */}
+            <div className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #e9d5ff" }}>
+              <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>📅 Filter Periode</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
+                  <input type="date" value={rekapDari} onChange={(e) => setRekapDari(e.target.value)}
+                    className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
+                </div>
+                <div>
+                  <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Sampai</div>
+                  <input type="date" value={rekapSampai} onChange={(e) => setRekapSampai(e.target.value)}
+                    className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
+                </div>
+              </div>
+              <div className="flex gap-2 mt-1">
+                {[
+                  { label: "Hari ini", dari: todayStr(), sampai: todayStr() },
+                  { label: "Minggu ini", dari: (() => { const d = new Date(); d.setDate(d.getDate() - d.getDay()); return d.toISOString().slice(0, 10); })(), sampai: todayStr() },
+                  { label: "Bulan ini", dari: (() => { const d = new Date(); d.setDate(1); return d.toISOString().slice(0, 10); })(), sampai: todayStr() },
+                ].map((s) => (
+                  <button key={s.label} onClick={() => { setRekapDari(s.dari); setRekapSampai(s.sampai); }}
+                    className="flex-1 rounded-xl py-1.5 text-xs font-bold"
+                    style={{ background: "#f3e8ff", color: "#7c3aed" }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Ringkasan total */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fce7f3" }}>
+                <div className="text-xl font-bold" style={{ color: "#ec4899" }}>{totalQty.toLocaleString()}</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #bbf7d0" }}>
+                <div className="text-xl font-bold" style={{ color: "#16a34a" }}>{totalSetor.toLocaleString()}</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs disetor</div>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fde68a" }}>
+                <div className="text-xl font-bold" style={{ color: "#d97706" }}>{totalReject.toLocaleString()}</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs reject</div>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="text-base font-bold" style={{ color: "#7c3aed" }}>{money(totalGaji)}</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>total gaji</div>
+              </div>
+            </div>
+
+            {/* Rekap per proses */}
+            {prosesKeys.length > 0 ? (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📋 Per Proses</div>
+                {prosesKeys.map((p) => {
+                  const r = byProses[p];
+                  const icon = p === "Potong" ? "✂️" : p === "Jahit" ? "🧵" : p === "QC Packing" ? "📦" : "🔧";
+                  const reject = r.qtyReject;
+                  return (
+                    <div key={p} className="rounded-xl p-3" style={{ background: "#fdf4ff", border: "1px solid #f3e8ff" }}>
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="font-bold text-sm" style={{ color: "#2d1b69" }}>{icon} {p}</span>
+                        <span className="text-xs font-bold" style={{ color: "#7c3aed" }}>{money(r.gaji)}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 text-center text-xs">
+                        <div className="rounded-lg py-1" style={{ background: "#ede9fe" }}>
+                          <div className="font-bold" style={{ color: "#5b21b6" }}>{r.qty.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>diberikan</div>
+                        </div>
+                        <div className="rounded-lg py-1" style={{ background: "#dcfce7" }}>
+                          <div className="font-bold" style={{ color: "#16a34a" }}>{r.qtySetor.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>disetor</div>
+                        </div>
+                        <div className="rounded-lg py-1" style={{ background: reject > 0 ? "#fee2e2" : "#f1f5f9" }}>
+                          <div className="font-bold" style={{ color: reject > 0 ? "#ef4444" : "#94a3b8" }}>{reject.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>reject</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <Empty text="Tidak ada data borongan di periode ini" />
+            )}
+          </div>
+        );
+      })()}
 
       {tab === "kain" && (
         <div className="space-y-3 p-4">
