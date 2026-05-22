@@ -1795,16 +1795,25 @@ function findRate(productType, model, process) {
                 Dicetak otomatis oleh sistem Gallery Kerudung · ${cetakTgl}
               </div>
             </div>
-            <script>window.onload = function() { window.print(); }</script>
+            <div style="text-align:center;padding:20px 0 10px;"><button onclick="window.print()" style="background:linear-gradient(135deg,#ec4899,#a855f7);color:white;border:none;border-radius:14px;padding:12px 32px;font-size:15px;font-weight:700;cursor:pointer;">🖨️ Cetak / Simpan PDF</button></div>
           </body></html>`;
 
-          const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `SlipGaji_${nama.replace(/\s+/g, "_")}_${r.dari}_sd_${r.sampai}.html`;
-          a.click();
-          URL.revokeObjectURL(url);
+          // Buka di tab baru (lebih kompatibel mobile/PWA)
+          const newTab = window.open("", "_blank");
+          if (newTab) {
+            newTab.document.write(html);
+            newTab.document.close();
+          } else {
+            // Fallback blob jika popup diblokir
+            const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `SlipGaji_${nama.replace(/\s+/g, "_")}_${r.dari}_sd_${r.sampai}.html`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }
+          return html; // kembalikan untuk keperluan lain
         }
 
         return (
@@ -2530,13 +2539,52 @@ function findRate(productType, model, process) {
                 </div>
 
                 {/* Tombol Download */}
-                <button
-                  onClick={() => { downloadSlipGaji(nama, { ...r, dari: slipPreview.dari, sampai: slipPreview.sampai }); }}
-                  className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
-                  style={{ background: "linear-gradient(135deg,#10b981,#059669)" }}
-                >
-                  📥 Download Slip (HTML · siap cetak)
-                </button>
+                {/* Tombol Lihat Slip + Share WA */}
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => { downloadSlipGaji(nama, { ...r, dari: slipPreview.dari, sampai: slipPreview.sampai }); }}
+                    className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                    style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                  >
+                    🖨️ Buka & Cetak Slip
+                  </button>
+                  <button
+                    onClick={() => {
+                      const fmt2 = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+                      const lines = [
+                        "🧾 *Slip Pendapatan Borongan*",
+                        "📍 Gallery Kerudung",
+                        "━━━━━━━━━━━━━━━━━━",
+                        `👤 *${nama}*`,
+                        `📅 Periode: ${slipPreview.dari} s/d ${slipPreview.sampai}`,
+                        "━━━━━━━━━━━━━━━━━━",
+                        ...([...r.detail].sort((a,b)=>(a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||"")).map((d,i)=>{
+                          const tgl = d.tanggalSetor||d.tanggal||"-";
+                          const model = d.model && d.model!=="-" ? ` · ${d.model}` : "";
+                          const qty = d.sudahSetor ? d.qtySetor : d.qty;
+                          const ket = d.sudahSetor ? fmt2(d.gaji) : "⏳ blm setor";
+                          return `${i+1}. ${tgl} | ${d.process}${model} | ${qty} pcs | ${ket}`;
+                        })),
+                        "━━━━━━━━━━━━━━━━━━",
+                        `📦 Diberikan: ${r.pcsAwal} pcs`,
+                        `✅ Disetor: ${r.pcsSetor} pcs`,
+                        r.pcsReject > 0 ? `❌ Reject: ${r.pcsReject} pcs` : null,
+                        r.belumSetor > 0 ? `⏳ Blm setor: ${r.belumSetor} pcs` : null,
+                        "━━━━━━━━━━━━━━━━━━",
+                        `💰 *Total: ${fmt2(r.gaji)}*`,
+                        "",
+                        `_Dikirim via Gallery Kerudung · ${new Date().toLocaleDateString("id-ID")}_`
+                      ].filter(Boolean).join("\n");
+                      const waUrl = `https://wa.me/?text=${encodeURIComponent(lines)}`;
+                      window.open(waUrl, "_blank");
+                    }}
+                    className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                    style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.523 5.847L.057 23.882l6.19-1.438A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.173-1.4l-.371-.22-3.674.853.884-3.561-.242-.381A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
+                    Share ke WA
+                  </button>
+                </div>
               </div>
             </div>
           </div>
