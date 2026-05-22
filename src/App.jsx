@@ -4,10 +4,13 @@ import { db, auth } from "./firebase";
 import {
   collection,
   addDoc,
+  getDocs,
   onSnapshot,
   updateDoc,
   deleteDoc,
   doc,
+  query,
+  where,
 } from "firebase/firestore";
 import {
   GoogleAuthProvider,
@@ -390,6 +393,9 @@ export default function App() {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
+  const [editEntryModal, setEditEntryModal] = useState(null); // entry yang sedang diedit
+  const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
+  const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
 
   const [orders, setOrders] = useState([]);
   const [produksi, setProduksi] = useState([]);
@@ -1066,18 +1072,71 @@ function findRate(productType, model, process) {
     }
   }
 
-  async function deleteRate(id) {
-    setConfirmDelete({ type: "rate", id });
+  function deleteRate(id) {
+    setConfirmDelete({ type: "rate", id, step: 1 });
+  }
+
+  function requestDeleteEntry(entry) {
+    setConfirmDelete({ type: "entry", id: entry.id, entry, step: 1 });
   }
 
   async function confirmDeleteAction() {
     if (!confirmDelete) return;
+    // 2x konfirmasi: step 1 → tampilkan konfirmasi 2, step 2 → eksekusi hapus
+    if (confirmDelete.step === 1) {
+      setConfirmDelete({ ...confirmDelete, step: 2 });
+      return;
+    }
     const { type, id } = confirmDelete;
     setConfirmDelete(null);
+    setDeleteStep(0);
     try {
       if (type === "rate") await deleteDoc(doc(db, C.WORK_RATES, id));
+      if (type === "entry") {
+        await deleteDoc(doc(db, C.PRODUCTION_ENTRIES, id));
+        // Jika sudah ada payroll terkait, hapus juga
+        const payrollSnap = await getDocs(query(collection(db, C.PAYROLL_EXPENSES), where("entryId", "==", id)));
+        for (const d of payrollSnap.docs) await deleteDoc(d.ref);
+      }
+      setToast("🗑️ Data berhasil dihapus");
+      setTimeout(() => setToast(""), 3000);
     } catch (e) {
       alert("Gagal hapus: " + e.message);
+    }
+  }
+
+  function openEditEntry(entry) {
+    setEditEntryModal(entry);
+    setEditEntryForm({
+      qty: String(entry.qty || ""),
+      tanggal: entry.tanggal || todayStr(),
+      catatan: entry.catatan || "",
+      model: entry.model || "",
+    });
+  }
+
+  async function saveEditEntry() {
+    if (!editEntryModal) return;
+    if (!editEntryForm.qty || Number(editEntryForm.qty) <= 0) return alert("Qty wajib diisi");
+    setIsSaving(true);
+    try {
+      const updates = {
+        qty: Number(editEntryForm.qty),
+        tanggal: editEntryForm.tanggal,
+        catatan: editEntryForm.catatan || "",
+        updatedAt: todayStr(),
+      };
+      if (editEntryModal.process !== "QC Packing") {
+        updates.model = editEntryForm.model || editEntryModal.model;
+      }
+      await updateDoc(doc(db, C.PRODUCTION_ENTRIES, editEntryModal.id), updates);
+      setEditEntryModal(null);
+      setToast("✅ Entry berhasil diupdate");
+      setTimeout(() => setToast(""), 3000);
+    } catch (e) {
+      alert("Gagal update: " + e.message);
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -1253,9 +1312,27 @@ function findRate(productType, model, process) {
                   </div>
                   <div className="text-right">
                     <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{o.qty}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>pcs</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>total pcs</div>
                   </div>
                 </div>
+
+                {/* Breakdown per model */}
+                {(() => {
+                  const its = Array.isArray(o.items) && o.items.length > 0 ? o.items
+                    : Array.isArray(o.raw?.items) && o.raw.items.length > 0 ? o.raw.items : [];
+                  if (its.length <= 1) return null;
+                  return (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {its.map((it, i) => (
+                        <span key={i} className="rounded-full px-2 py-0.5 text-xs font-semibold"
+                          style={{ background: "#ede9fe", color: "#5b21b6" }}>
+                          {it.name || it.item || "-"}: {it.qty || 0} pcs
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
+
                 {prod && (
                   <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#ede9fe" }}>
                     <div className="flex justify-between items-center">
@@ -1321,16 +1398,32 @@ function findRate(productType, model, process) {
                 </div>
               </div>
 
-              {/* Per model — compact */}
-              {Array.isArray(p.items) && p.items.length > 0 && (
-                <div className="px-4 pb-2 flex flex-wrap gap-1">
-                  {p.items.map((it, i) => (
-                    <span key={i} className="rounded-full px-2 py-0.5 text-xs" style={{ background: "#ede9fe", color: "#5b21b6" }}>
-                      {it.name}: {it.qty} pcs
-                    </span>
-                  ))}
-                </div>
-              )}
+              {/* Per model — breakdown jelas */}
+              {(() => {
+                const its = Array.isArray(p.items) && p.items.length > 0 ? p.items : [];
+                if (its.length === 0) return null;
+                return (
+                  <div className="px-4 pb-2">
+                    <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>📋 Rincian Model:</div>
+                    <div className="flex flex-wrap gap-1">
+                      {its.map((it, i) => {
+                        const jahitQty = productionEntries
+                          .filter(e => e.orderId === p.orderId && lower(e.process) === "jahit" && lower(e.model || "") === lower(it.name || ""))
+                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const done = jahitQty >= Number(it.qty || 0);
+                        return (
+                          <div key={i} className="rounded-xl px-3 py-1.5 text-xs" style={{ background: done ? "#dcfce7" : "#ede9fe", border: `1px solid ${done ? "#bbf7d0" : "#c4b5fd"}` }}>
+                            <div className="font-bold" style={{ color: done ? "#16a34a" : "#5b21b6" }}>{it.name || it.item || "-"}</div>
+                            <div style={{ color: done ? "#16a34a" : "#7c3aed" }}>
+                              {jahitQty}/{it.qty || 0} pcs {done ? "✅" : ""}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <ProgressBar status={p.status} />
 
@@ -1382,43 +1475,7 @@ function findRate(productType, model, process) {
             <div className="text-xs" style={{ color: "#94a3b8" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
           </div>
 
-          {/* Rekap per nama pekerja */}
-          {(() => {
-            const rekapMap = {};
-            filteredEntries.forEach((e) => {
-              const nama = e.employeeName || "Tidak diketahui";
-              if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0 };
-              rekapMap[nama].pcsAwal += Number(e.qty || 0);
-              if (e.statusSetor === "sudah_setor") {
-                rekapMap[nama].pcsSetor += Number(e.qtySetor || 0);
-                rekapMap[nama].pcsReject += Number(e.qtyReject || 0);
-                rekapMap[nama].gaji += Number(e.totalWageSetor || 0);
-              } else {
-                rekapMap[nama].belumSetor += Number(e.qty || 0);
-              }
-            });
-            const rekap = Object.entries(rekapMap).sort((a, b) => b[1].gaji - a[1].gaji);
-            if (rekap.length === 0) return null;
-            return (
-              <div className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #e9d5ff" }}>
-                <div className="text-xs font-bold mb-2" style={{ color: "#7c3aed" }}>📊 Rekap Gaji per Pekerja</div>
-                {rekap.map(([nama, r]) => (
-                  <div key={nama} className="rounded-xl p-3" style={{ background: "#fdf4ff", border: "1px solid #f3e8ff" }}>
-                    <div className="flex justify-between items-start">
-                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
-                      <div className="text-sm font-bold" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
-                    </div>
-                    <div className="flex gap-3 mt-1 text-xs" style={{ color: "#64748b" }}>
-                      <span>Diberikan: <strong>{r.pcsAwal}</strong></span>
-                      <span>Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
-                      {r.pcsReject > 0 && <span>Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
-                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}>⏳ Belum setor: <strong>{r.belumSetor}</strong></span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+
           {filteredEntries.map((e) => {
             const sudahSetor = e.statusSetor === "sudah_setor";
             const qtyReject = Number(e.qtyReject || 0);
@@ -1465,6 +1522,24 @@ function findRate(productType, model, process) {
                   </button>
                 </div>
               )}
+
+              {/* Tombol Edit & Hapus */}
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => openEditEntry(e)}
+                  className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                  style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
+                >
+                  ✏️ Edit
+                </button>
+                <button
+                  onClick={() => requestDeleteEntry(e)}
+                  className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                  style={{ background: "#fff1f2", color: "#e11d48", border: "1px solid #fecaca" }}
+                >
+                  🗑️ Hapus
+                </button>
+              </div>
             </div>
             );
           })}
@@ -1492,6 +1567,125 @@ function findRate(productType, model, process) {
         const totalGaji = filtered.reduce((s, e) => s + Number(e.totalWageSetor || 0), 0);
         const prosesOrder = ["Potong", "Jahit", "QC Packing"];
         const prosesKeys = [...prosesOrder.filter((p) => byProses[p]), ...Object.keys(byProses).filter((p) => !prosesOrder.includes(p))];
+
+        // Rekap per pekerja (dipindah dari tab Borongan)
+        const rekapMap = {};
+        filtered.forEach((e) => {
+          const nama = e.employeeName || "Tidak diketahui";
+          if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
+          rekapMap[nama].pcsAwal += Number(e.qty || 0);
+          if (e.statusSetor === "sudah_setor") {
+            rekapMap[nama].pcsSetor += Number(e.qtySetor || 0);
+            rekapMap[nama].pcsReject += Number(e.qtyReject || 0);
+            rekapMap[nama].gaji += Number(e.totalWageSetor || 0);
+          } else {
+            rekapMap[nama].belumSetor += Number(e.qty || 0);
+          }
+          rekapMap[nama].detail.push({
+            customer: e.customer || "-",
+            invoice: e.invoice || "",
+            model: e.model || "-",
+            process: e.process || "",
+            qty: Number(e.qty || 0),
+            qtySetor: Number(e.qtySetor || 0),
+            qtyReject: Number(e.qtyReject || 0),
+            rate: Number(e.rate || 0),
+            sudahSetor: e.statusSetor === "sudah_setor",
+            gaji: Number(e.totalWageSetor || 0),
+            tanggal: e.tanggal || "",
+            tanggalSetor: e.tanggalSetor || "",
+          });
+        });
+        const rekapPerkerja = Object.entries(rekapMap).sort((a, b) => b[1].gaji - a[1].gaji);
+
+        // Fungsi download slip gaji per pekerja
+        function downloadSlipGaji(nama, r) {
+          const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+          const rows = r.detail.map((d, i) => `
+            <tr style="border-bottom:1px solid #f3e8ff;">
+              <td style="padding:8px 10px;font-size:12px;">${i + 1}</td>
+              <td style="padding:8px 10px;font-size:12px;">${d.tanggal || d.tanggalSetor || "-"}</td>
+              <td style="padding:8px 10px;font-size:12px;">${d.customer}${d.invoice ? " / " + d.invoice : ""}</td>
+              <td style="padding:8px 10px;font-size:12px;">${d.process}${d.model && d.model !== "-" ? " · " + d.model : ""}</td>
+              <td style="padding:8px 10px;text-align:center;font-size:12px;">${d.sudahSetor ? d.qtySetor : d.qty} pcs</td>
+              ${d.qtyReject > 0 ? `<td style="padding:8px 10px;text-align:center;font-size:12px;color:#ef4444;">${d.qtyReject} pcs</td>` : `<td style="padding:8px 10px;text-align:center;font-size:12px;color:#94a3b8;">-</td>`}
+              <td style="padding:8px 10px;text-align:right;font-size:12px;">${d.rate > 0 ? fmt(d.rate) + "/pcs" : "-"}</td>
+              <td style="padding:8px 10px;text-align:right;font-size:12px;font-weight:bold;color:${d.sudahSetor ? "#16a34a" : "#b45309"};">${d.sudahSetor ? fmt(d.gaji) : "⏳ Blm setor"}</td>
+            </tr>`).join("");
+
+          const html = `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8">
+            <title>Slip Pendapatan - ${nama}</title>
+            <style>
+              body { font-family: 'Segoe UI', Arial, sans-serif; background: #fdf2f8; margin: 0; padding: 20px; }
+              .slip { max-width: 700px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 24px rgba(236,72,153,0.12); }
+              .header { background: linear-gradient(135deg,#ec4899,#a855f7); color: white; padding: 28px 28px 20px; }
+              .header h1 { margin: 0 0 4px; font-size: 22px; }
+              .header p { margin: 0; font-size: 13px; opacity: 0.85; }
+              .body { padding: 24px 28px; }
+              .info-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+              .info-row strong { color: #2d1b69; }
+              .divider { border: none; border-top: 1.5px solid #f3e8ff; margin: 18px 0; }
+              table { width: 100%; border-collapse: collapse; }
+              thead tr { background: linear-gradient(135deg,#ede9fe,#fce7f3); }
+              th { padding: 9px 10px; font-size: 11px; color: #7c3aed; text-align: left; font-weight: 700; }
+              .total-row { background: linear-gradient(135deg,#ede9fe,#fce7f3); font-weight: bold; }
+              .total-row td { padding: 10px 10px; font-size: 13px; }
+              .footer { text-align: center; font-size: 11px; color: #a855f7; padding: 16px 28px 20px; border-top: 1.5px solid #fce7f3; }
+              @media print { body { background: white; padding: 0; } .slip { box-shadow: none; border-radius: 0; } }
+            </style>
+          </head><body>
+            <div class="slip">
+              <div class="header">
+                <div style="font-size:28px;margin-bottom:8px;">🧾✨</div>
+                <h1>Slip Pendapatan Borongan</h1>
+                <p>Gallery Produksi · by Gallery Kerudung</p>
+              </div>
+              <div class="body">
+                <div class="info-row"><span>Nama Pekerja</span><strong>👤 ${nama}</strong></div>
+                <div class="info-row"><span>Periode</span><strong>📅 ${rekapDari} s/d ${rekapSampai}</strong></div>
+                <div class="info-row"><span>Tanggal Cetak</span><strong>${new Date().toLocaleDateString("id-ID", { day:"2-digit", month:"long", year:"numeric" })}</strong></div>
+                <hr class="divider"/>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th><th>Tanggal</th><th>Pesanan</th><th>Proses / Model</th>
+                      <th style="text-align:center;">Setor</th><th style="text-align:center;">Reject</th>
+                      <th style="text-align:right;">Tarif</th><th style="text-align:right;">Pendapatan</th>
+                    </tr>
+                  </thead>
+                  <tbody>${rows}</tbody>
+                  <tfoot>
+                    <tr class="total-row">
+                      <td colspan="4" style="color:#7c3aed;">TOTAL</td>
+                      <td style="text-align:center;">${r.pcsSetor} pcs</td>
+                      <td style="text-align:center;color:${r.pcsReject>0?"#ef4444":"#94a3b8"};">${r.pcsReject > 0 ? r.pcsReject + " pcs" : "-"}</td>
+                      <td></td>
+                      <td style="text-align:right;color:#16a34a;font-size:15px;">${fmt(r.gaji)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+                ${r.belumSetor > 0 ? `<div style="margin-top:14px;background:#fefce8;border-radius:12px;padding:10px 14px;font-size:12px;color:#b45309;border:1px solid #fde68a;">⚠️ Masih ada <strong>${r.belumSetor} pcs</strong> yang belum disetor dan belum termasuk dalam total pendapatan di atas.</div>` : ""}
+                <div style="margin-top:18px;background:linear-gradient(135deg,#f0fdf4,#dcfce7);border-radius:14px;padding:14px 18px;border:1.5px solid #bbf7d0;">
+                  <div style="font-size:12px;color:#64748b;margin-bottom:4px;">Total Pendapatan Bersih</div>
+                  <div style="font-size:24px;font-weight:900;color:#16a34a;">${fmt(r.gaji)}</div>
+                </div>
+              </div>
+              <div class="footer">
+                Slip ini dicetak otomatis oleh Gallery Produksi · ${new Date().toLocaleDateString("id-ID")}
+              </div>
+            </div>
+            <script>window.onload = function() { window.print(); }</script>
+          </body></html>`;
+
+          const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `Slip_${nama.replace(/\s+/g, "_")}_${rekapDari}_sd_${rekapSampai}.html`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+
         return (
           <div className="space-y-3 p-4">
             {/* Filter tanggal */}
@@ -1578,6 +1772,67 @@ function findRate(productType, model, process) {
               </div>
             ) : (
               <Empty text="Tidak ada data borongan di periode ini" />
+            )}
+
+            {/* Rekap Gaji per Pekerja + Download Slip */}
+            {rekapPerkerja.length > 0 && (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📊 Rekap Gaji per Pekerja</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapPerkerja.length} pekerja</div>
+                </div>
+                {rekapPerkerja.map(([nama, r]) => (
+                  <div key={nama} className="rounded-xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
+                    {/* Header pekerja */}
+                    <div className="flex justify-between items-center px-3 py-2" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)" }}>
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
+                      <div className="text-sm font-bold" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
+                    </div>
+                    {/* Ringkasan */}
+                    <div className="flex gap-3 px-3 py-1.5 text-xs border-b" style={{ color: "#64748b", borderColor: "#f3e8ff" }}>
+                      <span>📦 Diberi: <strong>{r.pcsAwal}</strong></span>
+                      <span>✅ Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
+                      {r.pcsReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
+                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}>⏳ <strong>{r.belumSetor}</strong> blm setor</span>}
+                    </div>
+                    {/* Detail per pesanan & model */}
+                    <div className="px-3 py-2 space-y-1.5">
+                      {r.detail.map((d, i) => (
+                        <div key={i} className="flex justify-between items-start text-xs rounded-lg px-2 py-1.5"
+                          style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
+                          <div>
+                            <div className="font-semibold" style={{ color: "#2d1b69" }}>
+                              👗 {d.model} — {d.process}
+                            </div>
+                            <div style={{ color: "#94a3b8" }}>
+                              {d.customer}{d.invoice ? ` · ${d.invoice}` : ""}
+                            </div>
+                          </div>
+                          <div className="text-right ml-2">
+                            <div className="font-bold" style={{ color: d.sudahSetor ? "#16a34a" : "#b45309" }}>
+                              {d.sudahSetor ? d.qtySetor : d.qty} pcs
+                            </div>
+                            {d.sudahSetor && d.gaji > 0 && (
+                              <div style={{ color: "#a855f7" }}>{money(d.gaji)}</div>
+                            )}
+                            {!d.sudahSetor && <div style={{ color: "#b45309" }}>⏳ blm setor</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Tombol Download Slip */}
+                    <div className="px-3 pb-3">
+                      <button
+                        onClick={() => downloadSlipGaji(nama, r)}
+                        className="w-full rounded-xl py-2.5 text-xs font-bold text-white flex items-center justify-center gap-2"
+                        style={{ background: "linear-gradient(135deg,#10b981,#059669)" }}
+                      >
+                        📥 Download Slip Gaji · {rekapDari} s/d {rekapSampai}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         );
@@ -1701,21 +1956,82 @@ function findRate(productType, model, process) {
               value={entryForm.orderId}
               onChange={(v) => {
                 const o = orders.find((x) => x.id === v);
-                setEntryForm((f) => ({ ...f, orderId: v, model: f.process === "QC Packing" ? "" : (o?.item || f.model) }));
+                setEntryForm((f) => ({ ...f, orderId: v, model: "", qty: "" }));
               }}
             >
               <option value="">Tidak dikaitkan ke pesanan</option>
-              {orders.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.item} · {o.qty} pcs</option>)}
+              {orders.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
             </Select>
+
             <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
             </Select>
             <Select label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: v === "QC Packing" ? "" : f.model }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
             </Select>
-            {entryForm.process !== "QC Packing" && (
-              <Input label="Model" value={entryForm.model} onChange={(v) => setEntryForm((f) => ({ ...f, model: v }))} placeholder="Harus sama dengan tarif" />
-            )}
+
+            {entryForm.process !== "QC Packing" && (() => {
+              // Ambil items dari pesanan terpilih
+              const selOrder = orders.find(o => o.id === entryForm.orderId);
+              const orderModels = selOrder
+                ? Array.isArray(selOrder.items) && selOrder.items.length > 1
+                  ? selOrder.items
+                  : Array.isArray(selOrder.raw?.items) && selOrder.raw.items.length > 1
+                    ? selOrder.raw.items
+                    : []
+                : [];
+
+              if (orderModels.length > 0) {
+                // Tampilkan pilihan model dari pesanan
+                return (
+                  <div>
+                    <div className="text-xs font-semibold mb-2" style={{ color: "#7c3aed" }}>Pilih Model:</div>
+                    <div className="flex flex-wrap gap-2">
+                      {orderModels.map((it, i) => {
+                        const nama = it.name || it.item || "-";
+                        const qtyModel = Number(it.qty || 0);
+                        // Hitung sudah dijahit berapa untuk model ini di pesanan ini
+                        const sudahJahit = productionEntries
+                          .filter(e => e.orderId === entryForm.orderId && lower(e.process) === lower(entryForm.process) && lower(e.model || "") === lower(nama))
+                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const sisaQty = Math.max(0, qtyModel - sudahJahit);
+                        const selected = entryForm.model === nama;
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setEntryForm(f => ({ ...f, model: nama, qty: String(sisaQty) }))}
+                            className="rounded-xl px-3 py-2 text-xs font-bold text-left"
+                            style={{
+                              background: selected ? "linear-gradient(135deg,#ec4899,#a855f7)" : "#fdf2f8",
+                              color: selected ? "white" : "#5b21b6",
+                              border: selected ? "none" : "1px solid #c4b5fd",
+                              opacity: sisaQty === 0 ? 0.5 : 1,
+                            }}
+                          >
+                            <div>{nama}</div>
+                            <div className="font-normal mt-0.5" style={{ color: selected ? "rgba(255,255,255,0.8)" : "#94a3b8" }}>
+                              {sisaQty}/{qtyModel} pcs sisa
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {entryForm.model && (
+                      <div className="mt-2 text-xs" style={{ color: "#94a3b8" }}>
+                        Model dipilih: <strong style={{ color: "#7c3aed" }}>{entryForm.model}</strong>
+                      </div>
+                    )}
+                  </div>
+                );
+              } else {
+                // Tidak ada multi-model — input model manual
+                return (
+                  <Input label="Model" value={entryForm.model} onChange={(v) => setEntryForm((f) => ({ ...f, model: v }))} placeholder="Harus sama dengan tarif" />
+                );
+              }
+            })()}
+
             {entryForm.process === "QC Packing" && (
               <div className="rounded-2xl p-3 text-xs font-semibold" style={{ background: "#fdf2f8", color: "#a855f7" }}>
                 QC Packing tidak memakai model, hanya jenis produk.
@@ -1860,29 +2176,120 @@ function findRate(productType, model, process) {
         </Modal>
       )}
 
+      {/* Konfirmasi Hapus 2x */}
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
-            <div className="text-xl font-bold mb-2" style={{ color: "#1e293b" }}>Hapus Data?</div>
-            <div className="text-sm mb-6" style={{ color: "#64748b" }}>Data yang dihapus tidak bisa dikembalikan.</div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setConfirmDelete(null)}
-                className="flex-1 rounded-2xl border py-3 font-semibold"
-                style={{ borderColor: "#e2e8f0", color: "#64748b" }}
-              >
-                Batal
-              </button>
-              <button
-                onClick={confirmDeleteAction}
-                className="flex-1 rounded-2xl py-3 font-semibold text-white"
-                style={{ background: "#e11d48" }}
-              >
-                Hapus
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            {confirmDelete.step === 1 ? (
+              <>
+                <div className="text-center mb-4">
+                  <div className="text-4xl mb-2">🗑️</div>
+                  <div className="text-lg font-bold" style={{ color: "#1e293b" }}>Hapus Data?</div>
+                  <div className="text-sm mt-1" style={{ color: "#64748b" }}>
+                    {confirmDelete.entry
+                      ? `Entry borongan ${confirmDelete.entry.employeeName} — ${confirmDelete.entry.model || confirmDelete.entry.process} · ${confirmDelete.entry.qty} pcs`
+                      : "Data ini akan dihapus."
+                    }
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setConfirmDelete(null)}
+                    className="flex-1 rounded-2xl border py-3 font-semibold"
+                    style={{ borderColor: "#e2e8f0", color: "#64748b" }}>
+                    Batal
+                  </button>
+                  <button onClick={confirmDeleteAction}
+                    className="flex-1 rounded-2xl py-3 font-semibold text-white"
+                    style={{ background: "#f97316" }}>
+                    Ya, Lanjut
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-center mb-4">
+                  <div className="text-4xl mb-2">⚠️</div>
+                  <div className="text-lg font-bold" style={{ color: "#e11d48" }}>Yakin Hapus Permanen?</div>
+                  <div className="text-sm mt-2 rounded-xl px-3 py-2" style={{ background: "#fff1f2", color: "#b91c1c" }}>
+                    Data yang dihapus <strong>tidak bisa dikembalikan</strong>. Termasuk data payroll terkait.
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setConfirmDelete(null)}
+                    className="flex-1 rounded-2xl border py-3 font-semibold"
+                    style={{ borderColor: "#e2e8f0", color: "#64748b" }}>
+                    Batal
+                  </button>
+                  <button onClick={confirmDeleteAction}
+                    className="flex-1 rounded-2xl py-3 font-semibold text-white"
+                    style={{ background: "#e11d48" }}>
+                    🗑️ Hapus Sekarang
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
+      )}
+
+      {/* Modal Edit Entry Borongan */}
+      {editEntryModal && (
+        <Modal title="✏️ Edit Entry Borongan" onClose={() => setEditEntryModal(null)}>
+          <div className="space-y-3">
+            {/* Info tidak bisa diubah */}
+            <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {editEntryModal.employeeName}</div>
+              <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
+                {editEntryModal.productType} · {editEntryModal.process}
+                {editEntryModal.customer ? ` · ${editEntryModal.customer}` : ""}
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
+                ⚠️ Nama pekerja & proses tidak bisa diubah di sini
+              </div>
+            </div>
+
+            {/* Model — hanya untuk non-QC */}
+            {editEntryModal.process !== "QC Packing" && (
+              <Input
+                label="Model"
+                value={editEntryForm.model}
+                onChange={(v) => setEditEntryForm(f => ({ ...f, model: v }))}
+                placeholder="Contoh: Alya L"
+              />
+            )}
+
+            <Input
+              label="Jumlah pcs diberikan"
+              type="number"
+              value={editEntryForm.qty}
+              onChange={(v) => setEditEntryForm(f => ({ ...f, qty: v }))}
+              placeholder="Contoh: 62"
+            />
+            <Input
+              label="Tanggal"
+              type="date"
+              value={editEntryForm.tanggal}
+              onChange={(v) => setEditEntryForm(f => ({ ...f, tanggal: v }))}
+            />
+            <Input
+              label="Catatan"
+              value={editEntryForm.catatan}
+              onChange={(v) => setEditEntryForm(f => ({ ...f, catatan: v }))}
+              placeholder="Opsional"
+            />
+
+            {editEntryModal.statusSetor === "sudah_setor" && (
+              <div className="rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#fef3c7", color: "#b45309" }}>
+                ⚠️ Entry ini sudah disetor. Perubahan qty tidak otomatis mengubah data setor & payroll.
+              </div>
+            )}
+
+            <Button onClick={saveEditEntry} disabled={isSaving} className="w-full"
+              style={{ background: "linear-gradient(135deg,#2563eb,#7c3aed)" }}>
+              💾 Simpan Perubahan
+            </Button>
+          </div>
+        </Modal>
       )}
 
       {isSaving && (
