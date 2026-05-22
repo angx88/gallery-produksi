@@ -133,11 +133,36 @@ function money(v) {
 }
 
 function safeOrder(d) {
+  // Ambil items per model dari berbagai kemungkinan field Gallery Kerudung
+  let items = [];
+  const rawItems = Array.isArray(d.items) && d.items.length > 0
+    ? d.items
+    : Array.isArray(d.products) && d.products.length > 0
+      ? d.products
+      : Array.isArray(d.modelItems) && d.modelItems.length > 0
+        ? d.modelItems
+        : [];
+
+  if (rawItems.length > 0) {
+    items = rawItems.map((it) => ({
+      name: it.name || it.nama || it.item || it.productName || it.model || "-",
+      qty: Number(it.qty || it.quantity || it.jumlah || 0),
+      price: Number(it.price || it.harga || it.hargaPcs || 0),
+    })).filter((it) => it.qty > 0 || it.name !== "-");
+  }
+
+  const totalQty = Number(d.qty || d.quantity || d.jumlah || d.totalQty || 0);
+
+  if (items.length === 0) {
+    items = [{ name: d.item || d.productName || d.produk || d.product || "Pesanan", qty: totalQty, price: Number(d.hargaPcs || d.price || 0) }];
+  }
+
   return {
     id: d.id,
     customer: d.customer || d.customerName || d.nama || d.name || "-",
     item: d.item || d.productName || d.produk || d.product || "-",
-    qty: Number(d.qty || d.quantity || d.jumlah || d.totalQty || 0),
+    qty: totalQty,
+    items,
     invoice: d.invoice || d.orderId || d.kode || d.code || "",
     status: d.status || "Baru",
     createdAt: d.createdAt || d.tanggal || d.date || d.orderDate || "",
@@ -491,8 +516,9 @@ export default function App() {
     needsMigration.forEach(async (p) => {
       const order = orders.find((o) => o.id === p.orderId);
       if (!order) return;
-      const orderItems = Array.isArray(order.items) && order.items.length > 0
-        ? order.items.map((it) => ({ name: it.name || "", qty: Number(it.qty || 0) }))
+      // Gunakan order.items yang sudah di-parse oleh safeOrder (termasuk semua model dari Gallery Kerudung)
+      const orderItems = (order.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0).length > 0
+        ? order.items.filter(it => it.name && it.name !== "-" && Number(it.qty) > 0).map((it) => ({ name: it.name || "", qty: Number(it.qty || 0) }))
         : [{ name: order.item || p.item || "Pesanan", qty: Number(order.qty || p.qty || 0) }];
       try {
         await updateDoc(doc(db, C.PRODUKSI, p.id), { items: orderItems });
@@ -743,10 +769,11 @@ function findRate(productType, model, process) {
     if (!order) return alert("Pesanan tidak ditemukan");
     if (produksiByOrderId.has(order.id)) return alert("Pesanan ini sudah masuk produksi");
 
-    // Ambil items per model dari pesanan (bukan total)
-    const orderItems = Array.isArray(order.items) && order.items.length > 0
-      ? order.items.map((it) => ({ name: it.name || "", qty: Number(it.qty || 0), price: it.price || 0 }))
-      : [{ name: order.item || "Pesanan", qty: Number(order.qty || 0), price: order.hargaPcs || 0 }];
+    // Ambil items per model dari safeOrder (sudah di-parse dengan benar)
+    // order.items sudah berisi breakdown per model yang benar dari Gallery Kerudung
+    const orderItems = (order.items || []).length > 0
+      ? order.items.map((it) => ({ name: it.name || it.item || "Pesanan", qty: Number(it.qty || 0), price: Number(it.price || 0) }))
+      : [{ name: order.item || "Pesanan", qty: Number(order.qty || 0), price: 0 }];
 
     setIsSaving(true);
     try {
@@ -1316,19 +1343,26 @@ function findRate(productType, model, process) {
                   </div>
                 </div>
 
-                {/* Breakdown per model */}
+                {/* Breakdown per model - selalu tampil jika ada items */}
                 {(() => {
-                  const its = Array.isArray(o.items) && o.items.length > 0 ? o.items
-                    : Array.isArray(o.raw?.items) && o.raw.items.length > 0 ? o.raw.items : [];
-                  if (its.length <= 1) return null;
+                  const its = (o.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
+                  if (its.length === 0) return null;
+                  const isMulti = its.length > 1;
                   return (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {its.map((it, i) => (
-                        <span key={i} className="rounded-full px-2 py-0.5 text-xs font-semibold"
-                          style={{ background: "#ede9fe", color: "#5b21b6" }}>
-                          {it.name || it.item || "-"}: {it.qty || 0} pcs
-                        </span>
-                      ))}
+                    <div className="mt-2">
+                      {isMulti && (
+                        <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>
+                          📦 {its.length} model
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {its.map((it, i) => (
+                          <span key={i} className="rounded-xl px-3 py-1 text-xs font-semibold"
+                            style={{ background: "#ede9fe", color: "#5b21b6", border: "1px solid #c4b5fd" }}>
+                            {it.name}: <strong>{it.qty} pcs</strong>
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   );
                 })()}
@@ -1398,24 +1432,49 @@ function findRate(productType, model, process) {
                 </div>
               </div>
 
-              {/* Per model — breakdown jelas */}
+              {/* Per model — breakdown jelas dengan progress per proses */}
               {(() => {
-                const its = Array.isArray(p.items) && p.items.length > 0 ? p.items : [];
-                if (its.length === 0) return null;
+                const its = (p.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
+                // Fallback: jika items kosong tapi ada data order, ambil dari order
+                const order = orders.find(o => o.id === p.orderId);
+                const displayItems = its.length > 0 ? its : (order?.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
+                if (displayItems.length === 0) return null;
                 return (
                   <div className="px-4 pb-2">
-                    <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>📋 Rincian Model:</div>
-                    <div className="flex flex-wrap gap-1">
-                      {its.map((it, i) => {
-                        const jahitQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && lower(e.process) === "jahit" && lower(e.model || "") === lower(it.name || ""))
+                    <div className="text-xs font-bold mb-1.5" style={{ color: "#7c3aed" }}>
+                      📋 Rincian Model ({displayItems.length} model · {p.qty} pcs total):
+                    </div>
+                    <div className="space-y-1.5">
+                      {displayItems.map((it, i) => {
+                        const modelName = it.name || it.item || "-";
+                        const modelQty = Number(it.qty || 0);
+                        const potongQty = productionEntries
+                          .filter(e => e.orderId === p.orderId && lower(e.process) === "potong" && lower(e.model || "") === lower(modelName))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
-                        const done = jahitQty >= Number(it.qty || 0);
+                        const jahitQty = productionEntries
+                          .filter(e => e.orderId === p.orderId && lower(e.process) === "jahit" && lower(e.model || "") === lower(modelName))
+                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const qcQty = productionEntries
+                          .filter(e => e.orderId === p.orderId && lower(e.process) === "qc packing")
+                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const jahitDone = jahitQty >= modelQty;
                         return (
-                          <div key={i} className="rounded-xl px-3 py-1.5 text-xs" style={{ background: done ? "#dcfce7" : "#ede9fe", border: `1px solid ${done ? "#bbf7d0" : "#c4b5fd"}` }}>
-                            <div className="font-bold" style={{ color: done ? "#16a34a" : "#5b21b6" }}>{it.name || it.item || "-"}</div>
-                            <div style={{ color: done ? "#16a34a" : "#7c3aed" }}>
-                              {jahitQty}/{it.qty || 0} pcs {done ? "✅" : ""}
+                          <div key={i} className="rounded-xl p-2.5" style={{ background: jahitDone ? "#dcfce7" : "#ede9fe", border: `1px solid ${jahitDone ? "#bbf7d0" : "#c4b5fd"}` }}>
+                            <div className="flex justify-between items-center mb-1">
+                              <div className="font-bold text-xs" style={{ color: jahitDone ? "#16a34a" : "#5b21b6" }}>
+                                {modelName} {jahitDone ? "✅" : ""}
+                              </div>
+                              <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>{modelQty} pcs</div>
+                            </div>
+                            <div className="flex gap-2 text-xs">
+                              {potongQty > 0 && (
+                                <span className="rounded-full px-2 py-0.5" style={{ background: "#dbeafe", color: "#1e40af" }}>
+                                  ✂️ {potongQty}/{modelQty}
+                                </span>
+                              )}
+                              <span className="rounded-full px-2 py-0.5" style={{ background: jahitDone ? "#bbf7d0" : "#fce7f3", color: jahitDone ? "#16a34a" : "#be185d" }}>
+                                🧵 {jahitQty}/{modelQty}
+                              </span>
                             </div>
                           </div>
                         );
@@ -1971,61 +2030,67 @@ function findRate(productType, model, process) {
             </Select>
 
             {entryForm.process !== "QC Packing" && (() => {
-              // Ambil items dari pesanan terpilih
+              // Ambil items dari order.items yang sudah di-parse safeOrder dengan benar
               const selOrder = orders.find(o => o.id === entryForm.orderId);
+              // Gunakan order.items langsung (sudah include semua field name/qty dari Gallery Kerudung)
               const orderModels = selOrder
-                ? Array.isArray(selOrder.items) && selOrder.items.length > 1
-                  ? selOrder.items
-                  : Array.isArray(selOrder.raw?.items) && selOrder.raw.items.length > 1
-                    ? selOrder.raw.items
-                    : []
+                ? (selOrder.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0)
                 : [];
 
               if (orderModels.length > 0) {
-                // Tampilkan pilihan model dari pesanan
                 return (
                   <div>
-                    <div className="text-xs font-semibold mb-2" style={{ color: "#7c3aed" }}>Pilih Model:</div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="text-xs font-bold mb-2" style={{ color: "#7c3aed" }}>
+                      Pilih Model ({orderModels.length} model tersedia):
+                    </div>
+                    <div className="space-y-1.5">
                       {orderModels.map((it, i) => {
                         const nama = it.name || it.item || "-";
                         const qtyModel = Number(it.qty || 0);
-                        // Hitung sudah dijahit berapa untuk model ini di pesanan ini
-                        const sudahJahit = productionEntries
+                        const sudahInput = productionEntries
                           .filter(e => e.orderId === entryForm.orderId && lower(e.process) === lower(entryForm.process) && lower(e.model || "") === lower(nama))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
-                        const sisaQty = Math.max(0, qtyModel - sudahJahit);
+                        const sisaQty = Math.max(0, qtyModel - sudahInput);
                         const selected = entryForm.model === nama;
+                        const habis = sisaQty === 0;
                         return (
                           <button
                             key={i}
                             type="button"
-                            onClick={() => setEntryForm(f => ({ ...f, model: nama, qty: String(sisaQty) }))}
-                            className="rounded-xl px-3 py-2 text-xs font-bold text-left"
+                            onClick={() => !habis && setEntryForm(f => ({ ...f, model: nama, qty: String(sisaQty) }))}
+                            className="w-full rounded-xl px-3 py-2.5 text-xs font-bold text-left flex justify-between items-center"
                             style={{
-                              background: selected ? "linear-gradient(135deg,#ec4899,#a855f7)" : "#fdf2f8",
-                              color: selected ? "white" : "#5b21b6",
-                              border: selected ? "none" : "1px solid #c4b5fd",
-                              opacity: sisaQty === 0 ? 0.5 : 1,
+                              background: selected ? "linear-gradient(135deg,#ec4899,#a855f7)" : habis ? "#f1f5f9" : "#fdf2f8",
+                              color: selected ? "white" : habis ? "#94a3b8" : "#5b21b6",
+                              border: selected ? "none" : `1px solid ${habis ? "#e2e8f0" : "#c4b5fd"}`,
+                              cursor: habis ? "not-allowed" : "pointer",
                             }}
                           >
-                            <div>{nama}</div>
-                            <div className="font-normal mt-0.5" style={{ color: selected ? "rgba(255,255,255,0.8)" : "#94a3b8" }}>
-                              {sisaQty}/{qtyModel} pcs sisa
+                            <div>
+                              <div>{nama} {habis ? "✅ Selesai" : ""}</div>
+                              <div className="font-normal mt-0.5" style={{ color: selected ? "rgba(255,255,255,0.75)" : "#94a3b8" }}>
+                                Total: {qtyModel} pcs · Sudah input: {sudahInput} pcs
+                              </div>
+                            </div>
+                            <div className="text-right ml-3">
+                              <div style={{ color: selected ? "white" : habis ? "#94a3b8" : "#ec4899", fontWeight: 900, fontSize: 14 }}>
+                                {sisaQty}
+                              </div>
+                              <div className="font-normal" style={{ color: selected ? "rgba(255,255,255,0.75)" : "#94a3b8" }}>sisa</div>
                             </div>
                           </button>
                         );
                       })}
                     </div>
                     {entryForm.model && (
-                      <div className="mt-2 text-xs" style={{ color: "#94a3b8" }}>
-                        Model dipilih: <strong style={{ color: "#7c3aed" }}>{entryForm.model}</strong>
+                      <div className="mt-2 rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#ede9fe", color: "#7c3aed" }}>
+                        ✅ Model dipilih: <strong>{entryForm.model}</strong>
                       </div>
                     )}
                   </div>
                 );
               } else {
-                // Tidak ada multi-model — input model manual
+                // Tidak ada multi-model / pesanan tidak dipilih — input model manual
                 return (
                   <Input label="Model" value={entryForm.model} onChange={(v) => setEntryForm((f) => ({ ...f, model: v }))} placeholder="Harus sama dengan tarif" />
                 );
