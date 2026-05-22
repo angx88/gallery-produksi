@@ -509,18 +509,19 @@ function SlipGajiModal({ nama, r, dari, sampai, fmt, buildSlipCanvas, onClose })
 
           {/* Tombol aksi */}
           {imgUrl && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 px-1 pb-2">
               <button
                 onClick={() => setSlipAction("download")}
-                className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
-                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}>
-                ⬇️ Download
+                className="rounded-2xl font-bold text-white flex flex-col items-center justify-center gap-1"
+                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)", padding: "18px 8px", fontSize: 15 }}>
+                <span style={{ fontSize: 28 }}>⬇️</span>
+                Download
               </button>
               <button
                 onClick={() => setSlipAction("share")}
-                className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
-                style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                className="rounded-2xl font-bold text-white flex flex-col items-center justify-center gap-1"
+                style={{ background: "linear-gradient(135deg,#25d366,#128c7e)", padding: "18px 8px", fontSize: 15 }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
                   <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
                   <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.523 5.847L.057 23.882l6.19-1.438A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.173-1.4l-.371-.22-3.674.853.884-3.561-.242-.381A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
                 </svg>
@@ -2761,7 +2762,8 @@ function findRate(productType, model, process) {
 
               ctx.fillStyle = "#94a3b8";
               ctx.font = "10px Arial";
-              ctx.fillText((d.customer || "") + (d.invoice ? " / " + d.invoice : ""), 18, y + 24);
+              const custLine = [d.customer && d.customer !== "-" ? d.customer : "", d.invoice ? d.invoice : ""].filter(Boolean).join(" / ");
+              if (custLine) ctx.fillText(custLine, 18, y + 24);
               ctx.fillText("📅 " + (d.tanggalSetor || d.tanggal || "-"), 18, y + 38);
               if (d.rate > 0) {
                 ctx.fillStyle = "#a855f7";
@@ -2834,7 +2836,7 @@ function findRate(productType, model, process) {
             ctx.fillStyle = "#d8b4fe";
             ctx.font = "10px Arial";
             ctx.textAlign = "center";
-            ctx.fillText("Gallery Kerudung · Gallery Produksi · " + new Date().toLocaleDateString("id-ID"), W / 2, y);
+            ctx.fillText("Gallery Kerudung · " + new Date().toLocaleDateString("id-ID"), W / 2, y);
           };
 
           if (logoImg.complete) {
