@@ -481,7 +481,7 @@ export default function App() {
     });
   }, [produksi, orders]);
 
-
+  const q = search.toLowerCase();
 
   const produksiByOrderId = useMemo(() => {
     const map = new Map();
