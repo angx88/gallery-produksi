@@ -401,6 +401,175 @@ function ProgressBar({ status }) {
   );
 }
 
+// ── SlipGajiModal: canvas → gambar → Download + Share WA ─────────────────────
+function SlipGajiModal({ nama, r, dari, sampai, fmt, buildSlipCanvas, onClose }) {
+  const [imgUrl, setImgUrl] = React.useState(null);
+  const [slipAction, setSlipAction] = React.useState(null);
+
+  React.useEffect(() => {
+    setImgUrl(null);
+    // Beri waktu logo load
+    const timer = setTimeout(() => {
+      const canvas = buildSlipCanvas();
+      // Tunggu logo load jika belum selesai
+      const tryExport = () => {
+        setImgUrl(canvas.toDataURL("image/png"));
+      };
+      // Delay sedikit agar logo sempat render
+      setTimeout(tryExport, 400);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [nama, r, dari, sampai]);
+
+  function downloadGambar() {
+    if (!imgUrl) return;
+    const a = document.createElement("a");
+    a.href = imgUrl;
+    a.download = `SlipGaji_${nama.replace(/\s+/g, "_")}_${dari}_sd_${sampai}.png`;
+    a.click();
+  }
+
+  function shareGambar() {
+    if (!imgUrl) return;
+    // Coba Web Share API dengan file
+    fetch(imgUrl)
+      .then(r => r.blob())
+      .then(blob => {
+        const file = new File([blob], `SlipGaji_${nama.replace(/\s+/g, "_")}.png`, { type: "image/png" });
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          navigator.share({
+            files: [file],
+            title: "Slip Pendapatan Borongan - " + nama,
+            text: "Slip Pendapatan Borongan Gallery Kerudung",
+          }).catch(() => {});
+        } else {
+          // Fallback: download gambar + buka WA
+          downloadGambar();
+          const fmt2 = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+          const lines = [
+            "🧾 *Slip Pendapatan Borongan*",
+            "📍 Gallery Kerudung",
+            "━━━━━━━━━━━━━━━━━━",
+            `👤 *${nama}*`,
+            `📅 Periode: ${dari} s/d ${sampai}`,
+            "━━━━━━━━━━━━━━━━━━",
+            ...[...r.detail].sort((a,b)=>(a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||"")).map((d,i) => {
+              const tgl = d.tanggalSetor||d.tanggal||"-";
+              const model = d.model && d.model!=="-" ? ` · ${d.model}` : "";
+              const qty = d.sudahSetor ? d.qtySetor : d.qty;
+              const ket = d.sudahSetor ? fmt2(d.gaji) : "⏳ blm setor";
+              return `${i+1}. ${tgl} | ${d.process}${model} | ${qty} pcs | ${ket}`;
+            }),
+            "━━━━━━━━━━━━━━━━━━",
+            `📦 Diberikan: ${r.pcsAwal} pcs`,
+            `✅ Disetor: ${r.pcsSetor} pcs`,
+            r.pcsReject > 0 ? `❌ Reject: ${r.pcsReject} pcs` : null,
+            r.belumSetor > 0 ? `⏳ Blm setor: ${r.belumSetor} pcs` : null,
+            "━━━━━━━━━━━━━━━━━━",
+            `💰 *Total: ${fmt2(r.gaji)}*`,
+            "",
+            `_Dikirim via Gallery Kerudung · ${new Date().toLocaleDateString("id-ID")}_`,
+            "",
+            "_(Gambar slip telah diunduh, silakan lampirkan ke chat)_"
+          ].filter(Boolean).join("\n");
+          window.open(`https://wa.me/?text=${encodeURIComponent(lines)}`, "_blank");
+        }
+      });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
+      <div className="w-full max-h-[92vh] overflow-auto bg-white" style={{ borderRadius: "32px 32px 0 0", borderTop: "3px solid #a855f7" }}>
+        {/* Header modal */}
+        <div className="px-5 pt-5 pb-3" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-white font-extrabold text-lg">🧾 Slip Pendapatan Borongan</div>
+            <button onClick={onClose}
+              className="rounded-full px-4 py-1.5 text-sm font-bold"
+              style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
+              ✕ Tutup
+            </button>
+          </div>
+          <div className="text-white text-sm opacity-90">Gallery Kerudung</div>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* Preview gambar canvas */}
+          {!imgUrl && (
+            <div className="flex items-center justify-center py-10 gap-3">
+              <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin"
+                style={{ borderColor: "#a855f7", borderTopColor: "transparent" }} />
+              <span style={{ color: "#a855f7" }}>Membuat slip...</span>
+            </div>
+          )}
+          {imgUrl && (
+            <img src={imgUrl} alt="slip-gaji" className="w-full rounded-2xl"
+              style={{ border: "1px solid #e9d5ff" }} />
+          )}
+
+          {/* Tombol aksi */}
+          {imgUrl && (
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setSlipAction("download")}
+                className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}>
+                ⬇️ Download
+              </button>
+              <button
+                onClick={() => setSlipAction("share")}
+                className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                  <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.523 5.847L.057 23.882l6.19-1.438A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.173-1.4l-.371-.22-3.674.853.884-3.561-.242-.381A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+                </svg>
+                Share WA
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Konfirmasi aksi */}
+      {slipAction && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-6">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
+            <div className="text-xl font-bold mb-2" style={{ color: "#2d1b69" }}>
+              {slipAction === "download" ? "⬇️ Download Slip?" : "📤 Share Slip ke WhatsApp?"}
+            </div>
+            <div className="text-sm mb-5" style={{ color: "#64748b" }}>
+              Slip atas nama <strong>{nama}</strong> akan {slipAction === "download"
+                ? "diunduh sebagai gambar PNG."
+                : "dibagikan sebagai gambar ke WhatsApp."}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setSlipAction(null)}
+                className="flex-1 rounded-2xl border py-3 font-semibold"
+                style={{ borderColor: "#e2e8f0", color: "#64748b" }}>
+                Batal
+              </button>
+              <button
+                onClick={() => {
+                  const act = slipAction;
+                  setSlipAction(null);
+                  if (act === "download") downloadGambar();
+                  else shareGambar();
+                }}
+                className="flex-1 rounded-2xl py-3 font-semibold text-white"
+                style={{ background: slipAction === "download"
+                  ? "linear-gradient(135deg,#7c3aed,#a855f7)"
+                  : "linear-gradient(135deg,#25d366,#128c7e)" }}>
+                Ya, lanjut
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -2434,152 +2603,260 @@ function findRate(productType, model, process) {
       {slipPreview && (() => {
         const { nama, r, dari, sampai } = slipPreview;
         const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+
+        // ── Canvas renderer ──────────────────────────────────────────────
+        function buildSlipCanvas() {
+          const canvas = document.createElement("canvas");
+          const W = 360;
+          const sortedDetail = [...r.detail].sort((a,b)=>(a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||""));
+
+          // Hitung tinggi dinamis
+          let H = 290; // header + info pekerja + ringkasan
+          H += sortedDetail.length * 72 + 20; // detail entries
+          if (r.belumSetor > 0) H += 50;
+          H += 100; // total + footer
+
+          canvas.width = W;
+          canvas.height = H;
+          const ctx = canvas.getContext("2d");
+
+          // Background
+          ctx.fillStyle = "#fff9fc";
+          ctx.fillRect(0, 0, W, H);
+
+          // Border kiri-kanan
+          ctx.fillStyle = "#fce7f3";
+          ctx.fillRect(0, 0, 5, H);
+          ctx.fillRect(W - 5, 0, 5, H);
+
+          // Header gradient
+          const grad = ctx.createLinearGradient(0, 0, W, 130);
+          grad.addColorStop(0, "#a855f7");
+          grad.addColorStop(1, "#ec4899");
+          ctx.fillStyle = grad;
+          ctx.roundRect(5, 0, W - 10, 130, [0, 0, 20, 20]);
+          ctx.fill();
+
+          // Logo GK
+          const logoImg = new Image();
+          logoImg.src = "data:image/png;base64,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";
+          const drawContent = () => {
+            // Logo (60x60 px, kiri header)
+            try {
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(44, 55, 28, 0, Math.PI * 2);
+              ctx.closePath();
+              ctx.clip();
+              ctx.fillStyle = "rgba(255,255,255,0.15)";
+              ctx.fill();
+              ctx.drawImage(logoImg, 16, 27, 56, 56);
+              ctx.restore();
+            } catch(e) {}
+
+            // Teks header
+            ctx.fillStyle = "#fff";
+            ctx.font = "bold 17px Arial";
+            ctx.textAlign = "left";
+            ctx.fillText("Gallery Kerudung", 82, 46);
+            ctx.font = "11px Arial";
+            ctx.fillStyle = "rgba(255,255,255,0.85)";
+            ctx.fillText("📱 087822864625", 82, 68);
+
+            ctx.fillStyle = "rgba(255,255,255,0.7)";
+            ctx.font = "bold 12px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("🧾 SLIP PENDAPATAN BORONGAN", W / 2, 108);
+
+            // Scallop bottom header
+            ctx.fillStyle = "#fff9fc";
+            for (let x = 5; x < W - 5; x += 14) {
+              ctx.beginPath();
+              ctx.arc(x + 7, 130, 7, 0, Math.PI);
+              ctx.fill();
+            }
+
+            let y = 150;
+
+            const drawLine = () => {
+              ctx.strokeStyle = "#fce7f3";
+              ctx.lineWidth = 1;
+              ctx.setLineDash([4, 4]);
+              ctx.beginPath();
+              ctx.moveTo(18, y); ctx.lineTo(W - 18, y);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              y += 14;
+            };
+
+            const drawRow = (label, val, labelColor="#a855f7", valColor="#2d1b69", bold=false) => {
+              ctx.fillStyle = labelColor;
+              ctx.font = (bold ? "bold " : "") + "11px Arial";
+              ctx.textAlign = "left";
+              ctx.fillText(label, 18, y);
+              ctx.fillStyle = valColor;
+              ctx.font = (bold ? "bold " : "") + "11px Arial";
+              ctx.textAlign = "right";
+              ctx.fillText(val, W - 18, y);
+              y += 20;
+            };
+
+            // ── Info pekerja ──
+            ctx.fillStyle = "#ede9fe";
+            ctx.beginPath();
+            ctx.roundRect(12, y - 14, W - 24, 72, 10);
+            ctx.fill();
+            drawRow("Nama Pekerja", "👤 " + nama, "#7c3aed", "#2d1b69", true);
+            drawRow("Periode", dari + " s/d " + sampai, "#7c3aed", "#2d1b69");
+            const tglCetak = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+            drawRow("Tanggal Cetak", tglCetak, "#7c3aed", "#2d1b69");
+            y += 6;
+
+            drawLine();
+
+            // ── Ringkasan pcs ──
+            const col = (W - 36) / 3;
+            const boxes = [
+              { label: "Diberikan", val: String(r.pcsAwal), bg: "#ede9fe", color: "#5b21b6" },
+              { label: "Disetor", val: String(r.pcsSetor), bg: "#dcfce7", color: "#16a34a" },
+              { label: "Reject", val: String(r.pcsReject), bg: r.pcsReject > 0 ? "#fee2e2" : "#f1f5f9", color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" },
+            ];
+            boxes.forEach((b, i) => {
+              const bx = 18 + i * (col + 6);
+              ctx.fillStyle = b.bg;
+              ctx.beginPath();
+              ctx.roundRect(bx, y - 10, col, 40, 8);
+              ctx.fill();
+              ctx.fillStyle = b.color;
+              ctx.font = "bold 13px Arial";
+              ctx.textAlign = "center";
+              ctx.fillText(b.val, bx + col / 2, y + 8);
+              ctx.font = "10px Arial";
+              ctx.fillStyle = "#94a3b8";
+              ctx.fillText(b.label, bx + col / 2, y + 22);
+            });
+            y += 46;
+            drawLine();
+
+            // ── Header detail ──
+            ctx.fillStyle = "#7c3aed";
+            ctx.font = "bold 10px Arial";
+            ctx.textAlign = "left";
+            ctx.fillText("DETAIL PEKERJAAN", 18, y);
+            y += 16;
+
+            // ── Detail entries ──
+            sortedDetail.forEach((d, i) => {
+              const rowH = 66;
+              ctx.fillStyle = i % 2 === 0 ? "#fdf4ff" : "#f5f3ff";
+              ctx.beginPath();
+              ctx.roundRect(12, y - 4, W - 24, rowH, 8);
+              ctx.fill();
+
+              ctx.fillStyle = "#2d1b69";
+              ctx.font = "bold 10px Arial";
+              ctx.textAlign = "left";
+              const prosesTeks = d.process + (d.model && d.model !== "-" ? " · " + d.model : "");
+              ctx.fillText(prosesTeks, 18, y + 10);
+
+              ctx.fillStyle = "#94a3b8";
+              ctx.font = "10px Arial";
+              ctx.fillText((d.customer || "") + (d.invoice ? " / " + d.invoice : ""), 18, y + 24);
+              ctx.fillText("📅 " + (d.tanggalSetor || d.tanggal || "-"), 18, y + 38);
+              if (d.rate > 0) {
+                ctx.fillStyle = "#a855f7";
+                const qty = d.sudahSetor ? d.qtySetor : d.qty;
+                ctx.fillText(fmt(d.rate) + "/pcs × " + qty + " pcs", 18, y + 50);
+              }
+
+              // Kanan
+              ctx.textAlign = "right";
+              if (d.sudahSetor) {
+                ctx.fillStyle = "#16a34a";
+                ctx.font = "bold 10px Arial";
+                ctx.fillText(d.qtySetor + " pcs", W - 18, y + 10);
+                if (d.qtyReject > 0) {
+                  ctx.fillStyle = "#ef4444";
+                  ctx.fillText("❌ " + d.qtyReject + " reject", W - 18, y + 24);
+                }
+                ctx.fillStyle = "#7c3aed";
+                ctx.font = "bold 11px Arial";
+                ctx.fillText(fmt(d.gaji), W - 18, y + 38);
+              } else {
+                ctx.fillStyle = "#b45309";
+                ctx.font = "bold 10px Arial";
+                ctx.fillText(d.qty + " pcs", W - 18, y + 10);
+                ctx.fillText("⏳ Blm setor", W - 18, y + 24);
+              }
+              y += rowH + 4;
+            });
+
+            // ── Belum setor warning ──
+            if (r.belumSetor > 0) {
+              y += 4;
+              ctx.fillStyle = "#fefce8";
+              ctx.strokeStyle = "#fde68a";
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.roundRect(12, y - 4, W - 24, 34, 8);
+              ctx.fill();
+              ctx.stroke();
+              ctx.fillStyle = "#b45309";
+              ctx.font = "bold 10px Arial";
+              ctx.textAlign = "center";
+              ctx.fillText("⚠️ Masih ada " + r.belumSetor + " pcs belum disetor, belum termasuk total.", W / 2, y + 14);
+              y += 42;
+            }
+
+            drawLine();
+
+            // ── Total pendapatan ──
+            const totalGrad = ctx.createLinearGradient(12, y - 10, W - 12, y + 55);
+            totalGrad.addColorStop(0, "#f0fdf4");
+            totalGrad.addColorStop(1, "#dcfce7");
+            ctx.fillStyle = totalGrad;
+            ctx.beginPath();
+            ctx.roundRect(12, y - 10, W - 24, 60, 12);
+            ctx.fill();
+            ctx.strokeStyle = "#bbf7d0";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.fillStyle = "#64748b";
+            ctx.font = "10px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("Total Pendapatan Bersih", W / 2, y + 8);
+            ctx.fillStyle = "#16a34a";
+            ctx.font = "bold 22px Arial";
+            ctx.fillText(fmt(r.gaji), W / 2, y + 36);
+            y += 68;
+
+            // ── Footer ──
+            ctx.fillStyle = "#d8b4fe";
+            ctx.font = "10px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("Gallery Kerudung · Gallery Produksi · " + new Date().toLocaleDateString("id-ID"), W / 2, y);
+          };
+
+          if (logoImg.complete) {
+            drawContent();
+          } else {
+            logoImg.onload = drawContent;
+            logoImg.onerror = drawContent;
+          }
+
+          return canvas;
+        }
+
         return (
-          <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
-            <div className="w-full max-h-[92vh] overflow-auto bg-white" style={{ borderRadius: "32px 32px 0 0", borderTop: "3px solid #a855f7" }}>
-              {/* Header */}
-              <div className="px-5 pt-5 pb-3" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
-                <div className="flex items-center justify-between mb-1">
-                  <div className="text-white font-extrabold text-lg">🧾 Slip Pendapatan Borongan</div>
-                  <button onClick={() => setSlipPreview(null)}
-                    className="rounded-full px-4 py-1.5 text-sm font-bold"
-                    style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
-                    ✕ Tutup
-                  </button>
-                </div>
-                <div className="text-white text-sm opacity-90">Gallery Kerudung</div>
-              </div>
-
-              <div className="p-5 space-y-4">
-                {/* Info pekerja & periode */}
-                <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fdf4ff", border: "1px solid #e9d5ff" }}>
-                  <div className="flex justify-between text-sm">
-                    <span style={{ color: "#94a3b8" }}>Nama Pekerja</span>
-                    <strong style={{ color: "#2d1b69" }}>👤 {nama}</strong>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span style={{ color: "#94a3b8" }}>Periode</span>
-                    <strong style={{ color: "#2d1b69" }}>📅 {dari} s/d {sampai}</strong>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span style={{ color: "#94a3b8" }}>Tanggal Cetak</span>
-                    <strong style={{ color: "#2d1b69" }}>{new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })}</strong>
-                  </div>
-                </div>
-
-                {/* Ringkasan */}
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-xl p-2" style={{ background: "#ede9fe" }}>
-                    <div className="font-bold text-base" style={{ color: "#5b21b6" }}>{r.pcsAwal}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>Diberikan</div>
-                  </div>
-                  <div className="rounded-xl p-2" style={{ background: "#dcfce7" }}>
-                    <div className="font-bold text-base" style={{ color: "#16a34a" }}>{r.pcsSetor}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>Disetor</div>
-                  </div>
-                  <div className="rounded-xl p-2" style={{ background: r.pcsReject > 0 ? "#fee2e2" : "#f1f5f9" }}>
-                    <div className="font-bold text-base" style={{ color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" }}>{r.pcsReject}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>Reject</div>
-                  </div>
-                </div>
-
-                {/* Detail per entry */}
-                <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
-                  <div className="px-3 py-2 text-xs font-bold" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", color: "#7c3aed" }}>
-                    Detail Pekerjaan
-                  </div>
-                  <div className="divide-y" style={{ borderColor: "#f3e8ff" }}>
-                    {[...r.detail].sort((a,b) => (a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||"")).map((d, i) => (
-                      <div key={i} className="px-3 py-2.5 flex justify-between items-start"
-                        style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
-                        <div className="flex-1 mr-2">
-                          <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>
-                            {d.process}{d.model && d.model !== "-" ? " · " + d.model : ""}
-                          </div>
-                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
-                            {d.customer}{d.invoice ? " / " + d.invoice : ""}
-                          </div>
-                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
-                            📅 {d.tanggalSetor || d.tanggal || "-"}
-                          </div>
-                          {d.rate > 0 && (
-                            <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
-                              {fmt(d.rate)}/pcs × {d.sudahSetor ? d.qtySetor : d.qty} pcs
-                            </div>
-                          )}
-                        </div>
-                        <div className="text-right">
-                          {d.sudahSetor ? (
-                            <>
-                              <div className="text-xs font-bold" style={{ color: "#16a34a" }}>{d.qtySetor} pcs</div>
-                              {d.qtyReject > 0 && <div className="text-xs" style={{ color: "#ef4444" }}>❌ {d.qtyReject} reject</div>}
-                              <div className="text-sm font-bold mt-0.5" style={{ color: "#7c3aed" }}>{fmt(d.gaji)}</div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="text-xs font-bold" style={{ color: "#b45309" }}>{d.qty} pcs</div>
-                              <div className="text-xs mt-0.5" style={{ color: "#b45309" }}>⏳ Blm setor</div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Belum setor warning */}
-                {r.belumSetor > 0 && (
-                  <div className="rounded-xl px-4 py-3 text-xs font-semibold" style={{ background: "#fefce8", border: "1px solid #fde68a", color: "#b45309" }}>
-                    ⚠️ Masih ada <strong>{r.belumSetor} pcs</strong> belum disetor, belum termasuk total di bawah.
-                  </div>
-                )}
-
-                {/* Total pendapatan */}
-                <div className="rounded-2xl p-4" style={{ background: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "1.5px solid #bbf7d0" }}>
-                  <div className="text-xs mb-1" style={{ color: "#64748b" }}>Total Pendapatan Bersih</div>
-                  <div className="text-3xl font-black" style={{ color: "#16a34a" }}>{fmt(r.gaji)}</div>
-                </div>
-
-                {/* Tombol Share WA */}
-                <button
-                    onClick={() => {
-                      const fmt2 = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
-                      const lines = [
-                        "🧾 *Slip Pendapatan Borongan*",
-                        "📍 Gallery Kerudung",
-                        "━━━━━━━━━━━━━━━━━━",
-                        `👤 *${nama}*`,
-                        `📅 Periode: ${slipPreview.dari} s/d ${slipPreview.sampai}`,
-                        "━━━━━━━━━━━━━━━━━━",
-                        ...([...r.detail].sort((a,b)=>(a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||"")).map((d,i)=>{
-                          const tgl = d.tanggalSetor||d.tanggal||"-";
-                          const model = d.model && d.model!=="-" ? ` · ${d.model}` : "";
-                          const qty = d.sudahSetor ? d.qtySetor : d.qty;
-                          const ket = d.sudahSetor ? fmt2(d.gaji) : "⏳ blm setor";
-                          return `${i+1}. ${tgl} | ${d.process}${model} | ${qty} pcs | ${ket}`;
-                        })),
-                        "━━━━━━━━━━━━━━━━━━",
-                        `📦 Diberikan: ${r.pcsAwal} pcs`,
-                        `✅ Disetor: ${r.pcsSetor} pcs`,
-                        r.pcsReject > 0 ? `❌ Reject: ${r.pcsReject} pcs` : null,
-                        r.belumSetor > 0 ? `⏳ Blm setor: ${r.belumSetor} pcs` : null,
-                        "━━━━━━━━━━━━━━━━━━",
-                        `💰 *Total: ${fmt2(r.gaji)}*`,
-                        "",
-                        `_Dikirim via Gallery Kerudung · ${new Date().toLocaleDateString("id-ID")}_`
-                      ].filter(Boolean).join("\n");
-                      const waUrl = `https://wa.me/?text=${encodeURIComponent(lines)}`;
-                      window.open(waUrl, "_blank");
-                    }}
-                    className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
-                    style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.523 5.847L.057 23.882l6.19-1.438A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.173-1.4l-.371-.22-3.674.853.884-3.561-.242-.381A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
-                    Share ke WA
-                </button>
-              </div>
-            </div>
-          </div>
+          <SlipGajiModal
+            nama={nama}
+            r={r}
+            dari={dari}
+            sampai={sampai}
+            fmt={fmt}
+            buildSlipCanvas={buildSlipCanvas}
+            onClose={() => setSlipPreview(null)}
+          />
         );
       })()}
 
