@@ -807,9 +807,40 @@ export default function App() {
   }, [materials, q, materialUsageByName]);
 
   const filteredShipments = useMemo(() => {
-    return orders
-      .filter((o) => isDoneStatus(o.status) || isSentStatus(o.status))
-      .map((o) => ({
+    const rows = [];
+    const orderById = new Map(orders.map((o) => [o.id, o]));
+    const orderIdsWithShipment = new Set();
+
+    shipments.forEach((shipment) => {
+      const matchedOrder = orders.find((o) =>
+        sameText(shipment.pesananId, o.id) ||
+        sameText(shipment.orderId, o.id) ||
+        sameText(shipment.invoice, o.invoice)
+      );
+      if (matchedOrder?.id) orderIdsWithShipment.add(matchedOrder.id);
+      rows.push({
+        ...shipment,
+        id: shipment.id,
+        pesananId: shipment.pesananId || shipment.orderId || matchedOrder?.id || "",
+        orderId: shipment.orderId || shipment.pesananId || matchedOrder?.id || "",
+        customer: shipment.customer || matchedOrder?.customer || "-",
+        produk: shipment.produk || matchedOrder?.item || "-",
+        invoice: shipment.invoice || matchedOrder?.invoice || "-",
+        tanggalKirim: shipment.tanggalKirim || shipment.raw?.date || matchedOrder?.createdAt || "",
+        ekspedisi: shipment.ekspedisi || "",
+        penerima: shipment.penerima || shipment.customer || matchedOrder?.customer || "-",
+        items: Array.isArray(shipment.items) && shipment.items.length > 0
+          ? shipment.items
+          : [{ nama: shipment.produk || matchedOrder?.item || "-", qtyPesan: Number(matchedOrder?.qty || 0), qtyKirim: Number(shipment.totalKirim || shipment.raw?.qty || 0) }],
+        totalKirim: Number(shipment.totalKirim || 0),
+        sourceRow: "shipment",
+      });
+    });
+
+    orders.forEach((o) => {
+      if (!(isDoneStatus(o.status) || isSentStatus(o.status))) return;
+      if (orderIdsWithShipment.has(o.id)) return;
+      rows.push({
         id: o.id,
         pesananId: o.id,
         orderId: o.id,
@@ -826,21 +857,22 @@ export default function App() {
           "",
         ekspedisi: o.raw?.ekspedisi || o.raw?.courier || "",
         penerima: o.customer || "-",
-        items: [
-          {
-            nama: o.item || "-",
-            qtyPesan: Number(o.qty || 0),
-            qtyKirim: Number(o.qty || 0),
-          },
-        ],
+        items: (o.items || []).length > 0
+          ? (o.items || []).map((it) => ({ nama: it.name || o.item || "-", qtyPesan: Number(it.qty || 0), qtyKirim: Number(it.qty || 0) }))
+          : [{ nama: o.item || "-", qtyPesan: Number(o.qty || 0), qtyKirim: Number(o.qty || 0) }],
         totalKirim: Number(o.qty || 0),
         raw: o.raw,
-      }))
+        sourceRow: "order_status",
+      });
+    });
+
+    return rows
       .filter((s) => {
         const txt = `${s.customer} ${s.produk} ${s.invoice} ${s.ekspedisi}`.toLowerCase();
         return q === "" || txt.includes(q);
-      });
-  }, [orders, q]);
+      })
+      .sort((a, b) => String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || "")));
+  }, [shipments, orders, q]);
 
   const stats = useMemo(() => {
     const selesaiOrders = orders.filter((o) => isDoneStatus(o.status) || isSentStatus(o.status));
@@ -874,6 +906,26 @@ export default function App() {
     return productionEntries
       .filter((e) => e.orderId === orderId && e.process === process)
       .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+  }
+
+  function processQtyForOrderModel(orderId, process, model, excludeEntryId = "") {
+    return productionEntries
+      .filter((e) =>
+        e.id !== excludeEntryId &&
+        e.orderId === orderId &&
+        e.process === process &&
+        lower(e.model || "") === lower(model || "")
+      )
+      .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+  }
+
+  function getOrderProcessLimit(order, process, model) {
+    if (!order) return { limit: 0, label: "pesanan" };
+    if (process !== "QC Packing" && model) {
+      const item = (order.items || []).find((it) => lower(it.name || it.item || "") === lower(model));
+      if (item) return { limit: Number(item.qty || 0), label: `model ${item.name || item.item}` };
+    }
+    return { limit: Number(order.qty || 0), label: "pesanan" };
   }
 
   function isDuplicateEntry(payload) {
@@ -951,9 +1003,9 @@ function findRate(productType, model, process) {
     // Mapping status produksi → status pesanan di Gallery Kerudung
     const statusOrderMap = {
       "Antri": "Proses",
+      "Potong": "Proses",
       "Jahit": "Proses",
-      "QC": "Proses",
-      "Packing": "Proses",
+      "QC Packing": "Proses",
       "Selesai": "Selesai Produksi",
     };
 
@@ -1035,12 +1087,15 @@ function findRate(productType, model, process) {
     }
 
     if (order) {
-      const alreadyQty = processQtyForOrder(order.id, entryForm.process);
+      const { limit, label } = getOrderProcessLimit(order, entryForm.process, entryForm.model);
+      const alreadyQty = entryForm.process === "QC Packing"
+        ? processQtyForOrder(order.id, entryForm.process)
+        : processQtyForOrderModel(order.id, entryForm.process, entryForm.model);
       const nextQty = alreadyQty + Number(entryForm.qty || 0);
-      if (nextQty > Number(order.qty || 0)) {
+      if (limit > 0 && nextQty > limit) {
         return alert(
-          `Qty ${entryForm.process} melebihi qty pesanan.\n` +
-          `Pesanan: ${order.qty} pcs\n` +
+          `Qty ${entryForm.process} melebihi qty ${label}.\n` +
+          `Batas: ${limit} pcs\n` +
           `Sudah input: ${alreadyQty} pcs\n` +
           `Input baru: ${entryForm.qty} pcs`
         );
@@ -1109,6 +1164,7 @@ function findRate(productType, model, process) {
 
   async function simpanSetor() {
     if (!setorModal) return;
+    if (setorModal.statusSetor === "sudah_setor") return alert("Entry ini sudah pernah disetor.");
     const qtySetor = Number(setorForm.qtySetor);
     const qtyReject = Number(setorForm.qtyReject || 0);
     if (!qtySetor || qtySetor <= 0) return alert("Qty setor wajib diisi.");
@@ -1175,6 +1231,9 @@ function findRate(productType, model, process) {
       qtyKirim: Number(i.qtyKirim || 0),
       selisih: Number(i.qtyKirim || 0) - Number(i.qtyPesan || 0),
     }));
+
+    if (items.some((i) => Number(i.qtyKirim || 0) < 0)) return alert("Qty kirim tidak boleh negatif.");
+    if (items.reduce((s, i) => s + Number(i.qtyKirim || 0), 0) <= 0) return alert("Minimal ada qty kirim lebih dari 0 pcs.");
 
     setIsSaving(true);
     try {
@@ -1285,6 +1344,27 @@ function findRate(productType, model, process) {
   async function saveEditEntry() {
     if (!editEntryModal) return;
     if (!editEntryForm.qty || Number(editEntryForm.qty) <= 0) return alert("Qty wajib diisi");
+
+    const editOrder = orders.find((o) => o.id === editEntryModal.orderId);
+    if (editOrder) {
+      const nextModel = editEntryModal.process === "QC Packing" ? "" : (editEntryForm.model || editEntryModal.model || "");
+      const { limit, label } = getOrderProcessLimit(editOrder, editEntryModal.process, nextModel);
+      const alreadyQty = editEntryModal.process === "QC Packing"
+        ? productionEntries
+            .filter((e) => e.id !== editEntryModal.id && e.orderId === editOrder.id && e.process === editEntryModal.process)
+            .reduce((sum, e) => sum + Number(e.qty || 0), 0)
+        : processQtyForOrderModel(editOrder.id, editEntryModal.process, nextModel, editEntryModal.id);
+      const nextQty = alreadyQty + Number(editEntryForm.qty || 0);
+      if (limit > 0 && nextQty > limit) {
+        return alert(
+          `Qty ${editEntryModal.process} melebihi qty ${label}.\n` +
+          `Batas: ${limit} pcs\n` +
+          `Sudah input lain: ${alreadyQty} pcs\n` +
+          `Qty baru: ${editEntryForm.qty} pcs`
+        );
+      }
+    }
+
     setIsSaving(true);
     try {
       const updates = {
@@ -1302,6 +1382,82 @@ function findRate(productType, model, process) {
       setTimeout(() => setToast(""), 3000);
     } catch (e) {
       alert("Gagal update: " + e.message);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+
+  function payrollMarkerFor(nama, dari = rekapDari, sampai = rekapSampai) {
+    return payrollExpenses.find((p) =>
+      p.periodeGajiDari === dari &&
+      p.periodeGajiSampai === sampai &&
+      lower(p.employeeName) === lower(nama) &&
+      (p.source === "gallery-produksi-gaji-marker" || p.type === "status_gajian_periode" || p.status === "sudah_dibayar")
+    );
+  }
+
+  function sudahGajian(nama, dari = rekapDari, sampai = rekapSampai) {
+    return Boolean(payrollMarkerFor(nama, dari, sampai));
+  }
+
+  async function tandaiSudahGajian(nama, r, dari = rekapDari, sampai = rekapSampai) {
+    if (!nama) return;
+    if (sudahGajian(nama, dari, sampai)) {
+      setToast("✅ Status gajian sudah tercatat");
+      setTimeout(() => setToast(""), 2500);
+      return;
+    }
+    if (Number(r?.gaji || 0) <= 0) {
+      return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
+    }
+
+    const ok = window.confirm(`Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?`);
+    if (!ok) return;
+
+    setIsSaving(true);
+    try {
+      await addDoc(collection(db, C.PAYROLL_EXPENSES), {
+        source: "gallery-produksi-gaji-marker",
+        type: "status_gajian_periode",
+        employeeName: nama,
+        periodeGajiDari: dari,
+        periodeGajiSampai: sampai,
+        tanggal: todayStr(),
+        tanggalBayar: todayStr(),
+        status: "sudah_dibayar",
+        totalAmount: 0,
+        gajiAmount: Number(r?.gaji || 0),
+        totalPcs: Number(r?.pcsSetor || 0),
+        totalReject: Number(r?.pcsReject || 0),
+        detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
+        createdAt: todayStr(),
+      });
+      setToast("✅ Status berubah menjadi Sudah gajian");
+      setTimeout(() => setToast(""), 3000);
+    } catch (e) {
+      alert("Gagal menandai sudah gajian: " + (e?.message || e));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function batalkanSudahGajian(nama, dari = rekapDari, sampai = rekapSampai) {
+    const marker = payrollMarkerFor(nama, dari, sampai);
+    if (!marker?.id) return alert("Data status gajian tidak ditemukan.");
+    if (marker.source !== "gallery-produksi-gaji-marker" && marker.type !== "status_gajian_periode") {
+      return alert("Status ini berasal dari data payroll lama, tidak bisa dibatalkan otomatis dari tombol ini.");
+    }
+    const ok = window.confirm(`Batalkan status sudah gajian untuk ${nama}?`);
+    if (!ok) return;
+
+    setIsSaving(true);
+    try {
+      await deleteDoc(doc(db, C.PAYROLL_EXPENSES, marker.id));
+      setToast("↩️ Status gajian dibatalkan");
+      setTimeout(() => setToast(""), 3000);
+    } catch (e) {
+      alert("Gagal membatalkan status gajian: " + (e?.message || e));
     } finally {
       setIsSaving(false);
     }
@@ -1509,7 +1665,7 @@ function findRate(productType, model, process) {
       const W = 900;
       const hasWarning = Number(r?.belumSetor || 0) > 0;
       const hasCarryOver = (carryOver || []).length > 0;
-      const H = 770 + detailRows.length * 74 + (extraRows > 0 ? 28 : 0) + (hasWarning ? 56 : 0) + (hasCarryOver ? 72 : 0);
+      const H = 870 + detailRows.length * 74 + (extraRows > 0 ? 28 : 0) + (hasWarning ? 56 : 0) + (hasCarryOver ? 72 : 0);
       const canvas = document.createElement("canvas");
       canvas.width = W;
       canvas.height = H;
@@ -2249,6 +2405,33 @@ function findRate(productType, model, process) {
           });
         });
         const rekapPerkerja = Object.entries(rekapMap).sort((a, b) => b[1].gaji - a[1].gaji);
+        const rekapGajianKeseluruhan = rekapPerkerja.reduce((acc, [nama, r]) => {
+          const sudah = sudahGajian(nama, rekapDari, rekapSampai);
+          const nominal = Number(r?.gaji || 0);
+          acc.totalPekerja += 1;
+          acc.totalGaji += nominal;
+          acc.totalPcsSetor += Number(r?.pcsSetor || 0);
+          acc.totalPcsReject += Number(r?.pcsReject || 0);
+          acc.totalBelumSetor += Number(r?.belumSetor || 0);
+          if (sudah) {
+            acc.sudahGajian += 1;
+            acc.totalSudahDibayar += nominal;
+          } else {
+            acc.belumGajian += 1;
+            acc.totalBelumDibayar += nominal;
+          }
+          return acc;
+        }, {
+          totalPekerja: 0,
+          sudahGajian: 0,
+          belumGajian: 0,
+          totalGaji: 0,
+          totalSudahDibayar: 0,
+          totalBelumDibayar: 0,
+          totalPcsSetor: 0,
+          totalPcsReject: 0,
+          totalBelumSetor: 0,
+        });
 
         return (
           <div className="space-y-3 p-4">
@@ -2288,6 +2471,52 @@ function findRate(productType, model, process) {
                 <div className="text-xs" style={{ color: "#94a3b8" }}>total gaji</div>
               </div>
             </div>
+
+            {rekapPerkerja.length > 0 && (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>💰 Rekap Gajian Keseluruhan</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapDari} s/d {rekapSampai}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-xl p-3" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                    <div className="text-xs font-bold" style={{ color: "#16a34a" }}>Sudah Gajian</div>
+                    <div className="text-lg font-black" style={{ color: "#16a34a" }}>{money(rekapGajianKeseluruhan.totalSudahDibayar)}</div>
+                    <div className="text-xs" style={{ color: "#64748b" }}>{rekapGajianKeseluruhan.sudahGajian} pekerja</div>
+                  </div>
+                  <div className="rounded-xl p-3" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
+                    <div className="text-xs font-bold" style={{ color: "#b45309" }}>Belum Gajian</div>
+                    <div className="text-lg font-black" style={{ color: "#b45309" }}>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</div>
+                    <div className="text-xs" style={{ color: "#64748b" }}>{rekapGajianKeseluruhan.belumGajian} pekerja</div>
+                  </div>
+                </div>
+                <div className="rounded-xl p-3" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", border: "1px solid #e9d5ff" }}>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold" style={{ color: "#7c3aed" }}>Total Gaji Periode Ini</span>
+                    <span className="text-xl font-black" style={{ color: "#7c3aed" }}>{money(rekapGajianKeseluruhan.totalGaji)}</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="rounded-lg py-2" style={{ background: "rgba(255,255,255,0.7)" }}>
+                      <div className="font-bold" style={{ color: "#2d1b69" }}>{rekapGajianKeseluruhan.totalPekerja}</div>
+                      <div style={{ color: "#94a3b8" }}>pekerja</div>
+                    </div>
+                    <div className="rounded-lg py-2" style={{ background: "rgba(255,255,255,0.7)" }}>
+                      <div className="font-bold" style={{ color: "#16a34a" }}>{rekapGajianKeseluruhan.totalPcsSetor.toLocaleString()}</div>
+                      <div style={{ color: "#94a3b8" }}>pcs setor</div>
+                    </div>
+                    <div className="rounded-lg py-2" style={{ background: "rgba(255,255,255,0.7)" }}>
+                      <div className="font-bold" style={{ color: rekapGajianKeseluruhan.totalBelumSetor > 0 ? "#b45309" : "#94a3b8" }}>{rekapGajianKeseluruhan.totalBelumSetor.toLocaleString()}</div>
+                      <div style={{ color: "#94a3b8" }}>blm setor</div>
+                    </div>
+                  </div>
+                  {rekapGajianKeseluruhan.totalBelumDibayar > 0 && (
+                    <div className="mt-2 rounded-lg px-3 py-2 text-xs font-semibold" style={{ background: "#fff7ed", color: "#92400e", border: "1px solid #fed7aa" }}>
+                      Sisa yang belum ditandai gajian: <strong>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</strong>. Tandai dari modal slip tiap pekerja.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Rekap per proses */}
             {prosesKeys.length > 0 ? (
@@ -2333,11 +2562,7 @@ function findRate(productType, model, process) {
                   <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapPerkerja.length} pekerja</div>
                 </div>
                 {rekapPerkerja.map(([nama, r]) => {
-                  const sudahGajianPerkerja = payrollExpenses.some((p) =>
-                    p.periodeGajiDari === rekapDari &&
-                    p.periodeGajiSampai === rekapSampai &&
-                    lower(p.employeeName) === lower(nama)
-                  );
+                  const sudahGajianPerkerja = sudahGajian(nama, rekapDari, rekapSampai);
                   const carryOver = productionEntries.filter((e) =>
                     lower(e.employeeName) === lower(nama) &&
                     e.statusSetor !== "sudah_setor" &&
@@ -2878,6 +3103,7 @@ function findRate(productType, model, process) {
       {slipPreview && (() => {
         const { nama, r, dari, sampai, carryOver = [] } = slipPreview;
         const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+        const slipSudahGajian = sudahGajian(nama, dari, sampai);
         return (
           <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
             <div className="w-full max-h-[92vh] overflow-auto bg-white" style={{ borderRadius: "32px 32px 0 0", borderTop: "3px solid #a855f7" }}>
@@ -2985,6 +3211,39 @@ function findRate(productType, model, process) {
                 <div className="rounded-2xl p-4" style={{ background: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "1.5px solid #bbf7d0" }}>
                   <div className="text-xs mb-1" style={{ color: "#64748b" }}>Total Pendapatan Bersih</div>
                   <div className="text-3xl font-black" style={{ color: "#16a34a" }}>{fmt(r.gaji)}</div>
+                </div>
+
+                {/* Status gajian - hanya tampil di modal slip agar rekap tetap rapi */}
+                <div className="rounded-2xl p-4 space-y-3" style={{ background: slipSudahGajian ? "#f0fdf4" : "#fff7ed", border: `1.5px solid ${slipSudahGajian ? "#bbf7d0" : "#fed7aa"}` }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-bold" style={{ color: slipSudahGajian ? "#16a34a" : "#b45309" }}>
+                        {slipSudahGajian ? "✅ Sudah gajian" : "⏳ Belum gajian"}
+                      </div>
+                      <div className="mt-1 text-xs" style={{ color: "#64748b" }}>
+                        Status ini hanya untuk periode {dari} s/d {sampai}.
+                      </div>
+                    </div>
+                    {slipSudahGajian ? (
+                      <button
+                        type="button"
+                        onClick={() => batalkanSudahGajian(nama, dari, sampai)}
+                        className="rounded-xl px-3 py-2 text-xs font-bold"
+                        style={{ background: "#fee2e2", color: "#e11d48", border: "1px solid #fecaca" }}
+                      >
+                        Batalkan
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => tandaiSudahGajian(nama, r, dari, sampai)}
+                        className="rounded-xl px-3 py-2 text-xs font-bold text-white"
+                        style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)" }}
+                      >
+                        Tandai Sudah Gajian
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Tanggungan minggu lalu (carry over) */}
