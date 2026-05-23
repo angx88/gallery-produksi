@@ -502,7 +502,6 @@ export default function App() {
   const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
   const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
-  const [slipImagePreview, setSlipImagePreview] = useState(null); // { imgUrl, file, filename, nama }
   const slipRef = useRef(null);
 
   const [orders, setOrders] = useState([]);
@@ -1452,7 +1451,7 @@ function findRate(productType, model, process) {
       const W = 900;
       const hasWarning = Number(r?.belumSetor || 0) > 0;
       const hasCarryOver = (carryOver || []).length > 0;
-      const H = 560 + detailRows.length * 74 + (extraRows > 0 ? 28 : 0) + (hasWarning ? 56 : 0) + (hasCarryOver ? 72 : 0);
+      const H = 770 + detailRows.length * 74 + (extraRows > 0 ? 28 : 0) + (hasWarning ? 56 : 0) + (hasCarryOver ? 72 : 0);
       const canvas = document.createElement("canvas");
       canvas.width = W;
       canvas.height = H;
@@ -1599,6 +1598,44 @@ function findRate(productType, model, process) {
       ctx.fillText(fmt(r?.gaji), 52, y + 66);
 
       y += 112;
+
+      // Tanda tangan ikut digambar ke PNG supaya hasil Share WA sama lengkapnya
+      // dengan slip HTML/PDF.
+      const signY = y;
+      const signGap = 24;
+      const signW = (W - 56 - signGap) / 2;
+      const signH = 126;
+      const signBoxes = [
+        { x: 28, label: "Hormat saya, pekerja", name: String(nama || "-") },
+        { x: 28 + signW + signGap, label: "Mengetahui, Gallery Kerudung", name: "Astri Apriani" },
+      ];
+      signBoxes.forEach((box) => {
+        drawRoundedRect(ctx, box.x, signY, signW, signH, 16);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+        ctx.strokeStyle = "#e9d5ff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "13px Segoe UI, Arial";
+        ctx.fillText(box.label, box.x + signW / 2, signY + 28);
+
+        ctx.strokeStyle = "#c4b5fd";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(box.x + signW * 0.2, signY + 92);
+        ctx.lineTo(box.x + signW * 0.8, signY + 92);
+        ctx.stroke();
+
+        ctx.fillStyle = "#2d1b69";
+        ctx.font = "bold 14px Segoe UI, Arial";
+        ctx.fillText(box.name, box.x + signW / 2, signY + 112);
+        ctx.textAlign = "left";
+      });
+
+      y = signY + signH + 38;
       ctx.fillStyle = "#c084fc";
       ctx.font = "bold 14px Segoe UI, Arial";
       ctx.textAlign = "center";
@@ -1619,48 +1656,39 @@ function findRate(productType, model, process) {
       const file = new File([blob], filename, { type: "image/png" });
       return { imgUrl, file, filename, nama, dari, sampai, total: fmt(r?.gaji) };
     } catch (e) {
-      alert("Gagal membuat preview slip gaji: " + (e?.message || e));
+      alert("Gagal membuat gambar slip gaji: " + (e?.message || e));
       return null;
     }
   }
 
   async function shareSlipGajiAsImage(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
-    const preview = await createSlipImageFile(nama, r, dari, sampai, carryOver);
-    if (preview) setSlipImagePreview(preview);
-  }
+    const slipImage = await createSlipImageFile(nama, r, dari, sampai, carryOver);
+    if (!slipImage?.file) return;
 
-  async function sendSlipImageToWhatsApp() {
-    if (!slipImagePreview?.file) return;
     try {
-      const file = slipImagePreview.file;
-      if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+      if (navigator.canShare && navigator.canShare({ files: [slipImage.file] }) && navigator.share) {
         await navigator.share({
-          files: [file],
-          title: `Slip Gaji ${slipImagePreview.nama}`,
-          text: `Slip Pendapatan Borongan - ${slipImagePreview.nama} (${slipImagePreview.dari} s/d ${slipImagePreview.sampai})`,
+          files: [slipImage.file],
+          title: `Slip Gaji ${slipImage.nama}`,
+          text: `Slip Pendapatan Borongan - ${slipImage.nama} (${slipImage.dari} s/d ${slipImage.sampai})`,
         });
-        setSlipImagePreview(null);
         setToast("✅ Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.");
         setTimeout(() => setToast(""), 3500);
         return;
       }
 
-      setToast("⚠️ Browser ini tidak mendukung share gambar langsung. Buka dari HP Chrome/Safari agar bisa pilih WhatsApp.");
+      const a = document.createElement("a");
+      a.href = slipImage.imgUrl;
+      a.download = slipImage.filename || "SlipGaji.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setToast("⚠️ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.");
       setTimeout(() => setToast(""), 6000);
     } catch (e) {
       if (e?.name === "AbortError") return;
       alert("Gagal share slip gaji: " + (e?.message || e));
     }
-  }
-
-  function downloadSlipImagePreview() {
-    if (!slipImagePreview?.imgUrl) return;
-    const a = document.createElement("a");
-    a.href = slipImagePreview.imgUrl;
-    a.download = slipImagePreview.filename || "SlipGaji.png";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
   }
 
   if (authLoading) {
@@ -2960,54 +2988,6 @@ function findRate(productType, model, process) {
           </div>
         );
       })()}
-
-      {slipImagePreview && (
-        <div className="fixed inset-0 z-[70] flex items-end" style={{ background: "rgba(0,0,0,0.45)" }}>
-          <div className="w-full max-h-[94vh] overflow-auto bg-white p-5" style={{ borderRadius: "32px 32px 0 0", borderTop: "3px solid #25d366" }}>
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-lg font-black" style={{ color: "#2d1b69" }}>Preview Gambar Slip</div>
-                <div className="text-xs" style={{ color: "#94a3b8" }}>Cek dulu gambarnya, lalu pilih Kirim WA.</div>
-              </div>
-              <button
-                onClick={() => setSlipImagePreview(null)}
-                className="rounded-full px-4 py-2 text-sm font-bold"
-                style={{ background: "#f1f5f9", color: "#64748b" }}
-              >
-                Tutup
-              </button>
-            </div>
-
-            <img
-              src={slipImagePreview.imgUrl}
-              alt="Preview slip gaji"
-              className="w-full rounded-2xl border bg-white"
-              style={{ borderColor: "#e9d5ff" }}
-            />
-
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <button
-                onClick={downloadSlipImagePreview}
-                className="rounded-2xl py-3 text-sm font-bold text-white"
-                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
-              >
-                ⬇️ Download PNG
-              </button>
-              <button
-                onClick={sendSlipImageToWhatsApp}
-                className="rounded-2xl py-3 text-sm font-bold text-white"
-                style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
-              >
-                📤 Kirim WA
-              </button>
-            </div>
-
-            <div className="mt-3 rounded-2xl px-4 py-3 text-xs" style={{ background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0" }}>
-              Di HP, tombol Kirim WA akan membuka menu share seperti app Gallery Kerudung. Di laptop/desktop, browser bisa saja tidak mengizinkan kirim file langsung ke WhatsApp.
-            </div>
-          </div>
-        </div>
-      )}
 
       {isSaving && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
