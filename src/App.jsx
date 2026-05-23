@@ -981,15 +981,6 @@ export default function App() {
     });
   }, [orders, produksiByOrderId, shipmentByOrderId]);
 
-  // Pilihan pesanan untuk input borongan harus hanya pesanan aktif.
-  // Data lama yang sudah dikirim/selesai/lunas atau sudah punya detail pengiriman
-  // disembunyikan agar tidak muncul lagi saat input borongan.
-  const ordersUntukBorongan = useMemo(() => {
-    return orders
-      .filter((o) => !orderHasCompletedProduction(o, produksiByOrderId, shipmentByOrderId))
-      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-  }, [orders, produksiByOrderId, shipmentByOrderId]);
-
   const filteredProduksi = useMemo(() => {
     return produksi.filter((p) => {
       const txt = `${p.customer} ${p.item} ${p.invoice} ${p.status}`.toLowerCase();
@@ -3339,12 +3330,9 @@ function findRate(productType, model, process) {
                 setEntryForm((f) => ({ ...f, orderId: v, model: "", qty: "" }));
               }}
             >
-              <option value="">Tidak dikaitkan ke pesanan (manual)</option>
-              {ordersUntukBorongan.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
+              <option value="">Tidak dikaitkan ke pesanan</option>
+              {orders.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
             </Select>
-            <div className="text-xs leading-relaxed" style={{ color: "#94a3b8" }}>
-              Pesanan yang sudah dikirim, selesai, lunas, atau sudah sinkron data lama otomatis disembunyikan dari pilihan borongan.
-            </div>
 
             <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
