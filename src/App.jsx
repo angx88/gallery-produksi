@@ -939,6 +939,7 @@ export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [pesananOnlyNeedCheck, setPesananOnlyNeedCheck] = useState(false);
+  const [needCheckContextId, setNeedCheckContextId] = useState("");
   const [search, setSearch] = useState("");
   const initialRekapPeriod = useMemo(() => currentSundayToSaturdayPeriod(), []);
   const [rekapDari, setRekapDari] = useState(initialRekapPeriod.dari);
@@ -3096,7 +3097,7 @@ function findRate(productType, model, process) {
             </div>
             <button
               type="button"
-              onClick={() => { setPesananOnlyNeedCheck(true); setSearch(""); setTab("pesanan"); }}
+              onClick={() => { setPesananOnlyNeedCheck(true); setNeedCheckContextId(""); setSearch(""); setTab("pesanan"); }}
               className="text-xs font-bold px-3 py-1.5 rounded-full text-white shrink-0"
               style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
             >
@@ -3410,13 +3411,53 @@ function findRate(productType, model, process) {
                       </Button>
                       <Button
                         type="button"
-                        onClick={() => { setSearch(o.invoice || o.customer || ""); setPesananOnlyNeedCheck(false); }}
+                        onClick={() => setNeedCheckContextId((id) => (id === o.id ? "" : o.id))}
                         className="text-xs"
                         style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
                       >
-                        Lihat Konteks
+                        {needCheckContextId === o.id ? "Tutup Detail" : "Detail Masalah"}
                       </Button>
                     </div>
+                    {needCheckContextId === o.id && (() => {
+                      const ordered = dashboardTotalOrderedQty(o);
+                      let shipped = dashboardTotalShippedQty(o);
+                      if (!hasDeliveryDetail(o) && isLegacyDoneOrSentOrder(o) && ordered > 0 && shipped <= 0) shipped = ordered;
+                      const sisa = Math.max(0, ordered - shipped);
+                      const lebih = Math.max(0, shipped - ordered);
+                      const rawStatus = o.status || o.deliveryStatus || o.shippingStatus || "-";
+                      return (
+                        <div className="mt-2 rounded-2xl bg-white px-3 py-3 text-[11px] space-y-2" style={{ border: "1px solid #fecdd3" }}>
+                          <div className="font-black" style={{ color: "#be123c" }}>Detail masalah pengiriman</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#f8fafc" }}>
+                              <div style={{ color: "#64748b" }}>Pesanan</div>
+                              <div className="font-black" style={{ color: "#1e1b4b" }}>{fmtQty(ordered)} pcs</div>
+                            </div>
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#ecfdf5" }}>
+                              <div style={{ color: "#64748b" }}>Terkirim</div>
+                              <div className="font-black" style={{ color: "#16a34a" }}>{fmtQty(shipped)} pcs</div>
+                            </div>
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#fff7ed" }}>
+                              <div style={{ color: "#64748b" }}>Sisa aktif</div>
+                              <div className="font-black" style={{ color: "#ea580c" }}>{fmtQty(sisa)} pcs</div>
+                            </div>
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#fff1f2" }}>
+                              <div style={{ color: "#64748b" }}>Lebih kirim</div>
+                              <div className="font-black" style={{ color: "#e11d48" }}>{fmtQty(lebih)} pcs</div>
+                            </div>
+                          </div>
+                          <div><b>Invoice:</b> {o.invoice || "-"}</div>
+                          <div><b>Status:</b> {rawStatus}</div>
+                          <div><b>Alasan dicek:</b> {needCheckInfo.alasan}</div>
+                          {isShortShipmentClosed(o) && (
+                            <div><b>Alasan kurang kirim final:</b> {o.shortShipmentReason || "-"}</div>
+                          )}
+                          <div className="rounded-xl px-3 py-2" style={{ background: "#fef2f2", color: "#9f1239" }}>
+                            Gunakan <b>Edit Pengiriman</b> jika qty/status belum benar. Jika sisa tidak akan dikirim lagi, pilih <b>Kurang kirim final</b> dan isi alasannya.
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
