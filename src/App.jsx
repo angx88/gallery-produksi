@@ -1426,7 +1426,16 @@ function findRate(productType, model, process) {
       const detailRows = sortedDetail.slice(0, 14);
       const extraRows = Math.max(0, sortedDetail.length - detailRows.length);
       const W = 900;
-      const H = 420 + detailRows.length * 74 + (Number(r?.belumSetor || 0) > 0 ? 48 : 0) + ((carryOver || []).length > 0 ? 76 : 0);
+      // Tinggi canvas harus dihitung sampai elemen terakhir.
+      // Versi sebelumnya terlalu pendek, sehingga bagian bawah slip terpotong saat di-share.
+      const hasWarning = Number(r?.belumSetor || 0) > 0;
+      const hasCarryOver = (carryOver || []).length > 0;
+      const H =
+        560 +
+        detailRows.length * 74 +
+        (extraRows > 0 ? 28 : 0) +
+        (hasWarning ? 56 : 0) +
+        (hasCarryOver ? 72 : 0);
       const canvas = document.createElement("canvas");
       canvas.width = W;
       canvas.height = H;
@@ -1556,6 +1565,13 @@ function findRate(productType, model, process) {
       ctx.fillStyle = "#16a34a";
       ctx.font = "bold 34px Segoe UI, Arial";
       ctx.fillText(fmt(r?.gaji), 52, y + 66);
+
+      y += 112;
+      ctx.fillStyle = "#c084fc";
+      ctx.font = "bold 14px Segoe UI, Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`Gallery Kerudung · ${new Date().toLocaleDateString("id-ID")}`, W / 2, y);
+      ctx.textAlign = "left";
 
       // Cara share dibuat sama seperti app Gallery Kerudung:
       // 1) Canvas diubah menjadi data URL PNG.
