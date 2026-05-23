@@ -870,6 +870,35 @@ function ProgressBar({ status }) {
   );
 }
 
+
+function isOfficialGajiPayroll(row) {
+  if (!row) return false;
+  const amount = Number(row.totalAmount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+
+  const source = String(row.source || "").toLowerCase();
+  const type = String(row.type || "").toLowerCase();
+
+  // Marker status gajian tidak boleh ikut total gaji/pengeluaran.
+  if (source === "gallery-produksi-gaji-marker") return false;
+  if (type === "status_gajian_periode") return false;
+
+  // Data baru resmi dari Gallery Produksi.
+  if (type === "gaji_borongan") return true;
+
+  // Fallback data lama sebelum field type distandarkan.
+  // Tetap dibaca kalau jelas berasal dari setor borongan.
+  if (source === "gallery-produksi" && (row.entryId || row.setorBatchId || row.employeeName)) return true;
+
+  return false;
+}
+
+function officialGajiPayrollTotal(rows = []) {
+  return (rows || [])
+    .filter(isOfficialGajiPayroll)
+    .reduce((sum, row) => sum + Number(row.totalAmount || 0), 0);
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -1325,7 +1354,7 @@ export default function App() {
       selesai: selesaiOrders.length,
       kirim: selesaiOrders.length,
       boronganPcs: productionEntries.reduce((s, e) => s + Number(e.qty || 0), 0),
-      payroll: payrollExpenses.reduce((s, p) => s + Number(p.totalAmount || 0), 0),
+      payroll: officialGajiPayrollTotal(payrollExpenses),
     };
   }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi]);
 
@@ -1994,9 +2023,12 @@ function findRate(productType, model, process) {
     if (!editEntryModal) return;
     if (!editEntryForm.qty || Number(editEntryForm.qty) <= 0) return alert("Qty wajib diisi");
 
+    const nextModel = editEntryModal.process === "QC Packing"
+      ? ""
+      : canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
+
     const editOrder = orders.find((o) => o.id === editEntryModal.orderId);
     if (editOrder) {
-      const nextModel = editEntryModal.process === "QC Packing" ? "" : canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
       const { limit, label } = getOrderProcessLimit(editOrder, editEntryModal.process, nextModel);
       const alreadyQty = editEntryModal.process === "QC Packing"
         ? productionEntries
