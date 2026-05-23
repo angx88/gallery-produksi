@@ -1855,9 +1855,6 @@ function findRate(productType, model, process) {
                   <div className="space-y-1.5">
                     {daftarMinggu.map((m, i) => {
                       const isSelected = selectedKey === m.key;
-                      const sudahGajian = payrollExpenses.some((p) =>
-                        p.periodeGajiDari === m.dari && p.periodeGajiSampai === m.sampai
-                      );
                       return (
                         <button key={m.key}
                           onClick={() => { setRekapDari(m.dari); setRekapSampai(m.sampai); }}
@@ -1869,9 +1866,7 @@ function findRate(productType, model, process) {
                           <span className="text-xs font-bold" style={{ color: isSelected ? "#5b21b6" : "#64748b" }}>
                             🗓️ {i === 0 ? "Minggu ini" : `${i} minggu lalu`} · {m.dari} s/d {m.sampai}
                           </span>
-                          {sudahGajian
-                            ? <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#dcfce7", color: "#16a34a" }}>✅ Sudah gajian</span>
-                            : <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>⏳ Belum gajian</span>}
+                          {isSelected && <span className="text-xs font-bold" style={{ color: "#a855f7" }}>▶ Dipilih</span>}
                         </button>
                       );
                     })}
