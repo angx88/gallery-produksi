@@ -502,6 +502,7 @@ export default function App() {
   const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
   const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
+  const [slipImagePreview, setSlipImagePreview] = useState(null); // { imgUrl, file, filename, nama }
   const slipRef = useRef(null);
 
   const [orders, setOrders] = useState([]);
@@ -1419,23 +1420,39 @@ function findRate(productType, model, process) {
     return y + lineHeight;
   }
 
-  async function shareSlipGajiAsImage(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
+  function loadImageForCanvas(src) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+  }
+
+  function drawFallbackLogo(ctx, x, y, size) {
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.beginPath();
+    ctx.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#ec4899";
+    ctx.font = `bold ${Math.round(size * 0.38)}px Segoe UI, Arial`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("GK", x + size / 2, y + size / 2 + 1);
+    ctx.restore();
+  }
+
+  async function createSlipImageFile(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     try {
       const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
       const sortedDetail = [...(r?.detail || [])].sort((a, b) => (a.tanggalSetor || a.tanggal || "").localeCompare(b.tanggalSetor || b.tanggal || ""));
       const detailRows = sortedDetail.slice(0, 14);
       const extraRows = Math.max(0, sortedDetail.length - detailRows.length);
       const W = 900;
-      // Tinggi canvas harus dihitung sampai elemen terakhir.
-      // Versi sebelumnya terlalu pendek, sehingga bagian bawah slip terpotong saat di-share.
       const hasWarning = Number(r?.belumSetor || 0) > 0;
       const hasCarryOver = (carryOver || []).length > 0;
-      const H =
-        560 +
-        detailRows.length * 74 +
-        (extraRows > 0 ? 28 : 0) +
-        (hasWarning ? 56 : 0) +
-        (hasCarryOver ? 72 : 0);
+      const H = 560 + detailRows.length * 74 + (extraRows > 0 ? 28 : 0) + (hasWarning ? 56 : 0) + (hasCarryOver ? 72 : 0);
       const canvas = document.createElement("canvas");
       canvas.width = W;
       canvas.height = H;
@@ -1451,15 +1468,30 @@ function findRate(productType, model, process) {
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, W, 120);
 
+      const logoImg = await loadImageForCanvas("/logo-gk.png");
+      if (logoImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(70, 60, 38, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(32, 22, 76, 76);
+        ctx.drawImage(logoImg, 32, 22, 76, 76);
+        ctx.restore();
+      } else {
+        drawFallbackLogo(ctx, 32, 22, 76);
+      }
+
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 30px Segoe UI, Arial";
-      ctx.fillText("Slip Pendapatan Borongan", 36, 48);
+      ctx.fillText("Slip Pendapatan Borongan", 126, 48);
       ctx.font = "18px Segoe UI, Arial";
       ctx.fillStyle = "rgba(255,255,255,0.88)";
-      ctx.fillText("Gallery Kerudung", 36, 76);
+      ctx.fillText("Gallery Kerudung", 126, 76);
       ctx.font = "15px Segoe UI, Arial";
       ctx.fillStyle = "rgba(255,255,255,0.72)";
-      ctx.fillText(`Periode ${dari} s/d ${sampai}`, 36, 100);
+      ctx.fillText(`Periode ${dari} s/d ${sampai}`, 126, 100);
 
       let y = 148;
       drawRoundedRect(ctx, 28, y, W - 56, 96, 18);
@@ -1585,31 +1617,50 @@ function findRate(productType, model, process) {
 
       const filename = `SlipGaji_${safeFileName(nama)}_${safeFileName(dari)}_sd_${safeFileName(sampai)}.png`;
       const file = new File([blob], filename, { type: "image/png" });
+      return { imgUrl, file, filename, nama, dari, sampai, total: fmt(r?.gaji) };
+    } catch (e) {
+      alert("Gagal membuat preview slip gaji: " + (e?.message || e));
+      return null;
+    }
+  }
 
+  async function shareSlipGajiAsImage(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
+    const preview = await createSlipImageFile(nama, r, dari, sampai, carryOver);
+    if (preview) setSlipImagePreview(preview);
+  }
+
+  async function sendSlipImageToWhatsApp() {
+    if (!slipImagePreview?.file) return;
+    try {
+      const file = slipImagePreview.file;
       if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
         await navigator.share({
           files: [file],
-          title: `Slip Gaji ${nama}`,
-          text: `Slip Pendapatan Borongan - ${nama} (${dari} s/d ${sampai})`,
+          title: `Slip Gaji ${slipImagePreview.nama}`,
+          text: `Slip Pendapatan Borongan - ${slipImagePreview.nama} (${slipImagePreview.dari} s/d ${slipImagePreview.sampai})`,
         });
+        setSlipImagePreview(null);
         setToast("✅ Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.");
         setTimeout(() => setToast(""), 3500);
         return;
       }
 
-      const a = document.createElement("a");
-      a.href = imgUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      setToast("⚠️ Browser ini belum mendukung share gambar langsung. Slip diunduh sebagai PNG, lalu lampirkan manual di WhatsApp.");
-      setTimeout(() => setToast(""), 5500);
+      setToast("⚠️ Browser ini tidak mendukung share gambar langsung. Buka dari HP Chrome/Safari agar bisa pilih WhatsApp.");
+      setTimeout(() => setToast(""), 6000);
     } catch (e) {
       if (e?.name === "AbortError") return;
       alert("Gagal share slip gaji: " + (e?.message || e));
     }
+  }
+
+  function downloadSlipImagePreview() {
+    if (!slipImagePreview?.imgUrl) return;
+    const a = document.createElement("a");
+    a.href = slipImagePreview.imgUrl;
+    a.download = slipImagePreview.filename || "SlipGaji.png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   if (authLoading) {
@@ -2747,7 +2798,10 @@ function findRate(productType, model, process) {
               {/* Header */}
               <div className="px-5 pt-5 pb-3" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
                 <div className="flex items-center justify-between mb-1">
-                  <div className="text-white font-extrabold text-lg">🧾 Slip Pendapatan Borongan</div>
+                  <div className="flex items-center gap-3">
+                    <img src="/logo-gk.png" alt="Gallery Kerudung" className="h-12 w-12 rounded-2xl bg-white object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                    <div className="text-white font-extrabold text-lg">🧾 Slip Pendapatan Borongan</div>
+                  </div>
                   <button onClick={() => setSlipPreview(null)}
                     className="rounded-full px-4 py-1.5 text-sm font-bold"
                     style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
@@ -2906,6 +2960,54 @@ function findRate(productType, model, process) {
           </div>
         );
       })()}
+
+      {slipImagePreview && (
+        <div className="fixed inset-0 z-[70] flex items-end" style={{ background: "rgba(0,0,0,0.45)" }}>
+          <div className="w-full max-h-[94vh] overflow-auto bg-white p-5" style={{ borderRadius: "32px 32px 0 0", borderTop: "3px solid #25d366" }}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-black" style={{ color: "#2d1b69" }}>Preview Gambar Slip</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>Cek dulu gambarnya, lalu pilih Kirim WA.</div>
+              </div>
+              <button
+                onClick={() => setSlipImagePreview(null)}
+                className="rounded-full px-4 py-2 text-sm font-bold"
+                style={{ background: "#f1f5f9", color: "#64748b" }}
+              >
+                Tutup
+              </button>
+            </div>
+
+            <img
+              src={slipImagePreview.imgUrl}
+              alt="Preview slip gaji"
+              className="w-full rounded-2xl border bg-white"
+              style={{ borderColor: "#e9d5ff" }}
+            />
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                onClick={downloadSlipImagePreview}
+                className="rounded-2xl py-3 text-sm font-bold text-white"
+                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+              >
+                ⬇️ Download PNG
+              </button>
+              <button
+                onClick={sendSlipImageToWhatsApp}
+                className="rounded-2xl py-3 text-sm font-bold text-white"
+                style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
+              >
+                📤 Kirim WA
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-2xl px-4 py-3 text-xs" style={{ background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0" }}>
+              Di HP, tombol Kirim WA akan membuka menu share seperti app Gallery Kerudung. Di laptop/desktop, browser bisa saja tidak mengizinkan kirim file langsung ke WhatsApp.
+            </div>
+          </div>
+        </div>
+      )}
 
       {isSaving && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
