@@ -130,6 +130,20 @@ function toTitleCase(str) {
   return String(str || "").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Nama pekerja dibuat konsisten agar beda huruf kapital tidak menjadi pekerja berbeda.
+// Contoh: "a muslim", "A muslim", "A Muslim" => satu nama: "A Muslim".
+function normalizeWorkerNameKey(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function displayWorkerName(name) {
+  const clean = String(name || "").trim().replace(/\s+/g, " ");
+  return clean ? toTitleCase(clean) : "Tidak Diketahui";
+}
+
 // Hitung periode minggu (Minggu s/d Sabtu) dari tanggal tertentu
 function getMingguPeriod(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
@@ -1134,11 +1148,11 @@ export default function App() {
   const workerNameOptions = useMemo(() => {
     const names = new Set();
     productionEntries.forEach((e) => {
-      if (e.employeeName) names.add(e.employeeName);
+      if (e.employeeName) names.add(displayWorkerName(e.employeeName));
     });
     produksi.forEach((p) => {
       (p.workers || []).forEach((w) => {
-        if (w.employeeName) names.add(w.employeeName);
+        if (w.employeeName) names.add(displayWorkerName(w.employeeName));
       });
     });
     return Array.from(names).sort((a, b) => a.localeCompare(b));
@@ -1172,7 +1186,7 @@ export default function App() {
 
   function isDuplicateEntry(payload) {
     return productionEntries.some((e) =>
-      lower(e.employeeName) === lower(payload.employeeName) &&
+      normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(payload.employeeName) &&
       e.orderId === payload.orderId &&
       e.process === payload.process &&
       lower(e.model) === lower(payload.model) &&
@@ -1192,7 +1206,7 @@ function findRate(productType, model, process) {
   function getRateForEmployee(productType, model, process, employeeName) {
     const rate = findRate(productType, model, process);
     if (!rate) return null;
-    const isKonveksi = lower(employeeName || "").includes("konveksi");
+    const isKonveksi = normalizeWorkerNameKey(employeeName).includes("konveksi");
     return { ...rate, rate: isKonveksi ? Number(rate.rate) - 500 : Number(rate.rate) };
   }
 
@@ -1338,7 +1352,7 @@ function findRate(productType, model, process) {
     const totalWage = Number(entryForm.qty) * Number(rate.rate || 0);
 
     const draftPayloadForCheck = {
-      employeeName: entryForm.employeeName.trim(),
+      employeeName: displayWorkerName(entryForm.employeeName),
       orderId: entryForm.orderId || "",
       process: entryForm.process,
       model: entryForm.process === "QC Packing" ? "" : entryForm.model.trim(),
@@ -1368,7 +1382,7 @@ function findRate(productType, model, process) {
     setIsSaving(true);
     try {
       const entryPayload = {
-        employeeName: toTitleCase(entryForm.employeeName.trim()),
+        employeeName: displayWorkerName(entryForm.employeeName),
         orderId: entryForm.orderId || "",
         produksiId: prod?.id || "",
         invoice: order?.invoice || "",
@@ -1483,7 +1497,7 @@ function findRate(productType, model, process) {
         await addDoc(collection(db, C.PAYROLL_EXPENSES), {
           source: "gallery-produksi",
           type: "gaji_borongan",
-          employeeName: setorModal.employeeName,
+          employeeName: displayWorkerName(setorModal.employeeName),
           orderId: setorModal.orderId || "",
           invoice: setorModal.invoice || "",
           productType: setorModal.productType,
@@ -1822,7 +1836,7 @@ function findRate(productType, model, process) {
     return payrollExpenses.find((p) =>
       p.periodeGajiDari === dari &&
       p.periodeGajiSampai === sampai &&
-      lower(p.employeeName) === lower(nama) &&
+      normalizeWorkerNameKey(p.employeeName) === normalizeWorkerNameKey(nama) &&
       (p.source === "gallery-produksi-gaji-marker" || p.type === "status_gajian_periode" || p.status === "sudah_dibayar")
     );
   }
@@ -1850,7 +1864,7 @@ function findRate(productType, model, process) {
       await addDoc(collection(db, C.PAYROLL_EXPENSES), {
         source: "gallery-produksi-gaji-marker",
         type: "status_gajian_periode",
-        employeeName: nama,
+        employeeName: displayWorkerName(nama),
         periodeGajiDari: dari,
         periodeGajiSampai: sampai,
         tanggal: todayStr(),
@@ -2545,7 +2559,7 @@ function findRate(productType, model, process) {
                       <div className="mt-2 space-y-1">
                         {(prod.workers || []).slice(-3).map((w, idx) => (
                           <div key={idx} className="text-xs" style={{ color: "#7c3aed" }}>
-                            👤 {w.employeeName} · {w.process} · {w.qty} pcs
+                            👤 {displayWorkerName(w.employeeName)} · {w.process} · {w.qty} pcs
                           </div>
                         ))}
                       </div>
@@ -2719,7 +2733,7 @@ function findRate(productType, model, process) {
             <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
               <div className="flex justify-between">
                 <div>
-                  <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {e.employeeName}</div>
+                  <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
                   <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
                   {e.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {e.invoice}</div>}
                   <div className="text-xs" style={{ color: "#94a3b8" }}>📅 {e.tanggal}</div>
@@ -2838,7 +2852,7 @@ function findRate(productType, model, process) {
         // Rekap per pekerja: gaji dihitung dari transaksi setor yang masuk periode, bukan sekadar qty awal.
         const rekapMap = {};
         filtered.forEach((e) => {
-          const nama = e.employeeName || "Tidak diketahui";
+          const nama = displayWorkerName(e.employeeName);
           const inputInRange = inRange(e.tanggal);
           const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
           const rangeTotals = setorTotalsFromHistory(rangeHistory);
@@ -2933,7 +2947,7 @@ function findRate(productType, model, process) {
           .filter((e) => e.alasan)
           .sort((a, b) => {
             if (a.tanggal !== b.tanggal) return String(a.tanggal || "").localeCompare(String(b.tanggal || ""));
-            return String(a.employeeName || "").localeCompare(String(b.employeeName || ""));
+            return displayWorkerName(a.employeeName).localeCompare(displayWorkerName(b.employeeName));
           });
 
         const totalBoronganBelumMasukPcs = boronganBelumMasukRekap.reduce((s, e) => s + Number(e.sisaSetor || 0), 0);
@@ -3027,7 +3041,7 @@ function findRate(productType, model, process) {
 
             {rekapDetailModal && (() => {
               const getCarryOver = (nama) => productionEntries.filter((e) =>
-                lower(e.employeeName) === lower(nama) &&
+                normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
                 e.statusSetor !== "sudah_setor" &&
                 e.tanggal < rekapDari
               );
@@ -3242,7 +3256,7 @@ function findRate(productType, model, process) {
                 {rekapPerkerja.map(([nama, r]) => {
                   const sudahGajianPerkerja = sudahGajian(nama, rekapDari, rekapSampai);
                   const carryOver = productionEntries.filter((e) =>
-                    lower(e.employeeName) === lower(nama) &&
+                    normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
                     e.statusSetor !== "sudah_setor" &&
                     e.tanggal < rekapDari
                   );
@@ -3411,7 +3425,7 @@ function findRate(productType, model, process) {
               <Input
                 label="Nama Pekerja"
                 value={entryForm.employeeName}
-                onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: toTitleCase(v) }))}
+                onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: displayWorkerName(v) }))}
                 placeholder="Contoh: Teh Emy"
               />
               {workerNameOptions.length > 0 && (
@@ -3543,7 +3557,7 @@ function findRate(productType, model, process) {
         <Modal title="📦 Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
           <div className="space-y-3">
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {setorModal.employeeName}</div>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(setorModal.employeeName)}</div>
               <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType} · {setorModal.process}{setorModal.model ? ` · ${setorModal.model}` : ""}</div>
               <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
                 <div className="rounded-xl py-2" style={{ background: "#ede9fe", color: "#5b21b6" }}><strong>{setorModal.qty}</strong><br/>diberi</div>
@@ -3697,7 +3711,7 @@ function findRate(productType, model, process) {
                   <div className="text-lg font-bold" style={{ color: "#1e293b" }}>Hapus Data?</div>
                   <div className="text-sm mt-1" style={{ color: "#64748b" }}>
                     {confirmDelete.entry
-                      ? `Entry borongan ${confirmDelete.entry.employeeName} — ${confirmDelete.entry.model || confirmDelete.entry.process} · ${confirmDelete.entry.qty} pcs`
+                      ? `Entry borongan ${displayWorkerName(confirmDelete.entry.employeeName)} — ${confirmDelete.entry.model || confirmDelete.entry.process} · ${confirmDelete.entry.qty} pcs`
                       : "Data ini akan dihapus."
                     }
                   </div>
@@ -3748,7 +3762,7 @@ function findRate(productType, model, process) {
           <div className="space-y-3">
             {/* Info tidak bisa diubah */}
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {editEntryModal.employeeName}</div>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(editEntryModal.employeeName)}</div>
               <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
                 {editEntryModal.productType} · {editEntryModal.process}
                 {editEntryModal.customer ? ` · ${editEntryModal.customer}` : ""}
