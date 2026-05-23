@@ -1,4 +1,4 @@
-// App.jsx Gallery Produksi - fixed share slip and local UI components - 2026-05-23
+// App.jsx Gallery Produksi - audit step 5 slip carry-over fix - 2026-05-23
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
@@ -2248,10 +2248,11 @@ function findRate(productType, model, process) {
       const periodeAsli = e.tanggal ? getMingguPeriod(e.tanggal) : null;
       const periode = periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : (e.tanggal || "-");
       const cust = e.customer || entryOrder?.customer || "-";
+      const sisaSetor = Number(setorTotals(e).sisaSetor || 0);
       return `<div class="carry-item">
         <strong>${escapeHtml(e.process || "")}${model}</strong>
         <span>${escapeHtml(cust)}${e.invoice ? " · " + escapeHtml(e.invoice) : ""}</span>
-        <span>${escapeHtml(periode)} · ${Number(e.qty || 0)} pcs belum disetor</span>
+        <span>${escapeHtml(periode)} · ${sisaSetor} pcs belum disetor</span>
       </div>`;
     }).join("");
 
@@ -2285,7 +2286,7 @@ function findRate(productType, model, process) {
           <tfoot><tr class="total-row"><td colspan="4">TOTAL</td><td class="center">${Number(r?.pcsAwal || 0)} pcs</td><td class="center ok">${Number(r?.pcsSetor || 0)} pcs</td><td class="center ${Number(r?.pcsReject || 0) > 0 ? "bad" : "muted"}">${Number(r?.pcsReject || 0) > 0 ? Number(r.pcsReject) + " pcs" : "-"}</td><td></td><td class="right ok">${fmt(r?.gaji)}</td></tr></tfoot></table>
           ${Number(r?.belumSetor || 0) > 0 ? `<div class="warning">Masih ada <strong>${Number(r.belumSetor)} pcs</strong> belum disetor, belum termasuk total di atas.</div>` : ""}
           <div class="total-box"><div>Total Pendapatan Bersih</div><div>${fmt(r?.gaji)}</div></div>
-          ${carryRows ? `<div class="carry"><h3>Tanggungan Minggu Lalu (Belum Dibayar)</h3>${carryRows}</div>` : ""}
+          ${carryRows ? `<div class="carry"><h3>Tanggungan Minggu Lalu (Belum Disetor)</h3>${carryRows}</div>` : ""}
           <div class="ttd"><div class="ttd-box"><div class="label">Hormat kami,</div><div class="name">${escapeHtml(nama)}</div></div><div class="ttd-box"><div class="label">Mengetahui, Gallery Kerudung</div><div class="name">Astri Apriani</div></div></div>
         </div>
         <div class="footer">Dicetak otomatis oleh sistem Gallery Kerudung · ${escapeHtml(cetakTgl)}</div>
@@ -2519,7 +2520,7 @@ function findRate(productType, model, process) {
         ctx.fill();
         ctx.fillStyle = "#b45309";
         ctx.font = "bold 15px Segoe UI, Arial";
-        ctx.fillText(`Tanggungan minggu lalu: ${(carryOver || []).reduce((s, e) => s + Number(e.qty || 0), 0)} pcs`, 50, y + 34);
+        ctx.fillText(`Tanggungan minggu lalu: ${(carryOver || []).reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0)} pcs`, 50, y + 34);
         y += 72;
       }
 
@@ -3582,10 +3583,10 @@ function findRate(productType, model, process) {
                   const sudahGajianPerkerja = sudahGajian(nama, rekapDari, rekapSampai);
                   const carryOver = productionEntries.filter((e) =>
                     normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
-                    e.statusSetor !== "sudah_setor" &&
+                    Number(setorTotals(e).sisaSetor || 0) > 0 &&
                     dateBefore(e.tanggal, rekapDari)
                   );
-                  const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number(e.qty || 0), 0);
+                  const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0);
                   return (
                   <div key={nama} className="rounded-xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
                     {/* Header pekerja */}
@@ -4329,7 +4330,7 @@ function findRate(productType, model, process) {
                 {carryOver.length > 0 && (
                   <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fff7ed", border: "1.5px solid #fed7aa" }}>
                     <div className="text-xs font-bold" style={{ color: "#b45309" }}>
-                      ⚠️ Tanggungan Minggu Lalu (Belum Dibayar)
+                      ⚠️ Tanggungan Minggu Lalu (Belum Disetor)
                     </div>
                     <div className="text-xs" style={{ color: "#92400e" }}>
                       Pekerjaan berikut belum disetor dan <strong>akan masuk gaji minggu depan</strong> setelah disetor:
@@ -4350,13 +4351,13 @@ function findRate(productType, model, process) {
                             <span style={{ color: "#b45309" }}>
                               📅 {periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : e.tanggal}
                             </span>
-                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(e.qty || 0)} pcs · belum disetor</span>
+                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(setorTotals(e).sisaSetor || 0)} pcs · belum disetor</span>
                           </div>
                         </div>
                       );
                     })}
                     <div className="text-xs font-semibold text-center" style={{ color: "#b45309" }}>
-                      Total tanggungan: {carryOver.reduce((s, e) => s + Number(e.qty || 0), 0)} pcs
+                      Total tanggungan: {carryOver.reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0)} pcs
                     </div>
                   </div>
                 )}
