@@ -1,8 +1,3 @@
-import SimpleModal from "./components/SimpleModal";
-import StatusBadge from "./components/StatusBadge";
-import Card from "./components/Card";
-import Input from "./components/Input";
-import Button from "./components/Button";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import jsPDF from "jspdf";
