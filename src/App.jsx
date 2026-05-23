@@ -2899,6 +2899,46 @@ function findRate(productType, model, process) {
           totalBelumSetor: 0,
         });
 
+        const boronganBelumMasukRekap = productionEntries
+          .map((e) => {
+            const totals = setorTotals(e);
+            const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
+            const rangeTotals = setorTotalsFromHistory(rangeHistory);
+            const inputInRange = inRange(e.tanggal);
+            const entryOrder = orders.find(o => o.id === e.orderId);
+            const totalProgress = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
+            const sisaSetor = Number(totals.sisaSetor || 0);
+            let alasan = "";
+            if (sisaSetor > 0 && inputInRange && rangeHistory.length === 0) alasan = "Diberikan periode ini, belum setor";
+            else if (sisaSetor > 0 && inputInRange && rangeHistory.length > 0) alasan = "Setor sebagian, masih ada sisa";
+            else if (sisaSetor > 0 && e.tanggal < rekapDari) alasan = "Tanggungan dari periode sebelumnya";
+            else if (sisaSetor > 0 && e.tanggal > rekapSampai) alasan = "Borongan setelah periode rekap";
+            else if (rangeHistory.length === 0 && totalProgress > 0) alasan = "Setor ada, tapi di luar periode ini";
+            return {
+              ...e,
+              customer: e.customer || entryOrder?.customer || "-",
+              invoice: e.invoice || entryOrder?.invoice || "",
+              totalSetorSemua: Number(totals.qtySetor || 0),
+              totalRejectSemua: Number(totals.qtyReject || 0),
+              totalWageSemua: Number(totals.totalWageSetor || 0),
+              sisaSetor,
+              statusSetorHitung: totals.statusSetor,
+              tanggalSetorTerakhir: totals.tanggalSetor || "",
+              qtySetorPeriode: Number(rangeTotals.qtySetor || 0),
+              qtyRejectPeriode: Number(rangeTotals.qtyReject || 0),
+              gajiPeriode: Number(rangeTotals.totalWageSetor || 0),
+              alasan,
+            };
+          })
+          .filter((e) => e.alasan)
+          .sort((a, b) => {
+            if (a.tanggal !== b.tanggal) return String(a.tanggal || "").localeCompare(String(b.tanggal || ""));
+            return String(a.employeeName || "").localeCompare(String(b.employeeName || ""));
+          });
+
+        const totalBoronganBelumMasukPcs = boronganBelumMasukRekap.reduce((s, e) => s + Number(e.sisaSetor || 0), 0);
+        const totalBoronganBelumMasukGajiPotensi = boronganBelumMasukRekap.reduce((s, e) => s + (Number(e.sisaSetor || 0) * Number(e.rate || 0)), 0);
+
         return (
           <div className="space-y-3 p-4">
             {/* Filter Tanggal Manual */}
@@ -3087,6 +3127,74 @@ function findRate(productType, model, process) {
                 </div>
               );
             })()}
+
+            {boronganBelumMasukRekap.length > 0 && (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #fed7aa", background: "#fff7ed" }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold" style={{ color: "#c2410c" }}>⚠️ Borongan Belum Masuk Rekap Gaji</div>
+                    <div className="text-[11px] mt-1" style={{ color: "#9a3412" }}>
+                      Data ini ada di Borongan, tapi belum menghasilkan gaji pada periode {rekapDari} s/d {rekapSampai}.
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-sm font-black" style={{ color: "#c2410c" }}>{totalBoronganBelumMasukPcs.toLocaleString()} pcs</div>
+                    <div className="text-[10px]" style={{ color: "#9a3412" }}>potensi {money(totalBoronganBelumMasukGajiPotensi)}</div>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                  {boronganBelumMasukRekap.map((e) => (
+                    <div key={e.id} className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid #fed7aa" }}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {e.employeeName || "Tidak diketahui"}</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#64748b" }}>
+                            {e.process || "-"} · {e.model || "-"} · {e.customer || "-"}{e.invoice ? ` · ${e.invoice}` : ""}
+                          </div>
+                          <div className="text-[11px] mt-1 font-semibold" style={{ color: "#c2410c" }}>{e.alasan}</div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-black" style={{ color: "#c2410c" }}>{Number(e.sisaSetor || 0).toLocaleString()} pcs</div>
+                          <div className="text-[10px]" style={{ color: "#94a3b8" }}>sisa setor</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1 mt-3 text-center text-[11px]">
+                        <div className="rounded-lg py-1.5" style={{ background: "#f8fafc" }}>
+                          <strong>{Number(e.qty || 0).toLocaleString()}</strong>
+                          <div style={{ color: "#94a3b8" }}>diberi</div>
+                        </div>
+                        <div className="rounded-lg py-1.5" style={{ background: "#ecfdf5" }}>
+                          <strong style={{ color: "#16a34a" }}>{Number(e.totalSetorSemua || 0).toLocaleString()}</strong>
+                          <div style={{ color: "#94a3b8" }}>setor</div>
+                        </div>
+                        <div className="rounded-lg py-1.5" style={{ background: Number(e.totalRejectSemua || 0) > 0 ? "#fee2e2" : "#f8fafc" }}>
+                          <strong style={{ color: Number(e.totalRejectSemua || 0) > 0 ? "#ef4444" : "#94a3b8" }}>{Number(e.totalRejectSemua || 0).toLocaleString()}</strong>
+                          <div style={{ color: "#94a3b8" }}>reject</div>
+                        </div>
+                        <div className="rounded-lg py-1.5" style={{ background: "#fff7ed" }}>
+                          <strong style={{ color: "#c2410c" }}>{money(Number(e.sisaSetor || 0) * Number(e.rate || 0))}</strong>
+                          <div style={{ color: "#94a3b8" }}>potensi</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-2 text-[11px]" style={{ color: "#94a3b8" }}>
+                        <span>📅 Diberikan: {e.tanggal || "-"}</span>
+                        <span>{e.tanggalSetorTerakhir ? `Setor terakhir: ${e.tanggalSetorTerakhir}` : "Belum ada setor"}</span>
+                      </div>
+                      {Number(e.sisaSetor || 0) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(e.sisaSetor || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                          className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
+                          style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}
+                        >
+                          ✅ Setor Hasil / Masukkan ke Rekap
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Rekap per proses */}
             {prosesKeys.length > 0 ? (
