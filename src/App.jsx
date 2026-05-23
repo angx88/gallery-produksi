@@ -161,6 +161,76 @@ function money(v) {
   }).format(Number(v || 0));
 }
 
+
+function normalizeSetorHistory(entry) {
+  const raw = Array.isArray(entry?.setorHistory) ? entry.setorHistory : [];
+  const normalized = raw
+    .map((h, idx) => {
+      const qtySetor = Number(h?.qtySetor || 0);
+      const qtyReject = Number(h?.qtyReject || 0);
+      const rate = Number(h?.rate ?? entry?.rate ?? 0);
+      return {
+        id: h?.id || `${entry?.id || "entry"}-${idx}`,
+        tanggalSetor: h?.tanggalSetor || h?.tanggal || entry?.tanggalSetor || entry?.tanggal || todayStr(),
+        qtySetor,
+        qtyReject,
+        rate,
+        totalWageSetor: Number(h?.totalWageSetor ?? (qtySetor * rate) ?? 0),
+        catatan: h?.catatan || h?.catatanSetor || "",
+        createdAt: h?.createdAt || "",
+      };
+    })
+    .filter((h) => Number(h.qtySetor || 0) > 0 || Number(h.qtyReject || 0) > 0);
+
+  // Dukungan data lama: entry lama hanya punya qtySetor/qtyReject tanpa setorHistory.
+  if (normalized.length === 0 && (Number(entry?.qtySetor || 0) > 0 || Number(entry?.qtyReject || 0) > 0 || entry?.statusSetor === "sudah_setor")) {
+    const qtySetor = Number(entry?.qtySetor || 0);
+    const qtyReject = Number(entry?.qtyReject || 0);
+    const rate = Number(entry?.rate || 0);
+    normalized.push({
+      id: `${entry?.id || "legacy"}-legacy-setor`,
+      tanggalSetor: entry?.tanggalSetor || entry?.tanggal || todayStr(),
+      qtySetor,
+      qtyReject,
+      rate,
+      totalWageSetor: Number(entry?.totalWageSetor ?? (qtySetor * rate) ?? 0),
+      catatan: entry?.catatanSetor || "",
+      createdAt: entry?.updatedAt || entry?.createdAt || "",
+    });
+  }
+
+  return normalized;
+}
+
+function setorTotals(entry) {
+  const history = normalizeSetorHistory(entry);
+  const qtySetor = history.reduce((s, h) => s + Number(h.qtySetor || 0), 0);
+  const qtyReject = history.reduce((s, h) => s + Number(h.qtyReject || 0), 0);
+  const totalWageSetor = history.reduce((s, h) => s + Number(h.totalWageSetor || 0), 0);
+  const qtyAwal = Number(entry?.qty || 0);
+  const sisaSetor = Math.max(0, qtyAwal - qtySetor - qtyReject);
+  const tanggalSetor = history.length > 0 ? history[history.length - 1].tanggalSetor : (entry?.tanggalSetor || "");
+  const statusSetor = sisaSetor <= 0 && (qtySetor + qtyReject) > 0
+    ? "sudah_setor"
+    : (qtySetor + qtyReject) > 0 ? "setor_sebagian" : "belum_setor";
+  return { history, qtySetor, qtyReject, totalWageSetor, sisaSetor, tanggalSetor, statusSetor };
+}
+
+function setorHistoryInRange(entry, dari, sampai) {
+  return normalizeSetorHistory(entry).filter((h) => {
+    const t = h.tanggalSetor || "";
+    return t >= dari && t <= sampai;
+  });
+}
+
+function setorTotalsFromHistory(history) {
+  return {
+    qtySetor: (history || []).reduce((s, h) => s + Number(h.qtySetor || 0), 0),
+    qtyReject: (history || []).reduce((s, h) => s + Number(h.qtyReject || 0), 0),
+    totalWageSetor: (history || []).reduce((s, h) => s + Number(h.totalWageSetor || 0), 0),
+  };
+}
+
 function safeOrder(d) {
   // Ambil items per model dari berbagai kemungkinan field Gallery Kerudung
   let items = [];
@@ -200,6 +270,155 @@ function safeOrder(d) {
     catatan: d.catatanProduksi || d.catatan || d.note || "",
     raw: d,
   };
+}
+
+
+function rawOrderItemsForDelivery(order) {
+  const raw = order?.raw || order || {};
+  const rawItems = Array.isArray(raw.items) && raw.items.length > 0
+    ? raw.items
+    : Array.isArray(order?.items) && order.items.length > 0
+      ? order.items
+      : [{ name: order?.item || raw.item || raw.productName || "Produk", qty: order?.qty || raw.qty || 0, price: raw.hargaPcs || raw.price || 0 }];
+
+  return rawItems.map((it, idx) => {
+    const name = it?.name || it?.nama || it?.item || it?.productName || it?.model || order?.item || raw.item || "Produk";
+    const orderedQty = Number(it?.qty ?? it?.quantity ?? it?.jumlah ?? order?.qty ?? raw.qty ?? 0);
+    const price = Number(it?.price ?? it?.harga ?? it?.hargaPcs ?? raw.hargaPcs ?? raw.price ?? 0);
+    const hppPerPcs = Number(it?.hppPerPcs ?? it?.hpp ?? it?.bahanCost ?? it?.materialCost ?? 0);
+    return {
+      itemIndex: idx,
+      name,
+      orderedQty,
+      qty: orderedQty,
+      price,
+      bahanCost: Number(it?.bahanCost ?? it?.materialCost ?? 0),
+      hppPerPcs,
+      mainMaterial: it?.mainMaterial || it?.materialName || it?.kain || it?.namaKain || "",
+      materialQtyPerPcs: Number(it?.materialQtyPerPcs ?? it?.kebutuhanKainPerPcs ?? it?.kebutuhanKain ?? it?.kainPerPcs ?? 0),
+      unit: it?.unit || it?.satuan || "yard",
+    };
+  }).filter((it) => it.name && Number(it.orderedQty || 0) > 0);
+}
+
+function hasDeliveryDetail(order) {
+  const raw = order?.raw || order || {};
+  return (
+    (Array.isArray(raw.deliveries) && raw.deliveries.length > 0) ||
+    (Array.isArray(raw.shippedItems) && raw.shippedItems.length > 0) ||
+    Number(raw.deliveredTotal || 0) > 0 ||
+    Number(raw.totalKirim || raw.totalShipped || 0) > 0
+  );
+}
+
+function isLegacyDoneOrSentOrder(order) {
+  const raw = order?.raw || order || {};
+  const statusText = [
+    raw.status,
+    raw.deliveryStatus,
+    raw.shippingStatus,
+    raw.statusKirim,
+    raw.statusPengiriman,
+    raw.paymentStatus,
+  ].map((v) => lower(v)).join(" ");
+
+  return (
+    isSentStatus(statusText) ||
+    isDoneStatus(statusText) ||
+    statusText.includes("lunas") ||
+    statusText.includes("terkirim") ||
+    statusText.includes("dikirim")
+  );
+}
+
+function shouldAutoSyncLegacyDelivery(order) {
+  const raw = order?.raw || order || {};
+  if (!order?.id) return false;
+  if (raw.legacyDeliverySynced === true) return false;
+  if (hasDeliveryDetail(order)) return false;
+  if (!isLegacyDoneOrSentOrder(order)) return false;
+  return rawOrderItemsForDelivery(order).reduce((s, it) => s + Number(it.orderedQty || 0), 0) > 0;
+}
+
+function buildFullDeliveryPayload(order) {
+  const items = rawOrderItemsForDelivery(order);
+  const syncDate = order?.raw?.tanggalKirim || order?.raw?.deliveryDate || order?.raw?.shippedAt || order?.createdAt || todayStr();
+  const deliveryItems = items.map((it) => ({
+    itemIndex: Number(it.itemIndex || 0),
+    name: it.name || "Produk",
+    qty: Number(it.orderedQty || 0),
+    shippedQty: Number(it.orderedQty || 0),
+    orderedQty: Number(it.orderedQty || 0),
+    price: Number(it.price || 0),
+    bahanCost: Number(it.bahanCost || 0),
+    hppPerPcs: Number(it.hppPerPcs || 0),
+    mainMaterial: it.mainMaterial || "",
+    materialQtyPerPcs: Number(it.materialQtyPerPcs || 0),
+    unit: it.unit || "yard",
+  }));
+
+  const shippedItems = items.map((it) => ({
+    name: it.name || "Produk",
+    orderedQty: Number(it.orderedQty || 0),
+    shippedQty: Number(it.orderedQty || 0),
+    price: Number(it.price || 0),
+    bahanCost: Number(it.bahanCost || 0),
+    hppPerPcs: Number(it.hppPerPcs || 0),
+    mainMaterial: it.mainMaterial || "",
+    materialQtyPerPcs: Number(it.materialQtyPerPcs || 0),
+    unit: it.unit || "yard",
+    note: "Sesuai pesanan",
+  }));
+
+  const deliveredTotal = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0) * Number(it.price || 0), 0);
+  const deliveredHppTotal = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0) * Number(it.hppPerPcs || it.bahanCost || 0), 0);
+  const totalShipped = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0), 0);
+  const totalOrdered = shippedItems.reduce((s, it) => s + Number(it.orderedQty || 0), 0);
+
+  const legacyDelivery = {
+    date: syncDate,
+    createdAt: new Date().toISOString(),
+    source: "gallery-produksi-legacy-sync",
+    receiver: order?.customer || order?.raw?.customer || "Customer",
+    penerima: order?.customer || order?.raw?.customer || "Customer",
+    courier: "Data Lama",
+    ekspedisi: "Data Lama",
+    note: "Auto sinkron dari status lama yang sudah selesai/dikirim/lunas.",
+    items: deliveryItems,
+    total: deliveredTotal,
+  };
+
+  return {
+    deliveries: [legacyDelivery],
+    shippedItems,
+    deliveredTotal,
+    deliveredHppTotal,
+    totalKirim: totalShipped,
+    totalPesan: totalOrdered,
+    tanggalKirim: syncDate,
+    deliveryStatus: "Selesai",
+    shippingStatus: "Selesai",
+    status: lower(order?.raw?.status).includes("lunas") ? "Lunas" : "Dikirim",
+    legacyDeliverySynced: true,
+    legacyDeliverySyncedAt: todayStr(),
+    legacyDeliverySyncNote: "Auto sinkron data lama dari status selesai/dikirim/lunas",
+    updatedAt: todayStr(),
+  };
+}
+
+function orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) {
+  const raw = order?.raw || order || {};
+  const prod = produksiByOrderId?.get?.(order?.id);
+  return (
+    prod?.status === "Selesai" ||
+    raw.statusProduksi === "Selesai" ||
+    raw.produksiStatus === "Selesai" ||
+    hasDeliveryDetail(order) ||
+    shipmentByOrderId?.has?.(order?.id) ||
+    isSentStatus(raw.status) ||
+    isDoneStatus(raw.status) ||
+    isLegacyDoneOrSentOrder(order)
+  );
 }
 
 function safeMaterial(d) {
@@ -517,6 +736,7 @@ export default function App() {
 
   const previousOrderIdsRef = useRef(new Set());
   const firstOrderLoadRef = useRef(true);
+  const legacyDeliverySyncingRef = useRef(new Set());
 
   const [prodForm, setProdForm] = useState({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
   const [rateForm, setRateForm] = useState({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
@@ -642,6 +862,27 @@ export default function App() {
     };
   }, [user]);
 
+  // Auto sinkron data lama yang aman: order lama yang sudah selesai/dikirim/lunas
+  // tetapi belum punya deliveries/shippedItems akan dianggap terkirim penuh.
+  // Ini mencegah pesanan lama muncul lagi sebagai belum dikirim / belum produksi.
+  useEffect(() => {
+    if (!user || orders.length === 0) return;
+    const candidates = orders.filter((o) => shouldAutoSyncLegacyDelivery(o));
+    if (candidates.length === 0) return;
+
+    candidates.slice(0, 20).forEach(async (order) => {
+      if (legacyDeliverySyncingRef.current.has(order.id)) return;
+      legacyDeliverySyncingRef.current.add(order.id);
+      try {
+        await updateDoc(doc(db, C.ORDERS, order.id), buildFullDeliveryPayload(order));
+      } catch (e) {
+        console.warn("Auto sinkron pengiriman data lama gagal:", order.invoice || order.id, e);
+      } finally {
+        legacyDeliverySyncingRef.current.delete(order.id);
+      }
+    });
+  }, [user, orders]);
+
   // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total
   useEffect(() => {
     if (produksi.length === 0 || orders.length === 0) return;
@@ -701,7 +942,7 @@ export default function App() {
     const kirim = shipmentByOrderId.get(order.id);
     const prod = produksiByOrderId.get(order.id);
 
-    if ((kirim && kirim.length > 0) || isSentStatus(order.status)) return { label: "🚚 Sudah dikirim", color: "#2563eb" };
+    if ((kirim && kirim.length > 0) || hasDeliveryDetail(order) || isSentStatus(order.status)) return { label: "🚚 Sudah dikirim", color: "#2563eb" };
     if (prod) {
       if (prod.status === "Selesai") return { label: "✅ Selesai produksi", color: "#16a34a" };
       return { label: "🧵 Sedang produksi", color: "#7c3aed" };
@@ -713,9 +954,8 @@ export default function App() {
   const filteredOrders = useMemo(() => {
     const isBelumProduksi = (o) => {
       const alreadyInProduction = produksiByOrderId.has(o.id);
-      const alreadyShipped = shipmentByOrderId.has(o.id) || lower(o.status) === "dikirim";
-      const doneInGK = ["selesai", "lunas"].includes(lower(o.status));
-      return !alreadyInProduction && !alreadyShipped && !doneInGK;
+      const finishedOrDelivered = orderHasCompletedProduction(o, produksiByOrderId, shipmentByOrderId);
+      return !alreadyInProduction && !finishedOrDelivered;
     };
 
     return orders
@@ -736,9 +976,8 @@ export default function App() {
   const ordersBelumProduksi = useMemo(() => {
     return orders.filter((o) => {
       const alreadyInProduction = produksiByOrderId.has(o.id);
-      const alreadyShipped = shipmentByOrderId.has(o.id) || lower(o.status) === "dikirim";
-      const doneInGK = ["selesai", "lunas"].includes(lower(o.status));
-      return !alreadyInProduction && !alreadyShipped && !doneInGK;
+      const finishedOrDelivered = orderHasCompletedProduction(o, produksiByOrderId, shipmentByOrderId);
+      return !alreadyInProduction && !finishedOrDelivered;
     });
   }, [orders, produksiByOrderId, shipmentByOrderId]);
 
@@ -1188,51 +1427,83 @@ function findRate(productType, model, process) {
 
   async function simpanSetor() {
     if (!setorModal) return;
-    if (setorModal.statusSetor === "sudah_setor") return alert("Entry ini sudah pernah disetor.");
-    const qtySetor = Number(setorForm.qtySetor);
+
+    const existingTotals = setorTotals(setorModal);
+    const sisaSebelum = Number(existingTotals.sisaSetor || 0);
+    if (sisaSebelum <= 0) return alert("Entry ini sudah selesai disetor.");
+
+    const qtySetor = Number(setorForm.qtySetor || 0);
     const qtyReject = Number(setorForm.qtyReject || 0);
-    if (!qtySetor || qtySetor <= 0) return alert("Qty setor wajib diisi.");
-    if (qtySetor + qtyReject > setorModal.qty) {
+    if (qtySetor < 0 || qtyReject < 0) return alert("Qty setor/reject tidak boleh minus.");
+    if (qtySetor + qtyReject <= 0) return alert("Isi qty setor atau qty reject terlebih dahulu.");
+    if (qtySetor + qtyReject > sisaSebelum) {
       return alert(
-        `Total setor + reject (${qtySetor + qtyReject} pcs) melebihi qty awal (${setorModal.qty} pcs).`
+        `Total setor + reject (${qtySetor + qtyReject} pcs) melebihi sisa belum setor (${sisaSebelum} pcs).`
       );
     }
+
     const rate = Number(setorModal.rate || 0);
     const totalWageSetor = qtySetor * rate;
     const tanggalSetor = setorForm.tanggalSetor || todayStr();
+    const setorBatchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const newHistoryItem = {
+      id: setorBatchId,
+      tanggalSetor,
+      qtySetor,
+      qtyReject,
+      rate,
+      totalWageSetor,
+      catatan: setorForm.catatan || "",
+      createdAt: new Date().toISOString(),
+    };
+    const nextHistory = [...normalizeSetorHistory(setorModal), newHistoryItem];
+    const nextQtySetor = nextHistory.reduce((sum, h) => sum + Number(h.qtySetor || 0), 0);
+    const nextQtyReject = nextHistory.reduce((sum, h) => sum + Number(h.qtyReject || 0), 0);
+    const nextTotalWageSetor = nextHistory.reduce((sum, h) => sum + Number(h.totalWageSetor || 0), 0);
+    const nextSisa = Math.max(0, Number(setorModal.qty || 0) - nextQtySetor - nextQtyReject);
+    const nextStatusSetor = nextSisa <= 0 ? "sudah_setor" : "setor_sebagian";
 
     setIsSaving(true);
     try {
-      // Update entry dengan hasil setor
+      // Setor bertahap: setiap transaksi ditambahkan ke setorHistory, bukan menimpa setor lama.
       await updateDoc(doc(db, C.PRODUCTION_ENTRIES, setorModal.id), {
-        qtySetor,
-        qtyReject,
-        totalWageSetor,
-        statusSetor: "sudah_setor",
+        setorHistory: nextHistory,
+        qtySetor: nextQtySetor,
+        qtyReject: nextQtyReject,
+        totalWageSetor: nextTotalWageSetor,
+        sisaSetor: nextSisa,
+        statusSetor: nextStatusSetor,
         tanggalSetor,
         catatanSetor: setorForm.catatan || "",
+        updatedAt: todayStr(),
       });
 
-      // Buat payroll berdasarkan qty yang disetor (bukan qty awal)
-      await addDoc(collection(db, C.PAYROLL_EXPENSES), {
-        source: "gallery-produksi",
-        type: "gaji_borongan",
-        employeeName: setorModal.employeeName,
-        orderId: setorModal.orderId || "",
-        invoice: setorModal.invoice || "",
-        productType: setorModal.productType,
-        model: setorModal.model || "",
-        process: setorModal.process,
-        totalPcs: qtySetor,
-        totalAmount: totalWageSetor,
-        status: "belum_dibayar",
-        tanggal: tanggalSetor,
-        createdAt: todayStr(),
-        entryId: setorModal.id,
-        qtyAwal: setorModal.qty,
-        qtyReject,
-      });
+      // Buat payroll per transaksi setor. Reject tidak dihitung gaji.
+      if (totalWageSetor > 0) {
+        await addDoc(collection(db, C.PAYROLL_EXPENSES), {
+          source: "gallery-produksi",
+          type: "gaji_borongan",
+          employeeName: setorModal.employeeName,
+          orderId: setorModal.orderId || "",
+          invoice: setorModal.invoice || "",
+          productType: setorModal.productType,
+          model: setorModal.model || "",
+          process: setorModal.process,
+          totalPcs: qtySetor,
+          totalAmount: totalWageSetor,
+          status: "belum_dibayar",
+          tanggal: tanggalSetor,
+          createdAt: todayStr(),
+          entryId: setorModal.id,
+          setorBatchId,
+          qtyAwal: setorModal.qty,
+          qtyReject,
+          sisaSetor: nextSisa,
+        });
+      }
 
+      setToast(nextSisa > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisa} pcs.` : "✅ Setor selesai tersimpan.");
+      setTimeout(() => setToast(""), 3500);
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
     } catch (e) {
@@ -2438,12 +2709,14 @@ function findRate(productType, model, process) {
 
 
           {filteredEntries.map((e) => {
-            const sudahSetor = e.statusSetor === "sudah_setor";
-            const qtyReject = Number(e.qtyReject || 0);
-            const qtySetor = Number(e.qtySetor || 0);
-            const selisih = Number(e.qty) - qtySetor - qtyReject;
+            const totals = setorTotals(e);
+            const sudahSetor = totals.statusSetor === "sudah_setor";
+            const setorSebagian = totals.statusSetor === "setor_sebagian";
+            const qtyReject = Number(totals.qtyReject || 0);
+            const qtySetor = Number(totals.qtySetor || 0);
+            const selisih = Number(totals.sisaSetor || 0);
             return (
-            <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : "#fde68a"}` }}>
+            <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
               <div className="flex justify-between">
                 <div>
                   <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {e.employeeName}</div>
@@ -2457,25 +2730,44 @@ function findRate(productType, model, process) {
                 </div>
               </div>
 
-              {/* Status setor */}
-              {sudahSetor ? (
-                <div className="mt-3 rounded-2xl p-3 space-y-1" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-                  <div className="text-xs font-bold" style={{ color: "#16a34a" }}>✅ Sudah Setor — {e.tanggalSetor}</div>
-                  <div className="flex gap-4 text-sm">
+              {/* Status setor bertahap */}
+              {(sudahSetor || setorSebagian) ? (
+                <div className="mt-3 rounded-2xl p-3 space-y-2" style={{ background: sudahSetor ? "#f0fdf4" : "#fff7ed", border: `1px solid ${sudahSetor ? "#bbf7d0" : "#fed7aa"}` }}>
+                  <div className="text-xs font-bold" style={{ color: sudahSetor ? "#16a34a" : "#b45309" }}>
+                    {sudahSetor ? "✅ Sudah Setor" : "🟠 Setor Sebagian"} — terakhir {totals.tanggalSetor || "-"}
+                  </div>
+                  <div className="flex flex-wrap gap-3 text-sm">
                     <span>✔️ Setor: <strong>{qtySetor} pcs</strong></span>
                     {qtyReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
-                    {selisih > 0 && <span>⚠️ Kurang: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
+                    {selisih > 0 && <span>⚠️ Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
                   </div>
-                  {e.totalWageSetor > 0 && (
-                    <div className="text-sm font-bold" style={{ color: "#a855f7" }}>💰 Gaji: {money(e.totalWageSetor)}</div>
+                  {totals.totalWageSetor > 0 && (
+                    <div className="text-sm font-bold" style={{ color: "#a855f7" }}>💰 Total gaji setor: {money(totals.totalWageSetor)}</div>
                   )}
-                  {e.catatanSetor && <div className="text-xs" style={{ color: "#64748b" }}>📝 {e.catatanSetor}</div>}
+                  {totals.history.length > 0 && (
+                    <div className="space-y-1">
+                      {totals.history.slice(-3).map((h, idx) => (
+                        <div key={h.id || idx} className="rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,.75)", color: "#64748b", border: "1px solid #f3e8ff" }}>
+                          📅 {h.tanggalSetor} · Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? ` · Reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {selisih > 0 && (
+                    <button
+                      onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(selisih), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                      className="mt-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
+                      style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                    >
+                      Setor Lanjutan
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
                   <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
                   <button
-                    onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(e.qty), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                    onClick={() => { const t = setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
                     className="rounded-xl px-3 py-1 text-xs font-bold text-white"
                     style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                   >
@@ -2512,40 +2804,51 @@ function findRate(productType, model, process) {
           if (!tanggal) return false;
           return tanggal >= rekapDari && tanggal <= rekapSampai;
         };
-        const filtered = productionEntries.filter((e) => inRange(e.tanggalSetor || e.tanggal));
+        const filtered = productionEntries.filter((e) => {
+          const hasInputInRange = inRange(e.tanggal);
+          const hasSetorInRange = setorHistoryInRange(e, rekapDari, rekapSampai).length > 0;
+          return hasInputInRange || hasSetorInRange;
+        });
         const byProses = {};
         filtered.forEach((e) => {
           const p = e.process || "Lainnya";
+          const allTotals = setorTotals(e);
+          const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
+          const inputInRange = inRange(e.tanggal);
           if (!byProses[p]) byProses[p] = { qty: 0, qtySetor: 0, qtyReject: 0, gaji: 0 };
-          byProses[p].qty += Number(e.qty || 0);
-          byProses[p].qtySetor += Number(e.qtySetor || 0);
-          byProses[p].qtyReject += Number(e.qtyReject || 0);
-          byProses[p].gaji += Number(e.totalWageSetor || 0);
+          if (inputInRange) byProses[p].qty += Number(e.qty || 0);
+          byProses[p].qtySetor += Number(rangeTotals.qtySetor || 0);
+          byProses[p].qtyReject += Number(rangeTotals.qtyReject || 0);
+          byProses[p].gaji += Number(rangeTotals.totalWageSetor || 0);
+          if (inputInRange && rangeTotals.qtySetor === 0 && rangeTotals.qtyReject === 0 && allTotals.statusSetor !== "belum_setor") {
+            // Entry masuk periode ini tetapi setor terjadi di luar periode: tetap tampil sebagai belum masuk gaji periode.
+          }
         });
-        const totalQty = filtered.reduce((s, e) => s + Number(e.qty || 0), 0);
-        const totalSetor = filtered.reduce((s, e) => s + Number(e.qtySetor || 0), 0);
-        const totalReject = filtered.reduce((s, e) => s + Number(e.qtyReject || 0), 0);
-        const totalGaji = filtered.reduce((s, e) => s + Number(e.totalWageSetor || 0), 0);
+        const totalQty = filtered.reduce((s, e) => s + (inRange(e.tanggal) ? Number(e.qty || 0) : 0), 0);
+        const totalSetor = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtySetor || 0), 0);
+        const totalReject = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtyReject || 0), 0);
+        const totalGaji = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).totalWageSetor || 0), 0);
         const prosesOrder = ["Potong", "Jahit", "QC Packing"];
         const prosesKeys = [...prosesOrder.filter((p) => byProses[p]), ...Object.keys(byProses).filter((p) => !prosesOrder.includes(p))];
-        // Logika rantai: diberikan ke proses berikutnya = disetor dari proses sebelumnya
+        // Logika rantai: diberikan ke proses berikutnya = disetor dari proses sebelumnya pada periode ini.
         if (byProses["Potong"]) byProses["Potong"].qtyDiberikan = byProses["Potong"].qty;
         if (byProses["Jahit"]) byProses["Jahit"].qtyDiberikan = byProses["Potong"]?.qtySetor ?? byProses["Jahit"].qty;
         if (byProses["QC Packing"]) byProses["QC Packing"].qtyDiberikan = byProses["Jahit"]?.qtySetor ?? byProses["QC Packing"].qty;
 
-        // Rekap per pekerja (dipindah dari tab Borongan)
+        // Rekap per pekerja: gaji dihitung dari transaksi setor yang masuk periode, bukan sekadar qty awal.
         const rekapMap = {};
         filtered.forEach((e) => {
           const nama = e.employeeName || "Tidak diketahui";
+          const inputInRange = inRange(e.tanggal);
+          const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
+          const rangeTotals = setorTotalsFromHistory(rangeHistory);
+          const allTotals = setorTotals(e);
           if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
-          rekapMap[nama].pcsAwal += Number(e.qty || 0);
-          if (e.statusSetor === "sudah_setor") {
-            rekapMap[nama].pcsSetor += Number(e.qtySetor || 0);
-            rekapMap[nama].pcsReject += Number(e.qtyReject || 0);
-            rekapMap[nama].gaji += Number(e.totalWageSetor || 0);
-          } else {
-            rekapMap[nama].belumSetor += Number(e.qty || 0);
-          }
+          if (inputInRange) rekapMap[nama].pcsAwal += Number(e.qty || 0);
+          rekapMap[nama].pcsSetor += Number(rangeTotals.qtySetor || 0);
+          rekapMap[nama].pcsReject += Number(rangeTotals.qtyReject || 0);
+          rekapMap[nama].gaji += Number(rangeTotals.totalWageSetor || 0);
+          if (inputInRange) rekapMap[nama].belumSetor += Number(allTotals.sisaSetor || 0);
           // Fallback customer dari orders jika entry lama tidak punya field customer
           const entryOrder = orders.find(o => o.id === e.orderId);
           rekapMap[nama].detail.push({
@@ -2554,13 +2857,17 @@ function findRate(productType, model, process) {
             model: e.model || "-",
             process: e.process || "",
             qty: Number(e.qty || 0),
-            qtySetor: Number(e.qtySetor || 0),
-            qtyReject: Number(e.qtyReject || 0),
+            qtySetor: Number(rangeTotals.qtySetor || 0),
+            qtyReject: Number(rangeTotals.qtyReject || 0),
+            totalSetorSemua: Number(allTotals.qtySetor || 0),
+            sisaSetor: Number(allTotals.sisaSetor || 0),
             rate: Number(e.rate || 0),
-            sudahSetor: e.statusSetor === "sudah_setor",
-            gaji: Number(e.totalWageSetor || 0),
+            sudahSetor: Number(rangeTotals.qtySetor || 0) > 0 || allTotals.statusSetor === "sudah_setor",
+            setorSebagian: allTotals.statusSetor === "setor_sebagian",
+            gaji: Number(rangeTotals.totalWageSetor || 0),
             tanggal: e.tanggal || "",
-            tanggalSetor: e.tanggalSetor || "",
+            tanggalSetor: rangeHistory.length > 0 ? rangeHistory[rangeHistory.length - 1].tanggalSetor : (allTotals.tanggalSetor || ""),
+            setorHistory: rangeHistory,
           });
         });
         const rekapPerkerja = Object.entries(rekapMap).sort((a, b) => b[1].gaji - a[1].gaji);
@@ -3117,21 +3424,39 @@ function findRate(productType, model, process) {
         </Modal>
       )}
 
-      {/* Modal Setor Hasil Borongan */}
-      {setorModal && (
+      {/* Modal Setor Hasil Borongan Bertahap */}
+      {setorModal && (() => {
+        const modalTotals = setorTotals(setorModal);
+        const sisa = Number(modalTotals.sisaSetor || 0);
+        const inputSetor = Number(setorForm.qtySetor || 0);
+        const inputReject = Number(setorForm.qtyReject || 0);
+        const sisaSetelahInput = Math.max(0, sisa - inputSetor - inputReject);
+        return (
         <Modal title="📦 Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
           <div className="space-y-3">
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
               <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {setorModal.employeeName}</div>
               <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType} · {setorModal.process}{setorModal.model ? ` · ${setorModal.model}` : ""}</div>
-              <div className="text-xs" style={{ color: "#94a3b8" }}>Qty diberikan: <strong>{setorModal.qty} pcs</strong></div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="rounded-xl py-2" style={{ background: "#ede9fe", color: "#5b21b6" }}><strong>{setorModal.qty}</strong><br/>diberi</div>
+                <div className="rounded-xl py-2" style={{ background: "#dcfce7", color: "#16a34a" }}><strong>{modalTotals.qtySetor}</strong><br/>sudah setor</div>
+                <div className="rounded-xl py-2" style={{ background: sisa > 0 ? "#fef3c7" : "#f1f5f9", color: sisa > 0 ? "#b45309" : "#64748b" }}><strong>{sisa}</strong><br/>sisa</div>
+              </div>
             </div>
+            {modalTotals.history.length > 0 && (
+              <div className="rounded-2xl p-3 text-xs space-y-1" style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#92400e" }}>
+                <div className="font-bold">Riwayat setor sebelumnya</div>
+                {modalTotals.history.map((h, idx) => (
+                  <div key={h.id || idx}>• {h.tanggalSetor}: setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `, reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}</div>
+                ))}
+              </div>
+            )}
             <Input
               label="Qty Disetor (pcs)"
               type="number"
               value={setorForm.qtySetor}
               onChange={(v) => setSetorForm((f) => ({ ...f, qtySetor: v }))}
-              placeholder={`Maks ${setorModal.qty} pcs`}
+              placeholder={`Maks ${sisa} pcs`}
             />
             <Input
               label="Qty Reject (pcs) — opsional"
@@ -3140,14 +3465,19 @@ function findRate(productType, model, process) {
               onChange={(v) => setSetorForm((f) => ({ ...f, qtyReject: v }))}
               placeholder="0 jika tidak ada reject"
             />
-            {(Number(setorForm.qtySetor) || 0) + (Number(setorForm.qtyReject) || 0) < setorModal.qty && (Number(setorForm.qtySetor) > 0) && (
-              <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>
-                ⚠️ Kurang {setorModal.qty - (Number(setorForm.qtySetor) || 0) - (Number(setorForm.qtyReject) || 0)} pcs dari qty awal
+            {inputSetor + inputReject > sisa && (
+              <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fee2e2", color: "#b91c1c" }}>
+                ⚠️ Total input melebihi sisa {sisa} pcs.
               </div>
             )}
-            {Number(setorForm.qtySetor) > 0 && Number(setorModal.rate) > 0 && (
+            {inputSetor + inputReject > 0 && inputSetor + inputReject <= sisa && sisaSetelahInput > 0 && (
+              <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>
+                ⚠️ Setelah setor ini masih tersisa {sisaSetelahInput} pcs.
+              </div>
+            )}
+            {inputSetor > 0 && Number(setorModal.rate) > 0 && (
               <div className="rounded-xl px-3 py-2 text-sm font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>
-                💰 Gaji: {money(Number(setorForm.qtySetor) * Number(setorModal.rate))}
+                💰 Gaji transaksi ini: {money(inputSetor * Number(setorModal.rate))}
                 <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs × {money(setorModal.rate)})</span>
               </div>
             )}
@@ -3163,12 +3493,14 @@ function findRate(productType, model, process) {
               onChange={(v) => setSetorForm((f) => ({ ...f, catatan: v }))}
               placeholder="Opsional"
             />
-            <Button onClick={simpanSetor} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
-              Simpan Setor
+            <Button onClick={simpanSetor} disabled={isSaving || sisa <= 0 || inputSetor + inputReject > sisa} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
+              {sisaSetelahInput > 0 ? "Simpan Setor Sebagian" : "Simpan Setor Selesai"}
             </Button>
           </div>
         </Modal>
-      )}
+        );
+      })()}
+
 
       {modal === "tarif" && (
         <Modal title="🏷️ Tambah Tarif Borongan" onClose={() => setModal(null)}>
@@ -3348,9 +3680,9 @@ function findRate(productType, model, process) {
               placeholder="Opsional"
             />
 
-            {editEntryModal.statusSetor === "sudah_setor" && (
+            {setorTotals(editEntryModal).statusSetor !== "belum_setor" && (
               <div className="rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#fef3c7", color: "#b45309" }}>
-                ⚠️ Entry ini sudah disetor. Perubahan qty tidak otomatis mengubah data setor & payroll.
+                ⚠️ Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
               </div>
             )}
 
