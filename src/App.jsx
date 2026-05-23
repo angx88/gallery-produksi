@@ -502,6 +502,7 @@ export default function App() {
   const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
   const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
+  const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
   const slipRef = useRef(null);
   const backUiRef = useRef({});
   const lastBackPressRef = useRef(0);
@@ -554,6 +555,7 @@ export default function App() {
       setorModal,
       editEntryModal,
       slipPreview,
+      rekapDetailModal,
       search,
     };
   });
@@ -573,6 +575,7 @@ export default function App() {
       if (ui.setorModal) { setSetorModal(null); return true; }
       if (ui.editEntryModal) { setEditEntryModal(null); return true; }
       if (ui.slipPreview) { setSlipPreview(null); return true; }
+      if (ui.rekapDetailModal) { setRekapDetailModal(null); return true; }
       if (ui.modal) { setModal(null); return true; }
       if (ui.search) { setSearch(""); return true; }
       if (ui.tab && ui.tab !== "pesanan") { setTab("pesanan"); return true; }
@@ -1347,7 +1350,13 @@ function findRate(productType, model, process) {
         mainMaterial: base.mainMaterial || "",
         materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
         unit: base.unit || "yard",
-        note: shippedQty >= Number(base.orderedQty || 0) ? "Sesuai pesanan" : `Belum dikirim ${Math.max(Number(base.orderedQty || 0) - shippedQty, 0)} pcs`,
+        note: (() => {
+          const ordered = Number(base.orderedQty || 0);
+          const diff = shippedQty - ordered;
+          if (diff === 0) return "Sesuai pesanan";
+          if (diff < 0) return `Kekurangan pengiriman ${Math.abs(diff)} pcs`;
+          return `Kelebihan pengiriman ${diff} pcs`;
+        })(),
       };
     });
 
@@ -1355,8 +1364,19 @@ function findRate(productType, model, process) {
     const totalShipped = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
     const deliveredTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
     const deliveredHppTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
-    const deliveryStatus = totalShipped >= totalOrdered && totalOrdered > 0 ? "Selesai" : "Dikirim Sebagian";
-    const orderStatus = deliveryStatus === "Selesai" ? "Dikirim" : "Dikirim Sebagian";
+    const hasOverDelivery = shippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
+    const deliveryStatus = totalShipped <= 0
+      ? "Belum Dikirim"
+      : hasOverDelivery
+        ? "Kelebihan Kirim"
+        : totalShipped < totalOrdered
+          ? "Dikirim Sebagian"
+          : "Selesai";
+    const orderStatus = deliveryStatus === "Selesai"
+      ? "Dikirim"
+      : deliveryStatus === "Kelebihan Kirim"
+        ? "Kelebihan Kirim"
+        : "Dikirim Sebagian";
 
     setIsSaving(true);
     try {
@@ -1378,6 +1398,9 @@ function findRate(productType, model, process) {
         qty: items.reduce((s, i) => s + i.qtyKirim, 0),
         totalPesan: items.reduce((s, i) => s + i.qtyPesan, 0),
         totalKirim: items.reduce((s, i) => s + i.qtyKirim, 0),
+        totalSelisih: items.reduce((s, i) => s + Number(i.selisih || 0), 0),
+        deliveryStatus,
+        shippingStatus: orderStatus,
         deliveredTotal,
         deliveredHppTotal,
         catatan: kirimForm.catatan || "",
@@ -2615,36 +2638,37 @@ function findRate(productType, model, process) {
                   <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapDari} s/d {rekapSampai}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-xl p-3" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                  <button type="button" onClick={() => setRekapDetailModal("sudah")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
                     <div className="text-xs font-bold" style={{ color: "#16a34a" }}>Sudah Gajian</div>
                     <div className="text-lg font-black" style={{ color: "#16a34a" }}>{money(rekapGajianKeseluruhan.totalSudahDibayar)}</div>
-                    <div className="text-xs" style={{ color: "#64748b" }}>{rekapGajianKeseluruhan.sudahGajian} pekerja</div>
-                  </div>
-                  <div className="rounded-xl p-3" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.sudahGajian} pekerja</span><span>Rincian ›</span></div>
+                  </button>
+                  <button type="button" onClick={() => setRekapDetailModal("belum")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
                     <div className="text-xs font-bold" style={{ color: "#b45309" }}>Belum Gajian</div>
                     <div className="text-lg font-black" style={{ color: "#b45309" }}>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</div>
-                    <div className="text-xs" style={{ color: "#64748b" }}>{rekapGajianKeseluruhan.belumGajian} pekerja</div>
-                  </div>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.belumGajian} pekerja</span><span>Rincian ›</span></div>
+                  </button>
                 </div>
-                <div className="rounded-xl p-3" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", border: "1px solid #e9d5ff" }}>
+                <div onClick={() => setRekapDetailModal("total")} className="w-full rounded-xl p-3 text-left active:scale-[0.99] transition-transform cursor-pointer" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", border: "1px solid #e9d5ff" }}>
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold" style={{ color: "#7c3aed" }}>Total Gaji Periode Ini</span>
                     <span className="text-xl font-black" style={{ color: "#7c3aed" }}>{money(rekapGajianKeseluruhan.totalGaji)}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
-                    <div className="rounded-lg py-2" style={{ background: "rgba(255,255,255,0.7)" }}>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setRekapDetailModal("pekerja"); }} className="rounded-lg py-2 active:scale-[0.98]" style={{ background: "rgba(255,255,255,0.7)" }}>
                       <div className="font-bold" style={{ color: "#2d1b69" }}>{rekapGajianKeseluruhan.totalPekerja}</div>
                       <div style={{ color: "#94a3b8" }}>pekerja</div>
-                    </div>
-                    <div className="rounded-lg py-2" style={{ background: "rgba(255,255,255,0.7)" }}>
+                    </button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setRekapDetailModal("setor"); }} className="rounded-lg py-2 active:scale-[0.98]" style={{ background: "rgba(255,255,255,0.7)" }}>
                       <div className="font-bold" style={{ color: "#16a34a" }}>{rekapGajianKeseluruhan.totalPcsSetor.toLocaleString()}</div>
                       <div style={{ color: "#94a3b8" }}>pcs setor</div>
-                    </div>
-                    <div className="rounded-lg py-2" style={{ background: "rgba(255,255,255,0.7)" }}>
+                    </button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setRekapDetailModal("belumSetor"); }} className="rounded-lg py-2 active:scale-[0.98]" style={{ background: "rgba(255,255,255,0.7)" }}>
                       <div className="font-bold" style={{ color: rekapGajianKeseluruhan.totalBelumSetor > 0 ? "#b45309" : "#94a3b8" }}>{rekapGajianKeseluruhan.totalBelumSetor.toLocaleString()}</div>
                       <div style={{ color: "#94a3b8" }}>blm setor</div>
-                    </div>
+                    </button>
                   </div>
+                  <div className="mt-2 text-center text-[10px] font-semibold" style={{ color: "#a855f7" }}>Ketuk kotak untuk melihat rincian</div>
                   {rekapGajianKeseluruhan.totalBelumDibayar > 0 && (
                     <div className="mt-2 rounded-lg px-3 py-2 text-xs font-semibold" style={{ background: "#fff7ed", color: "#92400e", border: "1px solid #fed7aa" }}>
                       Sisa yang belum ditandai gajian: <strong>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</strong>. Tandai dari modal slip tiap pekerja.
@@ -2653,6 +2677,109 @@ function findRate(productType, model, process) {
                 </div>
               </div>
             )}
+
+            {rekapDetailModal && (() => {
+              const getCarryOver = (nama) => productionEntries.filter((e) =>
+                lower(e.employeeName) === lower(nama) &&
+                e.statusSetor !== "sudah_setor" &&
+                e.tanggal < rekapDari
+              );
+              const baseRows = rekapPerkerja.map(([nama, r]) => ({
+                nama,
+                r,
+                sudah: sudahGajian(nama, rekapDari, rekapSampai),
+                carryOver: getCarryOver(nama),
+              }));
+              const filteredRows = baseRows
+                .filter((row) => {
+                  if (rekapDetailModal === "sudah") return row.sudah;
+                  if (rekapDetailModal === "belum") return !row.sudah;
+                  if (rekapDetailModal === "belumSetor") return Number(row.r?.belumSetor || 0) > 0;
+                  if (rekapDetailModal === "setor") return Number(row.r?.pcsSetor || 0) > 0;
+                  return true;
+                })
+                .sort((a, b) => {
+                  if (rekapDetailModal === "setor") return Number(b.r?.pcsSetor || 0) - Number(a.r?.pcsSetor || 0);
+                  if (rekapDetailModal === "belumSetor") return Number(b.r?.belumSetor || 0) - Number(a.r?.belumSetor || 0);
+                  return Number(b.r?.gaji || 0) - Number(a.r?.gaji || 0);
+                });
+              const titleMap = {
+                sudah: "Rincian Sudah Gajian",
+                belum: "Rincian Belum Gajian",
+                total: "Rincian Total Gaji Periode Ini",
+                pekerja: "Rincian Semua Pekerja",
+                setor: "Rincian PCS Setor",
+                belumSetor: "Rincian Belum Setor",
+              };
+              const modalTotalGaji = filteredRows.reduce((sum, row) => sum + Number(row.r?.gaji || 0), 0);
+              const modalTotalSetor = filteredRows.reduce((sum, row) => sum + Number(row.r?.pcsSetor || 0), 0);
+              const modalTotalBelum = filteredRows.reduce((sum, row) => sum + Number(row.r?.belumSetor || 0), 0);
+              return (
+                <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
+                  <div className="w-full max-h-[88vh] overflow-auto bg-white" style={{ borderRadius: "28px 28px 0 0", borderTop: "3px solid #a855f7" }}>
+                    <div className="sticky top-0 z-10 px-4 py-4 bg-white" style={{ borderBottom: "1px solid #f3e8ff" }}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-base font-black" style={{ color: "#2d1b69" }}>{titleMap[rekapDetailModal] || "Rincian Rekap"}</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{rekapDari} s/d {rekapSampai} · {filteredRows.length} pekerja</div>
+                        </div>
+                        <button type="button" onClick={() => setRekapDetailModal(null)} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#f1f5f9", color: "#64748b" }}>Tutup</button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs">
+                        <div className="rounded-xl py-2" style={{ background: "#f5f3ff" }}>
+                          <div className="font-black" style={{ color: "#7c3aed" }}>{money(modalTotalGaji)}</div>
+                          <div style={{ color: "#94a3b8" }}>gaji</div>
+                        </div>
+                        <div className="rounded-xl py-2" style={{ background: "#f0fdf4" }}>
+                          <div className="font-black" style={{ color: "#16a34a" }}>{modalTotalSetor.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>pcs setor</div>
+                        </div>
+                        <div className="rounded-xl py-2" style={{ background: "#fff7ed" }}>
+                          <div className="font-black" style={{ color: modalTotalBelum > 0 ? "#b45309" : "#94a3b8" }}>{modalTotalBelum.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>blm setor</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="p-4 space-y-2">
+                      {filteredRows.length === 0 ? (
+                        <div className="rounded-2xl p-6 text-center text-sm" style={{ background: "#f8fafc", color: "#94a3b8" }}>Tidak ada data untuk kategori ini.</div>
+                      ) : filteredRows.map(({ nama, r, sudah, carryOver }) => (
+                        <div key={nama} className="rounded-2xl p-3" style={{ border: "1px solid #e9d5ff", background: sudah ? "#f0fdf4" : "#fff7ed" }}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: sudah ? "#dcfce7" : "#fef3c7", color: sudah ? "#16a34a" : "#b45309" }}>
+                                  {sudah ? "✅ Sudah gajian" : "⏳ Belum gajian"}
+                                </span>
+                                {Number(r.belumSetor || 0) > 0 && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#fffbeb", color: "#b45309" }}>⏳ {r.belumSetor} blm setor</span>}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-sm font-black" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
+                              <div className="text-[10px]" style={{ color: "#94a3b8" }}>{r.pcsSetor} pcs setor</div>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1 mt-3 text-center text-xs">
+                            <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong>{r.pcsAwal}</strong><div style={{ color: "#94a3b8" }}>diberi</div></div>
+                            <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong><div style={{ color: "#94a3b8" }}>setor</div></div>
+                            <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong style={{ color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" }}>{r.pcsReject}</strong><div style={{ color: "#94a3b8" }}>reject</div></div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => { setRekapDetailModal(null); setSlipPreview({ nama, r, dari: rekapDari, sampai: rekapSampai, carryOver }); }}
+                            className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
+                            style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                          >
+                            👁️ Lihat Slip
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Rekap per proses */}
             {prosesKeys.length > 0 ? (
