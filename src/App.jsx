@@ -70,6 +70,14 @@ function isDoneStatus(status) {
   return s === "selesai" || s === "lunas" || s.includes("done") || s.includes("complete");
 }
 
+function isShortShipmentClosed(order) {
+  const raw = order?.raw || order || {};
+  return raw.shortShipmentClosed === true
+    || raw.deliveryStatus === "Ditutup Kurang Kirim"
+    || raw.shippingStatus === "Kurang Kirim Final"
+    || raw.status === "Ditutup Kurang Kirim";
+}
+
 function sameText(a, b) {
   return String(a || "").trim() !== "" && String(b || "").trim() !== "" && String(a).trim() === String(b).trim();
 }
@@ -604,6 +612,7 @@ function orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId
     prod?.status === "Selesai" ||
     raw.statusProduksi === "Selesai" ||
     raw.produksiStatus === "Selesai" ||
+    isShortShipmentClosed(order) ||
     hasDeliveryDetail(order) ||
     shipmentByOrderId?.has?.(order?.id) ||
     isSentStatus(raw.status) ||
@@ -1008,6 +1017,9 @@ export default function App() {
     penerima: "",
     ekspedisi: "",
     items: [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
+    shortShipmentMode: "temporary",
+    shortShipmentReason: "Stok kain habis",
+    shortShipmentNote: "",
     catatan: "",
   });
 
@@ -1368,6 +1380,45 @@ export default function App() {
       .sort((a, b) => String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || "")));
   }, [shipments, orders, q]);
 
+  const ordersPerluDicek = useMemo(() => {
+    return (orders || [])
+      .map((order) => {
+        const raw = order?.raw || {};
+        const prod = produksiByOrderId.get(order.id);
+        const sudahProduksi = !!prod || raw.statusProduksi || raw.produksiStatus;
+        const sedangProduksi = prod && prod.status !== "Selesai";
+        const selesaiProduksi = prod?.status === "Selesai" || raw.statusProduksi === "Selesai" || raw.produksiStatus === "Selesai";
+        const sudahKirim = hasDeliveryDetail(order) || shipmentByOrderId.has(order.id) || isSentStatus(order.status) || isLegacyDoneOrSentOrder(order);
+        const selesaiNormal = selesaiProduksi || sudahKirim || isDoneStatus(order.status);
+        const belumNormal = !sudahProduksi && !selesaiNormal;
+        const ordered = dashboardTotalOrderedQty(order);
+        let shipped = dashboardTotalShippedQty(order);
+        if (!hasDeliveryDetail(order) && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) shipped = ordered;
+
+        const reasons = [];
+        if (isShortShipmentClosed(order)) {
+          reasons.push(`Kurang kirim final${raw.shortShipmentReason ? `: ${raw.shortShipmentReason}` : ""}. Sisa tidak dihitung sebagai tanggungan aktif.`);
+        }
+        if (ordered <= 0) reasons.push("Qty/item pesanan kosong atau tidak terbaca.");
+        if (shipped > ordered && ordered > 0) reasons.push(`Kelebihan kirim ${fmtQty(shipped - ordered)} pcs. Pastikan sudah disetujui customer karena ikut tagihan.`);
+        if (shipped > 0 && shipped < ordered && !isShortShipmentClosed(order)) reasons.push(`Dikirim sebagian, sisa ${fmtQty(ordered - shipped)} pcs masih aktif.`);
+        if (!belumNormal && !sedangProduksi && !selesaiNormal) reasons.push(`Status belum masuk kategori utama${order.status ? `: ${order.status}` : ""}.`);
+        if (raw.deliveryStatus && !["Belum Dikirim", "Dikirim Sebagian", "Selesai", "Kelebihan Kirim", "Ditutup Kurang Kirim"].includes(raw.deliveryStatus)) {
+          reasons.push(`Status pengiriman tidak umum: ${raw.deliveryStatus}.`);
+        }
+
+        if (reasons.length === 0) return null;
+        return {
+          id: order.id,
+          customer: order.customer || raw.customer || raw.namaCustomer || "Tanpa nama",
+          invoice: order.invoice || raw.invoice || raw.orderId || raw.kode || "-",
+          status: order.status || raw.status || "Status kosong",
+          alasan: reasons.join(" "),
+        };
+      })
+      .filter(Boolean);
+  }, [orders, produksiByOrderId, shipmentByOrderId]);
+
   const stats = useMemo(() => {
     const selesaiOrders = orders.filter((o) => isDoneStatus(o.status) || isSentStatus(o.status));
 
@@ -1377,10 +1428,11 @@ export default function App() {
       proses: produksi.filter((p) => p.status !== "Selesai").length,
       selesai: selesaiOrders.length,
       kirim: selesaiOrders.length,
+      perluDicek: ordersPerluDicek.length,
       boronganPcs: productionEntries.reduce((s, e) => s + Number(e.qty || 0), 0),
       payroll: officialGajiPayrollTotal(payrollExpenses),
     };
-  }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi]);
+  }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi, ordersPerluDicek]);
 
   const dashboardSummary = useMemo(() => {
     const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
@@ -1406,19 +1458,22 @@ export default function App() {
 
       const remaining = Math.max(0, ordered - shipped);
       const over = Math.max(0, shipped - ordered);
+      const shortClosed = isShortShipmentClosed(order);
+      const activeRemaining = shortClosed ? 0 : remaining;
       const alreadyInProduction = produksiByOrderId.has(order.id);
       const finishedOrDelivered = orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId);
       const belumProduksi = !alreadyInProduction && !finishedOrDelivered;
-      const siapKirim = !belumProduksi && remaining > 0;
+      const siapKirim = !belumProduksi && activeRemaining > 0;
 
       acc.pesananPcs += ordered;
       acc.terkirimPcs += shipped;
-      acc.sisaKirimTotal += remaining;
+      acc.sisaKirimTotal += activeRemaining;
       acc.kelebihanKirim += over;
-      if (belumProduksi) acc.pcsBelumProduksi += remaining;
-      if (siapKirim) acc.sisaKirimSiap += remaining;
+      if (shortClosed) acc.kurangKirimFinal += remaining;
+      if (belumProduksi) acc.pcsBelumProduksi += activeRemaining;
+      if (siapKirim) acc.sisaKirimSiap += activeRemaining;
       return acc;
-    }, { pesananPcs: 0, terkirimPcs: 0, sisaKirimTotal: 0, sisaKirimSiap: 0, pcsBelumProduksi: 0, kelebihanKirim: 0 });
+    }, { pesananPcs: 0, terkirimPcs: 0, sisaKirimTotal: 0, sisaKirimSiap: 0, pcsBelumProduksi: 0, kelebihanKirim: 0, kurangKirimFinal: 0 });
 
     const bahanTotal = (materials || []).length;
     const shipmentTotal = (shipments || []).length;
@@ -1432,11 +1487,136 @@ export default function App() {
       sisaKirimTotal: orderQtySummary.sisaKirimTotal,
       pcsBelumProduksi: orderQtySummary.pcsBelumProduksi,
       kelebihanKirim: orderQtySummary.kelebihanKirim,
+      kurangKirimFinal: orderQtySummary.kurangKirimFinal,
       bahanTotal, shipmentTotal,
     };
   }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId]);
 
-  
+  const dashboardInsights = useMemo(() => {
+    const activeBorongan = (productionEntries || [])
+      .map((entry) => ({ entry, totals: setorTotals(entry) }))
+      .filter(({ totals }) => Number(totals.sisaSetor || 0) > 0)
+      .sort((a, b) => Number(b.totals.sisaSetor || 0) - Number(a.totals.sisaSetor || 0));
+
+    const activeProduksi = (produksi || [])
+      .filter((item) => item.status !== "Selesai")
+      .sort((a, b) => String(b.tanggalMulai || b.createdAt || "").localeCompare(String(a.tanggalMulai || a.createdAt || "")));
+
+    const kirimBelumLengkap = (orders || [])
+      .map((order) => {
+        const ordered = dashboardTotalOrderedQty(order);
+        let shipped = dashboardTotalShippedQty(order);
+        if (!hasDeliveryDetail(order) && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) shipped = ordered;
+        const sisa = isShortShipmentClosed(order) ? 0 : Math.max(0, ordered - shipped);
+        return { order, ordered, shipped, sisa };
+      })
+      .filter(({ sisa }) => sisa > 0)
+      .sort((a, b) => Number(b.sisa || 0) - Number(a.sisa || 0));
+
+    const monthNow = new Date();
+    const monthStart = localDateStr(new Date(monthNow.getFullYear(), monthNow.getMonth(), 1));
+    const monthEnd = localDateStr(new Date(monthNow.getFullYear(), monthNow.getMonth() + 1, 0));
+    const workerMap = new Map();
+
+    (productionEntries || []).forEach((entry) => {
+      const history = setorHistoryInRange(entry, monthStart, monthEnd);
+      if (history.length === 0) return;
+      const totals = setorTotalsFromHistory(history);
+      const key = normalizeWorkerNameKey(entry.employeeName);
+      if (!key) return;
+      const prev = workerMap.get(key) || {
+        nama: displayWorkerName(entry.employeeName),
+        pcs: 0,
+        gaji: 0,
+        transaksi: 0,
+      };
+      prev.pcs += Number(totals.qtySetor || 0);
+      prev.gaji += Number(totals.totalWageSetor || 0);
+      prev.transaksi += history.length;
+      workerMap.set(key, prev);
+    });
+
+    const topPekerja = Array.from(workerMap.values())
+      .filter((row) => row.pcs > 0 || row.gaji > 0)
+      .sort((a, b) => Number(b.pcs || 0) - Number(a.pcs || 0) || Number(b.gaji || 0) - Number(a.gaji || 0))
+      .slice(0, 5);
+
+    const alerts = [];
+    (productionEntries || []).forEach((entry) => {
+      const totals = setorTotals(entry);
+      const totalAktivitas = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
+      const diberi = Number(entry.qty || 0);
+      if (diberi > 0 && totalAktivitas > diberi) {
+        alerts.push({
+          type: "Setor melebihi diberi",
+          text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
+          tab: "borongan",
+        });
+      }
+      if (Number(entry.rate || 0) <= 0) {
+        alerts.push({
+          type: "Tarif kosong",
+          text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")}`,
+          tab: "tarif",
+        });
+      }
+    });
+
+    (orders || []).forEach((order) => {
+      if (dashboardTotalOrderedQty(order) <= 0) {
+        alerts.push({
+          type: "Order tanpa produk/qty",
+          text: `${order.customer || order.raw?.customer || "Tanpa nama"} · ${order.invoice || order.raw?.invoice || order.id}`,
+          tab: "pesanan",
+        });
+      }
+      const deliveries = Array.isArray(order.raw?.deliveries) ? order.raw.deliveries : [];
+      deliveries.forEach((delivery, dIdx) => {
+        const items = Array.isArray(delivery.items) ? delivery.items : [];
+        items.forEach((item, iIdx) => {
+          if (item && (item.itemIndex === undefined || item.itemIndex === null || item.itemIndex === "")) {
+            alerts.push({
+              type: "Pengiriman tanpa itemIndex",
+              text: `${order.customer || "Tanpa nama"} · ${order.invoice || order.id} · kirim ${dIdx + 1}.${iIdx + 1}`,
+              tab: "kirim",
+            });
+          }
+        });
+      });
+    });
+
+    const weeklyRows = getDaftarMinggu(6).reverse().map((period) => {
+      let pcsSetor = 0;
+      let pcsReject = 0;
+      let gaji = 0;
+      (productionEntries || []).forEach((entry) => {
+        const totals = setorTotalsFromHistory(setorHistoryInRange(entry, period.dari, period.sampai));
+        pcsSetor += Number(totals.qtySetor || 0);
+        pcsReject += Number(totals.qtyReject || 0);
+        gaji += Number(totals.totalWageSetor || 0);
+      });
+      return { ...period, pcsSetor, pcsReject, gaji };
+    });
+    const maxWeeklyPcs = Math.max(1, ...weeklyRows.map((row) => Number(row.pcsSetor || 0) + Number(row.pcsReject || 0)));
+
+    return {
+      tugas: {
+        boronganBelumSetor: activeBorongan.length,
+        produksiBelumSelesai: activeProduksi.length,
+        kirimanBelumLengkap: kirimBelumLengkap.length,
+        activeBorongan: activeBorongan.slice(0, 4),
+        activeProduksi: activeProduksi.slice(0, 4),
+        kirimBelumLengkap: kirimBelumLengkap.slice(0, 4),
+      },
+      topPekerja,
+      alerts: alerts.slice(0, 8),
+      alertCount: alerts.length,
+      weeklyRows,
+      maxWeeklyPcs,
+      monthLabel: monthStart.slice(0, 7),
+    };
+  }, [orders, produksi, productionEntries]);
+
   const workerNameOptions = useMemo(() => {
     const map = new Map();
     const addName = (raw) => {
@@ -1926,6 +2106,9 @@ function findRate(productType, model, process) {
       courier: kirimForm.ekspedisi || "",
       ekspedisi: kirimForm.ekspedisi || "",
       note: kirimForm.catatan || "",
+      shortShipmentMode: kirimForm.shortShipmentMode || "temporary",
+      shortShipmentReason: kirimForm.shortShipmentReason || "",
+      shortShipmentNote: kirimForm.shortShipmentNote || "",
       items: cleanDeliveryItems,
       total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
     };
@@ -1969,19 +2152,38 @@ function findRate(productType, model, process) {
     const deliveredTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
     const deliveredHppTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
     const hasOverDelivery = shippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
-    const deliveryStatus = totalShipped <= 0
+    const isShortShipment = totalOrdered > 0 && totalShipped > 0 && totalShipped < totalOrdered;
+    const isShortFinal = isShortShipment && kirimForm.shortShipmentMode === "final";
+    const shortShipmentReason = isShortFinal ? String(kirimForm.shortShipmentReason || "").trim() : "";
+    const shortShipmentNote = isShortFinal ? String(kirimForm.shortShipmentNote || "").trim() : "";
+
+    if (hasOverDelivery) {
+      const ok = window.confirm("Kelebihan kirim akan menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim. Lanjut simpan?");
+      if (!ok) return;
+    }
+
+    if (isShortFinal && !shortShipmentReason) {
+      return alert("Pilih alasan kurang kirim final terlebih dahulu.");
+    }
+
+    const deliveryStatusRaw = totalShipped <= 0
       ? "Belum Dikirim"
       : hasOverDelivery
         ? "Kelebihan Kirim"
         : totalShipped < totalOrdered
           ? "Dikirim Sebagian"
           : "Selesai";
+    const deliveryStatus = isShortFinal ? "Ditutup Kurang Kirim" : deliveryStatusRaw;
     const orderStatus = deliveryStatus === "Selesai"
       ? "Dikirim"
       : deliveryStatus === "Kelebihan Kirim"
         ? "Kelebihan Kirim"
-        : "Dikirim Sebagian";
-    const productionDoneByDelivery = totalOrdered > 0 && totalShipped >= totalOrdered;
+        : isShortFinal
+          ? "Ditutup Kurang Kirim"
+          : "Dikirim Sebagian";
+    const shippingStatus = isShortFinal ? "Kurang Kirim Final" : orderStatus;
+    const shortShipmentRemaining = Math.max(0, totalOrdered - totalShipped);
+    const productionDoneByDelivery = isShortFinal || (totalOrdered > 0 && totalShipped >= totalOrdered);
     const nextProduksiStatus = productionDoneByDelivery
       ? "Selesai"
       : (order?.raw?.statusProduksi || order?.raw?.produksiStatus || "Proses");
@@ -2008,7 +2210,12 @@ function findRate(productType, model, process) {
         totalKirim: items.reduce((s, i) => s + i.qtyKirim, 0),
         totalSelisih: items.reduce((s, i) => s + Number(i.selisih || 0), 0),
         deliveryStatus,
-        shippingStatus: orderStatus,
+        shippingStatus,
+        shortShipmentClosed: isShortFinal,
+        shortShipmentMode: isShortFinal ? "final" : (isShortShipment ? "temporary" : ""),
+        shortShipmentReason,
+        shortShipmentNote,
+        shortShipmentRemaining,
         deliveredTotal,
         deliveredHppTotal,
         catatan: kirimForm.catatan || "",
@@ -2032,8 +2239,13 @@ function findRate(productType, model, process) {
       try {
         await updateDoc(doc(db, C.ORDERS, order.id), {
           status: orderStatus,
-          shippingStatus: orderStatus,
+          shippingStatus,
           deliveryStatus,
+          shortShipmentClosed: isShortFinal,
+          shortShipmentMode: isShortFinal ? "final" : (isShortShipment ? "temporary" : ""),
+          shortShipmentReason,
+          shortShipmentNote,
+          shortShipmentRemaining,
           tanggalKirim: kirimForm.tanggalKirim || todayStr(),
           deliveries: nextDeliveries,
           shippedItems,
@@ -2057,6 +2269,9 @@ function findRate(productType, model, process) {
         penerima: "",
         ekspedisi: "",
         items: [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
+        shortShipmentMode: "temporary",
+        shortShipmentReason: "Stok kain habis",
+        shortShipmentNote: "",
         catatan: "",
       });
       setModal(null);
@@ -2797,10 +3012,10 @@ function findRate(productType, model, process) {
       <div className="grid grid-cols-5 gap-2 p-4">
         {[
           { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋" },
-          { label: "Belum", value: stats.belum, color: "#f59e0b", icon: "⏳" },
-          { label: "Proses", value: stats.proses, color: "#a855f7", icon: "🧵" },
+          { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "⏳" },
+          { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "🧵" },
           { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "✅" },
-          { label: "Kirim", value: stats.kirim, color: "#0ea5e9", icon: "🚚" },
+          { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "🔎" },
         ].map((s) => (
           <div key={s.label} className="rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1px solid #fce7f3" }}>
             <div className="text-base">{s.icon}</div>
@@ -2825,6 +3040,38 @@ function findRate(productType, model, process) {
           >
             + Tambah
           </button>
+        </div>
+      )}
+
+      {stats.perluDicek > 0 && (
+        <div className="mx-4 mb-2 rounded-2xl px-4 py-3"
+          style={{ background: "linear-gradient(135deg,#fff1f2,#fff7ed)", border: "1.5px solid #fb7185" }}>
+          <div className="flex items-start gap-3">
+            <span className="text-xl">🔎</span>
+            <div className="flex-1">
+              <div className="text-xs font-black" style={{ color: "#be123c" }}>{stats.perluDicek} pesanan perlu dicek</div>
+              <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Keterangan ini membantu admin baru memahami kenapa pesanan tidak masuk kategori normal.</div>
+              <div className="mt-2 space-y-1">
+                {ordersPerluDicek.slice(0, 4).map((o) => (
+                  <div key={o.id} className="rounded-xl bg-white px-3 py-2 text-[11px]" style={{ border: "1px solid #fecdd3" }}>
+                    <div className="font-bold" style={{ color: "#2d1b69" }}>{o.customer} · {o.invoice}</div>
+                    <div style={{ color: "#be123c" }}>{o.alasan}</div>
+                  </div>
+                ))}
+                {ordersPerluDicek.length > 4 && (
+                  <div className="text-[11px] font-bold" style={{ color: "#be123c" }}>+ {ordersPerluDicek.length - 4} pesanan lain. Buka tab Pesanan/Pengiriman untuk detail lengkap.</div>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTab("pesanan")}
+              className="text-xs font-bold px-3 py-1.5 rounded-full text-white shrink-0"
+              style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
+            >
+              Buka
+            </button>
+          </div>
         </div>
       )}
 
@@ -2890,7 +3137,7 @@ function findRate(productType, model, process) {
 
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "💰", tab: "rekap" },
+              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "💰", detail: "allTime" },
               { label: "Produksi aktif", value: dashboardSummary.produksiAktif.toLocaleString(), color: "#a855f7", icon: "🧵", tab: "produksi" },
               { label: "Borongan aktif", value: dashboardSummary.boronganAktif.toLocaleString(), color: "#f59e0b", icon: "💪", tab: "borongan" },
               { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "⏳", tab: "produksi" },
@@ -2899,9 +3146,10 @@ function findRate(productType, model, process) {
               { label: "Pcs belum produksi", value: dashboardSummary.pcsBelumProduksi.toLocaleString(), color: dashboardSummary.pcsBelumProduksi > 0 ? "#d97706" : "#94a3b8", icon: "🧵", tab: "pesanan" },
               { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "📦", tab: "kirim" },
               { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "⚠️", tab: "kirim" },
+              { label: "Kurang kirim final", value: dashboardSummary.kurangKirimFinal.toLocaleString(), color: dashboardSummary.kurangKirimFinal > 0 ? "#b45309" : "#94a3b8", icon: "📌", tab: "kirim" },
               { label: "Data kain", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "🎨", tab: "kain" },
             ].map((card) => (
-              <button key={card.label} onClick={() => setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
+              <button key={card.label} onClick={() => card.detail ? setRekapDetailModal(card.detail) : setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xl">{card.icon}</span>
                   <span className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian ›</span>
@@ -2913,12 +3161,117 @@ function findRate(productType, model, process) {
           </div>
 
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fed7aa", background: "linear-gradient(135deg,#fff7ed,#ffffff)" }}>
-            <div className="text-sm font-black" style={{ color: "#c2410c" }}>✅ Yang cocok ditambahkan berikutnya</div>
-            <div className="grid gap-2 text-xs" style={{ color: "#7c2d12" }}>
-              <div>• <strong>Notifikasi tugas hari ini:</strong> borongan belum setor, produksi belum selesai, dan kiriman belum lengkap.</div>
-              <div>• <strong>Top pekerja:</strong> ranking pcs setor dan total gaji bulan ini.</div>
-              <div>• <strong>Alert data bermasalah:</strong> setor lebih besar dari diberi, tarif kosong, order tanpa produk, atau pengiriman tanpa itemIndex.</div>
-              <div>• <strong>Grafik mingguan:</strong> pcs setor, reject, dan gaji per minggu.</div>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#c2410c" }}>✅ Tugas Hari Ini</div>
+                <div className="text-[11px]" style={{ color: "#9a3412" }}>Ringkasan yang perlu dicek admin.</div>
+              </div>
+              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan ›</button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: "Borongan belum setor", value: dashboardInsights.tugas.boronganBelumSetor, tab: "borongan" },
+                { label: "Produksi belum selesai", value: dashboardInsights.tugas.produksiBelumSelesai, tab: "produksi" },
+                { label: "Kirim belum lengkap", value: dashboardInsights.tugas.kirimanBelumLengkap, tab: "kirim" },
+              ].map((item) => (
+                <button key={item.label} onClick={() => setTab(item.tab)} className="rounded-2xl bg-white p-2 text-left" style={{ border: "1px solid #fed7aa" }}>
+                  <div className="text-lg font-black" style={{ color: item.value > 0 ? "#c2410c" : "#16a34a" }}>{item.value.toLocaleString()}</div>
+                  <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>{item.label}</div>
+                </button>
+              ))}
+            </div>
+            {(dashboardInsights.tugas.activeBorongan.length > 0 || dashboardInsights.tugas.activeProduksi.length > 0 || dashboardInsights.tugas.kirimBelumLengkap.length > 0) && (
+              <div className="space-y-1 text-[11px]" style={{ color: "#7c2d12" }}>
+                {dashboardInsights.tugas.activeBorongan.slice(0, 2).map(({ entry, totals }) => (
+                  <div key={`bor-${entry.id}`}>• {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})</div>
+                ))}
+                {dashboardInsights.tugas.activeProduksi.slice(0, 1).map((item) => (
+                  <div key={`prod-${item.id}`}>• Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}</div>
+                ))}
+                {dashboardInsights.tugas.kirimBelumLengkap.slice(0, 1).map(({ order, sisa }) => (
+                  <div key={`ship-${order.id}`}>• {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs</div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bbf7d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#15803d" }}>🏆 Top Pekerja Bulan Ini</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.monthLabel} · berdasarkan pcs setor</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dcfce7", color: "#15803d" }}>Rekap ›</button>
+            </div>
+            {dashboardInsights.topPekerja.length === 0 ? (
+              <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada setor bulan ini.</div>
+            ) : (
+              <div className="space-y-2">
+                {dashboardInsights.topPekerja.map((row, idx) => (
+                  <div key={row.nama} className="flex items-center justify-between gap-2 rounded-2xl p-2" style={{ background: "#f8fafc" }}>
+                    <div className="min-w-0">
+                      <div className="text-xs font-black truncate" style={{ color: "#14532d" }}>{idx + 1}. {row.nama}</div>
+                      <div className="text-[10px]" style={{ color: "#64748b" }}>{row.transaksi} transaksi</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-xs font-black" style={{ color: "#16a34a" }}>{fmtQty(row.pcs)} pcs</div>
+                      <div className="text-[10px]" style={{ color: "#64748b" }}>{money(row.gaji)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fecaca", background: "linear-gradient(135deg,#fff1f2,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
+              </div>
+              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
+            </div>
+            {dashboardInsights.alerts.length === 0 ? (
+              <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>Tidak ada alert data bermasalah.</div>
+            ) : (
+              <div className="space-y-2">
+                {dashboardInsights.alerts.map((alert, idx) => (
+                  <button key={`${alert.type}-${idx}`} onClick={() => setTab(alert.tab)} className="w-full rounded-2xl p-2 text-left" style={{ background: "#fff7f7", border: "1px solid #fecaca" }}>
+                    <div className="text-[11px] font-black" style={{ color: "#be123c" }}>{alert.type}</div>
+                    <div className="text-[10px]" style={{ color: "#64748b" }}>{alert.text}</div>
+                  </button>
+                ))}
+                {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
+                  <div className="text-[10px]" style={{ color: "#94a3b8" }}>+{dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #ddd6fe", background: "linear-gradient(135deg,#faf5ff,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#7c3aed" }}>📈 Grafik Mingguan</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>Pcs setor, reject, dan gaji per minggu.</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>Detail ›</button>
+            </div>
+            <div className="space-y-2">
+              {dashboardInsights.weeklyRows.map((row) => {
+                const totalPcs = Number(row.pcsSetor || 0) + Number(row.pcsReject || 0);
+                const width = Math.max(2, Math.round((totalPcs / dashboardInsights.maxWeeklyPcs) * 100));
+                return (
+                  <div key={row.key} className="space-y-1">
+                    <div className="flex justify-between text-[10px]" style={{ color: "#64748b" }}>
+                      <span>{row.dari.slice(5)} s/d {row.sampai.slice(5)}</span>
+                      <span>{fmtQty(row.pcsSetor)} setor · {fmtQty(row.pcsReject)} reject · {money(row.gaji)}</span>
+                    </div>
+                    <div className="h-3 rounded-full overflow-hidden" style={{ background: "#f3e8ff" }}>
+                      <div className="h-full rounded-full" style={{ width: `${width}%`, background: "linear-gradient(90deg,#a855f7,#ec4899)" }} />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -3513,42 +3866,6 @@ function findRate(productType, model, process) {
               </div>
             </div>
 
-            {rekapGajiAllTimeSummary.totalGaji > 0 && (
-              <div
-                onClick={() => setRekapDetailModal("allTime")}
-                className="rounded-2xl bg-white p-4 active:scale-[0.99] transition-transform cursor-pointer"
-                style={{ border: "1px solid #bbf7d0", background: "linear-gradient(135deg,#f0fdf4,#f5f3ff)" }}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-black" style={{ color: "#16a34a" }}>📚 Rekap Gaji Total Keseluruhan</div>
-                    <div className="text-[10px] mt-0.5" style={{ color: "#64748b" }}>Semua waktu dari payroll resmi Gallery Produksi</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xl font-black" style={{ color: "#16a34a" }}>{money(rekapGajiAllTimeSummary.totalGaji)}</div>
-                    <div className="text-[10px] font-semibold" style={{ color: "#64748b" }}>Rincian ›</div>
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="rounded-xl py-2" style={{ background: "rgba(255,255,255,0.75)" }}>
-                    <div className="font-black" style={{ color: "#2d1b69" }}>{rekapGajiAllTimeSummary.totalPekerja}</div>
-                    <div style={{ color: "#94a3b8" }}>pekerja</div>
-                  </div>
-                  <div className="rounded-xl py-2" style={{ background: "rgba(255,255,255,0.75)" }}>
-                    <div className="font-black" style={{ color: "#16a34a" }}>{rekapGajiAllTimeSummary.totalPcsSetor.toLocaleString()}</div>
-                    <div style={{ color: "#94a3b8" }}>pcs setor</div>
-                  </div>
-                  <div className="rounded-xl py-2" style={{ background: "rgba(255,255,255,0.75)" }}>
-                    <div className="font-black" style={{ color: "#7c3aed" }}>{rekapGajiAllTimeSummary.totalTransaksi.toLocaleString()}</div>
-                    <div style={{ color: "#94a3b8" }}>transaksi</div>
-                  </div>
-                </div>
-                <div className="mt-2 rounded-xl px-3 py-2 text-[11px] font-semibold" style={{ background: "#ecfdf5", color: "#047857", border: "1px solid #bbf7d0" }}>
-                  Ini total keseluruhan, bukan berdasarkan filter periode. Status Sudah/Belum Gajian tetap mengikuti periode yang dipilih.
-                </div>
-              </div>
-            )}
-
             {rekapPerkerja.length > 0 && (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
@@ -3995,7 +4312,7 @@ function findRate(productType, model, process) {
               <Input
                 label="Nama Pekerja"
                 value={entryForm.employeeName}
-                onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: displayWorkerName(v) }))}
+                onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: v }))}
                 placeholder="Contoh: Teh Emy"
               />
               {workerNameOptions.length > 0 && (
@@ -4264,6 +4581,9 @@ function findRate(productType, model, process) {
                   pesananId: v,
                   penerima: p?.customer || "",
                   items: p ? [{ nama: p.item || "", qtyPesan: Number(p.qty || 0), qtyKirim: 0 }] : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
+                  shortShipmentMode: "temporary",
+                  shortShipmentReason: "Stok kain habis",
+                  shortShipmentNote: "",
                 }));
               }}
             >
@@ -4299,6 +4619,50 @@ function findRate(productType, model, process) {
                 </div>
               </div>
             ))}
+            {(() => {
+              const totalPesan = (kirimForm.items || []).reduce((s, it) => s + Number(it.qtyPesan || 0), 0);
+              const totalKirim = (kirimForm.items || []).reduce((s, it) => s + Number(it.qtyKirim || 0), 0);
+              const sisa = Math.max(0, totalPesan - totalKirim);
+              const lebih = Math.max(0, totalKirim - totalPesan);
+              if (!kirimForm.pesananId || totalKirim <= 0 || (sisa <= 0 && lebih <= 0)) return null;
+              if (lebih > 0) {
+                return (
+                  <div className="rounded-2xl border p-3 text-xs" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+                    <div className="font-bold mb-1">⚠️ Kelebihan kirim {lebih.toLocaleString("id-ID")} pcs</div>
+                    <div>Qty kirim lebih besar dari pesanan. Kelebihan ini akan ikut menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim.</div>
+                  </div>
+                );
+              }
+              return (
+                <div className="rounded-2xl border p-3 text-xs space-y-3" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
+                  <div>
+                    <div className="font-bold mb-1">⚠️ Pengiriman kurang dari pesanan</div>
+                    <div>Pesanan {totalPesan.toLocaleString("id-ID")} pcs · dikirim {totalKirim.toLocaleString("id-ID")} pcs · sisa {sisa.toLocaleString("id-ID")} pcs.</div>
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
+                      <input type="radio" checked={(kirimForm.shortShipmentMode || "temporary") === "temporary"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "temporary" }))} />
+                      <span><b>Kurang kirim sementara</b><br/>Pilih ini jika sisa barang masih akan diproduksi/dikirim lagi nanti. Status menjadi Dikirim Sebagian dan sisa tetap tampil di Dashboard.</span>
+                    </label>
+                    <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
+                      <input type="radio" checked={kirimForm.shortShipmentMode === "final"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "final" }))} />
+                      <span><b>Kurang kirim final</b><br/>Pilih ini jika sisa tidak akan dikirim lagi. Order ditutup sebagai Kurang Kirim Final, sisa tidak jadi tanggungan aktif, dan tagihan tetap hanya dari qty terkirim.</span>
+                    </label>
+                  </div>
+                  {kirimForm.shortShipmentMode === "final" && (
+                    <div className="grid gap-2">
+                      <Select label="Alasan kurang kirim final" value={kirimForm.shortShipmentReason || "Stok kain habis"} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentReason: v }))}>
+                        <option value="Stok kain habis">Stok kain habis</option>
+                        <option value="Produksi hanya jadi segitu">Produksi hanya jadi segitu</option>
+                        <option value="Customer setuju dikurangi">Customer setuju dikurangi</option>
+                        <option value="Lainnya">Lainnya</option>
+                      </Select>
+                      <Input label="Catatan penutupan" value={kirimForm.shortShipmentNote || ""} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentNote: v }))} placeholder="Opsional" />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <Input label="Catatan" value={kirimForm.catatan} onChange={(v) => setKirimForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
             <Button onClick={addPengiriman} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
               Simpan Pengiriman
