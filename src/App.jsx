@@ -3059,8 +3059,14 @@ function findRate(productType, model, process) {
           const allTotals = setorTotals(e);
           const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
           const inputInRange = inRange(e.tanggal);
+          // Basis "Diberi" di Rekap tidak boleh hanya melihat tanggal pemberian.
+          // Kalau pekerjaan diberi minggu lalu tetapi disetor minggu ini, qty tersebut tetap harus menjadi basis rekap periode ini.
+          // Ini mencegah tampilan tidak logis seperti Diberi 174 tetapi Setor 554.
+          const qtyBasisPeriode = inputInRange
+            ? Number(e.qty || 0)
+            : Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
           if (!byProses[p]) byProses[p] = { qty: 0, qtySetor: 0, qtyReject: 0, gaji: 0 };
-          if (inputInRange) byProses[p].qty += Number(e.qty || 0);
+          byProses[p].qty += Math.max(0, qtyBasisPeriode);
           byProses[p].qtySetor += Number(rangeTotals.qtySetor || 0);
           byProses[p].qtyReject += Number(rangeTotals.qtyReject || 0);
           byProses[p].gaji += Number(rangeTotals.totalWageSetor || 0);
@@ -3068,7 +3074,14 @@ function findRate(productType, model, process) {
             // Entry masuk periode ini tetapi setor terjadi di luar periode: tetap tampil sebagai belum masuk gaji periode.
           }
         });
-        const totalQty = filtered.reduce((s, e) => s + (inRange(e.tanggal) ? Number(e.qty || 0) : 0), 0);
+        const totalQty = filtered.reduce((s, e) => {
+          const inputInRange = inRange(e.tanggal);
+          const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
+          const qtyBasisPeriode = inputInRange
+            ? Number(e.qty || 0)
+            : Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+          return s + Math.max(0, qtyBasisPeriode);
+        }, 0);
         const totalSetor = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtySetor || 0), 0);
         const totalReject = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtyReject || 0), 0);
         const totalGaji = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).totalWageSetor || 0), 0);
@@ -3089,7 +3102,12 @@ function findRate(productType, model, process) {
           const rangeTotals = setorTotalsFromHistory(rangeHistory);
           const allTotals = setorTotals(e);
           if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
-          if (inputInRange) rekapMap[nama].pcsAwal += Number(e.qty || 0);
+          // Basis "Diberi" per pekerja: pekerjaan yang diberi dalam periode + pekerjaan lama yang disetor/reject dalam periode.
+          // Jadi angka Diberi tidak lebih kecil dari Setor karena carry-over minggu sebelumnya.
+          const qtyBasisPeriode = inputInRange
+            ? Number(e.qty || 0)
+            : Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+          rekapMap[nama].pcsAwal += Math.max(0, qtyBasisPeriode);
           rekapMap[nama].pcsSetor += Number(rangeTotals.qtySetor || 0);
           rekapMap[nama].pcsReject += Number(rangeTotals.qtyReject || 0);
           rekapMap[nama].gaji += Number(rangeTotals.totalWageSetor || 0);
@@ -3101,7 +3119,8 @@ function findRate(productType, model, process) {
             invoice: e.invoice || entryOrder?.invoice || "",
             model: displayModelName(e.model || "-"),
             process: e.process || "",
-            qty: Number(e.qty || 0),
+            qty: Math.max(0, qtyBasisPeriode),
+            qtyAsli: Number(e.qty || 0),
             qtySetor: Number(rangeTotals.qtySetor || 0),
             qtyReject: Number(rangeTotals.qtyReject || 0),
             totalSetorSemua: Number(allTotals.qtySetor || 0),
