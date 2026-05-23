@@ -503,6 +503,8 @@ export default function App() {
   const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const slipRef = useRef(null);
+  const backUiRef = useRef({});
+  const lastBackPressRef = useRef(0);
 
   const [orders, setOrders] = useState([]);
   const [produksi, setProduksi] = useState([]);
@@ -543,6 +545,62 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    backUiRef.current = {
+      tab,
+      modal,
+      confirmDelete,
+      setorModal,
+      editEntryModal,
+      slipPreview,
+      search,
+    };
+  });
+
+  useEffect(() => {
+    if (!user || typeof window === "undefined") return;
+
+    const pushGuardState = () => {
+      window.history.pushState({ galleryProduksiBackGuard: true }, "", window.location.href);
+    };
+
+    pushGuardState();
+
+    const closeTopLayer = () => {
+      const ui = backUiRef.current || {};
+      if (ui.confirmDelete) { setConfirmDelete(null); return true; }
+      if (ui.setorModal) { setSetorModal(null); return true; }
+      if (ui.editEntryModal) { setEditEntryModal(null); return true; }
+      if (ui.slipPreview) { setSlipPreview(null); return true; }
+      if (ui.modal) { setModal(null); return true; }
+      if (ui.search) { setSearch(""); return true; }
+      if (ui.tab && ui.tab !== "pesanan") { setTab("pesanan"); return true; }
+      return false;
+    };
+
+    const onPopState = () => {
+      if (closeTopLayer()) {
+        pushGuardState();
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastBackPressRef.current < 1600) {
+        window.removeEventListener("popstate", onPopState);
+        window.history.back();
+        return;
+      }
+
+      lastBackPressRef.current = now;
+      setToast("Tekan tombol back sekali lagi untuk keluar");
+      setTimeout(() => setToast(""), 1600);
+      pushGuardState();
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
