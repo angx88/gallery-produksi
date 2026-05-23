@@ -187,6 +187,15 @@ function dateAfter(value, compareTo) {
   return Boolean(t && c && t > c);
 }
 
+function dateRangesOverlap(startA, endA, startB, endB) {
+  const a1 = dateKey(startA);
+  const a2 = dateKey(endA);
+  const b1 = dateKey(startB);
+  const b2 = dateKey(endB);
+  if (!a1 || !a2 || !b1 || !b2) return false;
+  return a1 <= b2 && b1 <= a2;
+}
+
 // ─── Master Data Normalization ──────────────────────────────────────────────
 // Tujuan: data lama yang beda kapital, titik, strip, spasi, atau typo ringan
 // tetap dianggap satu master. Contoh: "A muslim", "A. Muslim", "a-muslim"
@@ -2028,13 +2037,40 @@ function findRate(productType, model, process) {
   }
 
 
-  function payrollMarkerFor(nama, dari = rekapDari, sampai = rekapSampai) {
-    return payrollExpenses.find((p) =>
-      p.periodeGajiDari === dari &&
-      p.periodeGajiSampai === sampai &&
-      normalizeWorkerNameKey(p.employeeName) === normalizeWorkerNameKey(nama) &&
-      (p.source === "gallery-produksi-gaji-marker" || p.type === "status_gajian_periode" || p.status === "sudah_dibayar")
+  function isGajianMarker(p) {
+    return Boolean(
+      p &&
+      normalizeWorkerNameKey(p.employeeName) &&
+      (p.source === "gallery-produksi-gaji-marker" ||
+        p.type === "status_gajian_periode" ||
+        p.status === "sudah_dibayar")
     );
+  }
+
+  function markerMatchesPeriode(p, dari = rekapDari, sampai = rekapSampai) {
+    const targetDari = dateKey(dari);
+    const targetSampai = dateKey(sampai);
+    if (!targetDari || !targetSampai) return false;
+
+    const markerDari = dateKey(p?.periodeGajiDari || p?.periodeDari || p?.tanggalDari || p?.startDate);
+    const markerSampai = dateKey(p?.periodeGajiSampai || p?.periodeSampai || p?.tanggalSampai || p?.endDate);
+
+    // Data marker lama disimpan dengan periode exact. Setelah periode rekap dibetulkan
+    // menjadi Minggu-Sabtu, marker lama seperti 2026-05-16 s/d 2026-05-23
+    // harus tetap terbaca untuk periode baru 2026-05-17 s/d 2026-05-23.
+    if (markerDari === targetDari && markerSampai === targetSampai) return true;
+    return dateRangesOverlap(markerDari, markerSampai, targetDari, targetSampai);
+  }
+
+  function payrollMarkerFor(nama, dari = rekapDari, sampai = rekapSampai) {
+    const workerKey = normalizeWorkerNameKey(nama);
+    if (!workerKey) return null;
+
+    return payrollExpenses.find((p) =>
+      isGajianMarker(p) &&
+      normalizeWorkerNameKey(p.employeeName) === workerKey &&
+      markerMatchesPeriode(p, dari, sampai)
+    ) || null;
   }
 
   function sudahGajian(nama, dari = rekapDari, sampai = rekapSampai) {
