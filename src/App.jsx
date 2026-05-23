@@ -478,6 +478,30 @@ function hasDeliveryDetail(order) {
   );
 }
 
+function dashboardTotalOrderedQty(order) {
+  return rawOrderItemsForDelivery(order).reduce((sum, item) => sum + Number(item.orderedQty || item.qty || 0), 0);
+}
+
+function dashboardTotalShippedQty(order) {
+  const raw = order?.raw || order || {};
+
+  if (Array.isArray(raw.deliveries) && raw.deliveries.length > 0) {
+    return raw.deliveries.reduce((deliverySum, delivery) => {
+      return deliverySum + (delivery.items || []).reduce((itemSum, item) => {
+        return itemSum + Number(item.qty ?? item.shippedQty ?? item.qtyKirim ?? item.sentQty ?? 0);
+      }, 0);
+    }, 0);
+  }
+
+  if (Array.isArray(raw.shippedItems) && raw.shippedItems.length > 0) {
+    return raw.shippedItems.reduce((sum, item) => {
+      return sum + Number(item.shippedQty ?? item.qtyKirim ?? item.qty ?? item.quantity ?? item.sentQty ?? 0);
+    }, 0);
+  }
+
+  return Number(raw.totalKirim ?? raw.totalShipped ?? raw.shippedQty ?? raw.sentQty ?? 0);
+}
+
 function isLegacyDoneOrSentOrder(order) {
   const raw = order?.raw || order || {};
   const statusText = [
@@ -1367,23 +1391,50 @@ export default function App() {
     const gajiKeseluruhan = officialGajiPayrollTotal(payrollExpenses);
     const produksiAktif = (produksi || []).filter((p) => p.status !== "Selesai").length;
     const boronganAktif = entryTotals.filter((t) => Number(t.sisaSetor || 0) > 0).length;
-    const pesananPcs = (orders || []).reduce((sum, order) => {
-      try { return sum + normalizeOrderItems(order).reduce((a, item) => a + Number(item.qty || 0), 0); }
-      catch (e) { return sum + Number(order.qty || 0); }
-    }, 0);
-    const terkirimPcs = (orders || []).reduce((sum, order) => {
-      try { return sum + normalizeShipmentItems(order).reduce((a, item) => a + Number(item.shippedQty || 0), 0); }
-      catch (e) { return sum; }
-    }, 0);
-    const sisaKirim = Math.max(0, pesananPcs - terkirimPcs);
+
+    const orderQtySummary = (orders || []).reduce((acc, order) => {
+      const ordered = dashboardTotalOrderedQty(order);
+      let shipped = dashboardTotalShippedQty(order);
+
+      // Data lama Gallery Kerudung sering hanya punya status Dikirim/Selesai/Lunas
+      // tanpa detail deliveries/shippedItems. Untuk Dashboard, jangan hitung data lama
+      // seperti itu sebagai sisa kirim. Anggap sudah terkirim penuh sambil menunggu
+      // auto-sync legacy mengisi deliveries di Firestore.
+      if (!hasDeliveryDetail(order) && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) {
+        shipped = ordered;
+      }
+
+      const remaining = Math.max(0, ordered - shipped);
+      const over = Math.max(0, shipped - ordered);
+      const alreadyInProduction = produksiByOrderId.has(order.id);
+      const finishedOrDelivered = orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId);
+      const belumProduksi = !alreadyInProduction && !finishedOrDelivered;
+      const siapKirim = !belumProduksi && remaining > 0;
+
+      acc.pesananPcs += ordered;
+      acc.terkirimPcs += shipped;
+      acc.sisaKirimTotal += remaining;
+      acc.kelebihanKirim += over;
+      if (belumProduksi) acc.pcsBelumProduksi += remaining;
+      if (siapKirim) acc.sisaKirimSiap += remaining;
+      return acc;
+    }, { pesananPcs: 0, terkirimPcs: 0, sisaKirimTotal: 0, sisaKirimSiap: 0, pcsBelumProduksi: 0, kelebihanKirim: 0 });
+
     const bahanTotal = (materials || []).length;
     const shipmentTotal = (shipments || []).length;
 
     return {
       totalDiberi, totalSetor, totalReject, totalSisaSetor, gajiKeseluruhan,
-      produksiAktif, boronganAktif, pesananPcs, terkirimPcs, sisaKirim, bahanTotal, shipmentTotal,
+      produksiAktif, boronganAktif,
+      pesananPcs: orderQtySummary.pesananPcs,
+      terkirimPcs: orderQtySummary.terkirimPcs,
+      sisaKirim: orderQtySummary.sisaKirimSiap,
+      sisaKirimTotal: orderQtySummary.sisaKirimTotal,
+      pcsBelumProduksi: orderQtySummary.pcsBelumProduksi,
+      kelebihanKirim: orderQtySummary.kelebihanKirim,
+      bahanTotal, shipmentTotal,
     };
-  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments]);
+  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId]);
 
   
   const workerNameOptions = useMemo(() => {
@@ -2845,7 +2896,9 @@ function findRate(productType, model, process) {
               { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "⏳", tab: "produksi" },
               { label: "Pcs pesanan", value: dashboardSummary.pesananPcs.toLocaleString(), color: "#6366f1", icon: "📋", tab: "pesanan" },
               { label: "Pcs terkirim", value: dashboardSummary.terkirimPcs.toLocaleString(), color: "#0ea5e9", icon: "🚚", tab: "kirim" },
-              { label: "Sisa kirim", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "📦", tab: "kirim" },
+              { label: "Pcs belum produksi", value: dashboardSummary.pcsBelumProduksi.toLocaleString(), color: dashboardSummary.pcsBelumProduksi > 0 ? "#d97706" : "#94a3b8", icon: "🧵", tab: "pesanan" },
+              { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "📦", tab: "kirim" },
+              { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "⚠️", tab: "kirim" },
               { label: "Data kain", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "🎨", tab: "kain" },
             ].map((card) => (
               <button key={card.label} onClick={() => setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
@@ -3342,7 +3395,7 @@ function findRate(productType, model, process) {
           allTimePayrollMap[nama].detail.push({
             tanggalSetor: tanggal || "-",
             process: p.process || "-",
-            model: canonicalByExisting(p.model || p.productType || "-", modelOptions, "model"),
+            model: canonicalByExisting(p.model || p.productType || "-", modelNameOptions, "model"),
             invoice: p.invoice || "",
             customer: p.customer || "-",
             qtySetor: pcs,
