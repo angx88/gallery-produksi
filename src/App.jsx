@@ -903,7 +903,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
-  const [tab, setTab] = useState("pesanan");
+  const [tab, setTab] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
   const initialRekapPeriod = useMemo(() => currentSundayToSaturdayPeriod(), []);
@@ -1026,7 +1026,7 @@ export default function App() {
       if (ui.rekapDetailModal) { setRekapDetailModal(null); return true; }
       if (ui.modal) { setModal(null); return true; }
       if (ui.search) { setSearch(""); return true; }
-      if (ui.tab && ui.tab !== "pesanan") { setTab("pesanan"); return true; }
+      if (ui.tab && ui.tab !== "dashboard") { setTab("dashboard"); return true; }
       return false;
     };
 
@@ -1357,6 +1357,33 @@ export default function App() {
       payroll: officialGajiPayrollTotal(payrollExpenses),
     };
   }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi]);
+
+  const dashboardSummary = useMemo(() => {
+    const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
+    const totalDiberi = (productionEntries || []).reduce((sum, e) => sum + Number(e.qty || 0), 0);
+    const totalSetor = entryTotals.reduce((sum, t) => sum + Number(t.qtySetor || 0), 0);
+    const totalReject = entryTotals.reduce((sum, t) => sum + Number(t.qtyReject || 0), 0);
+    const totalSisaSetor = entryTotals.reduce((sum, t) => sum + Number(t.sisaSetor || 0), 0);
+    const gajiKeseluruhan = officialGajiPayrollTotal(payrollExpenses);
+    const produksiAktif = (produksi || []).filter((p) => p.status !== "Selesai").length;
+    const boronganAktif = entryTotals.filter((t) => Number(t.sisaSetor || 0) > 0).length;
+    const pesananPcs = (orders || []).reduce((sum, order) => {
+      try { return sum + normalizeOrderItems(order).reduce((a, item) => a + Number(item.qty || 0), 0); }
+      catch (e) { return sum + Number(order.qty || 0); }
+    }, 0);
+    const terkirimPcs = (orders || []).reduce((sum, order) => {
+      try { return sum + normalizeShipmentItems(order).reduce((a, item) => a + Number(item.shippedQty || 0), 0); }
+      catch (e) { return sum; }
+    }, 0);
+    const sisaKirim = Math.max(0, pesananPcs - terkirimPcs);
+    const bahanTotal = (materials || []).length;
+    const shipmentTotal = (shipments || []).length;
+
+    return {
+      totalDiberi, totalSetor, totalReject, totalSisaSetor, gajiKeseluruhan,
+      produksiAktif, boronganAktif, pesananPcs, terkirimPcs, sisaKirim, bahanTotal, shipmentTotal,
+    };
+  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments]);
 
   
   const workerNameOptions = useMemo(() => {
@@ -2752,6 +2779,7 @@ function findRate(productType, model, process) {
 
       <div className="sticky top-0 z-40 flex bg-white shadow-sm" style={{ borderBottom: "2px solid #fce7f3" }}>
         {[
+          { id: "dashboard", label: "Dashboard", icon: "🏠" },
           { id: "pesanan", label: "Pesanan", icon: "📋", badge: stats.belum },
           { id: "produksi", label: "Produksi", icon: "🧵" },
           { id: "borongan", label: "Borongan", icon: "💪" },
@@ -2781,6 +2809,67 @@ function findRate(productType, model, process) {
           </button>
         ))}
       </div>
+
+      {tab === "dashboard" && (
+        <div className="space-y-4 p-4">
+          <div className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-lg font-black" style={{ color: "#ec4899" }}>📌 Dashboard Produksi</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>Ringkasan total keseluruhan dan periode berjalan</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#fdf2f8", color: "#ec4899" }}>Rekap ›</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: "Pcs diberikan", value: dashboardSummary.totalDiberi.toLocaleString(), color: "#ec4899", sub: "semua borongan", tab: "borongan" },
+                { label: "Pcs disetor", value: dashboardSummary.totalSetor.toLocaleString(), color: "#16a34a", sub: "semua waktu", tab: "rekap" },
+                { label: "Pcs reject", value: dashboardSummary.totalReject.toLocaleString(), color: "#d97706", sub: "semua waktu", tab: "rekap" },
+                { label: "Sisa setor", value: dashboardSummary.totalSisaSetor.toLocaleString(), color: dashboardSummary.totalSisaSetor > 0 ? "#b45309" : "#94a3b8", sub: "belum disetor", tab: "borongan" },
+              ].map((card) => (
+                <button key={card.label} onClick={() => setTab(card.tab)} className="rounded-2xl bg-white p-3 text-left active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
+                  <div className="text-xl font-black" style={{ color: card.color }}>{card.value}</div>
+                  <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>{card.label}</div>
+                  <div className="text-[10px]" style={{ color: "#94a3b8" }}>{card.sub}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "💰", tab: "rekap" },
+              { label: "Produksi aktif", value: dashboardSummary.produksiAktif.toLocaleString(), color: "#a855f7", icon: "🧵", tab: "produksi" },
+              { label: "Borongan aktif", value: dashboardSummary.boronganAktif.toLocaleString(), color: "#f59e0b", icon: "💪", tab: "borongan" },
+              { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "⏳", tab: "produksi" },
+              { label: "Pcs pesanan", value: dashboardSummary.pesananPcs.toLocaleString(), color: "#6366f1", icon: "📋", tab: "pesanan" },
+              { label: "Pcs terkirim", value: dashboardSummary.terkirimPcs.toLocaleString(), color: "#0ea5e9", icon: "🚚", tab: "kirim" },
+              { label: "Sisa kirim", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "📦", tab: "kirim" },
+              { label: "Data kain", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "🎨", tab: "kain" },
+            ].map((card) => (
+              <button key={card.label} onClick={() => setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xl">{card.icon}</span>
+                  <span className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian ›</span>
+                </div>
+                <div className="mt-2 text-xl font-black break-words" style={{ color: card.color }}>{card.value}</div>
+                <div className="text-xs font-semibold" style={{ color: "#64748b" }}>{card.label}</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fed7aa", background: "linear-gradient(135deg,#fff7ed,#ffffff)" }}>
+            <div className="text-sm font-black" style={{ color: "#c2410c" }}>✅ Yang cocok ditambahkan berikutnya</div>
+            <div className="grid gap-2 text-xs" style={{ color: "#7c2d12" }}>
+              <div>• <strong>Notifikasi tugas hari ini:</strong> borongan belum setor, produksi belum selesai, dan kiriman belum lengkap.</div>
+              <div>• <strong>Top pekerja:</strong> ranking pcs setor dan total gaji bulan ini.</div>
+              <div>• <strong>Alert data bermasalah:</strong> setor lebih besar dari diberi, tarif kosong, order tanpa produk, atau pengiriman tanpa itemIndex.</div>
+              <div>• <strong>Grafik mingguan:</strong> pcs setor, reject, dan gaji per minggu.</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {tab === "pesanan" && (
         <div className="space-y-3 p-4">
@@ -3223,6 +3312,59 @@ function findRate(productType, model, process) {
           totalBelumSetor: 0,
         });
 
+        const allTimePayrollRows = payrollExpenses
+          .filter(isOfficialGajiPayroll)
+          .sort((a, b) => String(dateKey(b.tanggal || b.tanggalSetor || b.createdAt || "")).localeCompare(String(dateKey(a.tanggal || a.tanggalSetor || a.createdAt || ""))));
+
+        const allTimePayrollMap = {};
+        allTimePayrollRows.forEach((p) => {
+          const nama = canonicalByExisting(p.employeeName, workerNameOptions, "worker");
+          const key = normalizeWorkerNameKey(nama);
+          if (!key) return;
+          if (!allTimePayrollMap[nama]) {
+            allTimePayrollMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, transaksi: 0, firstDate: "", lastDate: "", detail: [] };
+          }
+
+          const tanggal = dateKey(p.tanggal || p.tanggalSetor || p.createdAt || "");
+          const pcs = Number(p.totalPcs || p.qtySetor || p.qty || 0);
+          const reject = Number(p.totalReject || p.qtyReject || 0);
+          const gaji = Number(p.totalAmount || 0);
+
+          allTimePayrollMap[nama].pcsSetor += pcs;
+          allTimePayrollMap[nama].pcsReject += reject;
+          allTimePayrollMap[nama].pcsAwal += Math.max(0, pcs + reject);
+          allTimePayrollMap[nama].gaji += gaji;
+          allTimePayrollMap[nama].transaksi += 1;
+          if (tanggal) {
+            if (!allTimePayrollMap[nama].firstDate || tanggal < allTimePayrollMap[nama].firstDate) allTimePayrollMap[nama].firstDate = tanggal;
+            if (!allTimePayrollMap[nama].lastDate || tanggal > allTimePayrollMap[nama].lastDate) allTimePayrollMap[nama].lastDate = tanggal;
+          }
+          allTimePayrollMap[nama].detail.push({
+            tanggalSetor: tanggal || "-",
+            process: p.process || "-",
+            model: canonicalByExisting(p.model || p.productType || "-", modelOptions, "model"),
+            invoice: p.invoice || "",
+            customer: p.customer || "-",
+            qtySetor: pcs,
+            qtyReject: reject,
+            wage: gaji,
+            source: p.source || "payroll_expenses",
+          });
+        });
+
+        const rekapGajiAllTimeRows = Object.entries(allTimePayrollMap)
+          .filter(([, r]) => Number(r.gaji || 0) > 0 || Number(r.pcsSetor || 0) > 0)
+          .sort((a, b) => Number(b[1].gaji || 0) - Number(a[1].gaji || 0));
+
+        const rekapGajiAllTimeSummary = rekapGajiAllTimeRows.reduce((acc, [, r]) => {
+          acc.totalPekerja += 1;
+          acc.totalGaji += Number(r.gaji || 0);
+          acc.totalPcsSetor += Number(r.pcsSetor || 0);
+          acc.totalPcsReject += Number(r.pcsReject || 0);
+          acc.totalTransaksi += Number(r.transaksi || 0);
+          return acc;
+        }, { totalPekerja: 0, totalGaji: 0, totalPcsSetor: 0, totalPcsReject: 0, totalTransaksi: 0 });
+
         const boronganBelumMasukRekap = !rekapPeriodReady ? [] : productionEntries
           .map((e) => {
             const totals = setorTotals(e);
@@ -3318,6 +3460,42 @@ function findRate(productType, model, process) {
               </div>
             </div>
 
+            {rekapGajiAllTimeSummary.totalGaji > 0 && (
+              <div
+                onClick={() => setRekapDetailModal("allTime")}
+                className="rounded-2xl bg-white p-4 active:scale-[0.99] transition-transform cursor-pointer"
+                style={{ border: "1px solid #bbf7d0", background: "linear-gradient(135deg,#f0fdf4,#f5f3ff)" }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-black" style={{ color: "#16a34a" }}>📚 Rekap Gaji Total Keseluruhan</div>
+                    <div className="text-[10px] mt-0.5" style={{ color: "#64748b" }}>Semua waktu dari payroll resmi Gallery Produksi</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xl font-black" style={{ color: "#16a34a" }}>{money(rekapGajiAllTimeSummary.totalGaji)}</div>
+                    <div className="text-[10px] font-semibold" style={{ color: "#64748b" }}>Rincian ›</div>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="rounded-xl py-2" style={{ background: "rgba(255,255,255,0.75)" }}>
+                    <div className="font-black" style={{ color: "#2d1b69" }}>{rekapGajiAllTimeSummary.totalPekerja}</div>
+                    <div style={{ color: "#94a3b8" }}>pekerja</div>
+                  </div>
+                  <div className="rounded-xl py-2" style={{ background: "rgba(255,255,255,0.75)" }}>
+                    <div className="font-black" style={{ color: "#16a34a" }}>{rekapGajiAllTimeSummary.totalPcsSetor.toLocaleString()}</div>
+                    <div style={{ color: "#94a3b8" }}>pcs setor</div>
+                  </div>
+                  <div className="rounded-xl py-2" style={{ background: "rgba(255,255,255,0.75)" }}>
+                    <div className="font-black" style={{ color: "#7c3aed" }}>{rekapGajiAllTimeSummary.totalTransaksi.toLocaleString()}</div>
+                    <div style={{ color: "#94a3b8" }}>transaksi</div>
+                  </div>
+                </div>
+                <div className="mt-2 rounded-xl px-3 py-2 text-[11px] font-semibold" style={{ background: "#ecfdf5", color: "#047857", border: "1px solid #bbf7d0" }}>
+                  Ini total keseluruhan, bukan berdasarkan filter periode. Status Sudah/Belum Gajian tetap mengikuti periode yang dipilih.
+                </div>
+              </div>
+            )}
+
             {rekapPerkerja.length > 0 && (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
@@ -3371,14 +3549,18 @@ function findRate(productType, model, process) {
                 setorTotals(e).sisaSetor > 0 &&
                 dateBefore(e.tanggal, rekapDari)
               );
-              const baseRows = rekapPerkerja.map(([nama, r]) => ({
-                nama,
-                r,
-                sudah: sudahGajian(nama, rekapDari, rekapSampai),
-                carryOver: getCarryOver(nama),
-              }));
+              const isAllTimeDetail = rekapDetailModal === "allTime";
+              const baseRows = isAllTimeDetail
+                ? rekapGajiAllTimeRows.map(([nama, r]) => ({ nama, r, sudah: false, carryOver: [] }))
+                : rekapPerkerja.map(([nama, r]) => ({
+                    nama,
+                    r,
+                    sudah: sudahGajian(nama, rekapDari, rekapSampai),
+                    carryOver: getCarryOver(nama),
+                  }));
               const filteredRows = baseRows
                 .filter((row) => {
+                  if (isAllTimeDetail) return true;
                   if (rekapDetailModal === "sudah") return row.sudah;
                   if (rekapDetailModal === "belum") return !row.sudah;
                   if (rekapDetailModal === "belumSetor") return Number(row.r?.belumSetor || 0) > 0;
@@ -3397,6 +3579,7 @@ function findRate(productType, model, process) {
                 pekerja: "Rincian Semua Pekerja",
                 setor: "Rincian PCS Setor",
                 belumSetor: "Rincian Belum Setor",
+                allTime: "Rincian Gaji Total Keseluruhan",
               };
               const modalTotalGaji = filteredRows.reduce((sum, row) => sum + Number(row.r?.gaji || 0), 0);
               const modalTotalSetor = filteredRows.reduce((sum, row) => sum + Number(row.r?.pcsSetor || 0), 0);
@@ -3408,7 +3591,7 @@ function findRate(productType, model, process) {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-base font-black" style={{ color: "#2d1b69" }}>{titleMap[rekapDetailModal] || "Rincian Rekap"}</div>
-                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"} · {filteredRows.length} pekerja</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{isAllTimeDetail ? "Semua waktu" : (rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih")} · {filteredRows.length} pekerja</div>
                         </div>
                         <button type="button" onClick={() => setRekapDetailModal(null)} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#f1f5f9", color: "#64748b" }}>Tutup</button>
                       </div>
@@ -3436,9 +3619,15 @@ function findRate(productType, model, process) {
                             <div>
                               <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
                               <div className="mt-1 flex flex-wrap gap-1">
-                                <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: sudah ? "#dcfce7" : "#fef3c7", color: sudah ? "#16a34a" : "#b45309" }}>
-                                  {sudah ? "✅ Sudah gajian" : "⏳ Belum gajian"}
-                                </span>
+                                {isAllTimeDetail ? (
+                                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#ecfdf5", color: "#047857" }}>
+                                    📚 Semua waktu · {Number(r.transaksi || 0).toLocaleString()} transaksi
+                                  </span>
+                                ) : (
+                                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: sudah ? "#dcfce7" : "#fef3c7", color: sudah ? "#16a34a" : "#b45309" }}>
+                                    {sudah ? "✅ Sudah gajian" : "⏳ Belum gajian"}
+                                  </span>
+                                )}
                                 {Number(r.belumSetor || 0) > 0 && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#fffbeb", color: "#b45309" }}>⏳ {r.belumSetor} blm setor</span>}
                               </div>
                             </div>
@@ -3452,14 +3641,16 @@ function findRate(productType, model, process) {
                             <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong><div style={{ color: "#94a3b8" }}>setor</div></div>
                             <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong style={{ color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" }}>{r.pcsReject}</strong><div style={{ color: "#94a3b8" }}>reject</div></div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => { setRekapDetailModal(null); setSlipPreview({ nama, r, dari: rekapDari, sampai: rekapSampai, carryOver }); }}
-                            className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
-                            style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
-                          >
-                            👁️ Lihat Slip
-                          </button>
+                          {!isAllTimeDetail && (
+                            <button
+                              type="button"
+                              onClick={() => { setRekapDetailModal(null); setSlipPreview({ nama, r, dari: rekapDari, sampai: rekapSampai, carryOver }); }}
+                              className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
+                              style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                            >
+                              👁️ Lihat Slip
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
