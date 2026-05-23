@@ -1845,50 +1845,22 @@ function findRate(productType, model, process) {
 
         return (
           <div className="space-y-3 p-4">
-            {/* Pilih Minggu Gajian */}
-            {(() => {
-              const daftarMinggu = getDaftarMinggu(7);
-              const selectedKey = rekapDari + "_" + rekapSampai;
-              return (
-                <div className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #e9d5ff" }}>
-                  <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>📅 Pilih Periode Gajian</div>
-                  <div className="space-y-1.5">
-                    {daftarMinggu.map((m, i) => {
-                      const isSelected = selectedKey === m.key;
-                      return (
-                        <button key={m.key}
-                          onClick={() => { setRekapDari(m.dari); setRekapSampai(m.sampai); }}
-                          className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-left"
-                          style={{
-                            background: isSelected ? "linear-gradient(135deg,#ede9fe,#fce7f3)" : "#f9fafb",
-                            border: isSelected ? "1.5px solid #a855f7" : "1px solid #e2e8f0",
-                          }}>
-                          <span className="text-xs font-bold" style={{ color: isSelected ? "#5b21b6" : "#64748b" }}>
-                            🗓️ {i === 0 ? "Minggu ini" : `${i} minggu lalu`} · {m.dari} s/d {m.sampai}
-                          </span>
-                          {isSelected && <span className="text-xs font-bold" style={{ color: "#a855f7" }}>▶ Dipilih</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <details className="mt-1">
-                    <summary className="text-xs cursor-pointer" style={{ color: "#a855f7" }}>⚙️ Filter tanggal manual</summary>
-                    <div className="grid grid-cols-2 gap-2 mt-2">
-                      <div>
-                        <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
-                        <input type="date" value={rekapDari} onChange={(e) => setRekapDari(e.target.value)}
-                          className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
-                      </div>
-                      <div>
-                        <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Sampai</div>
-                        <input type="date" value={rekapSampai} onChange={(e) => setRekapSampai(e.target.value)}
-                          className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
-                      </div>
-                    </div>
-                  </details>
+            {/* Filter Tanggal Manual */}
+            <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #e9d5ff" }}>
+              <div className="text-xs font-bold mb-3" style={{ color: "#7c3aed" }}>📅 Filter Periode</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
+                  <input type="date" value={rekapDari} onChange={(e) => setRekapDari(e.target.value)}
+                    className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
                 </div>
-              );
-            })()}
+                <div>
+                  <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Sampai</div>
+                  <input type="date" value={rekapSampai} onChange={(e) => setRekapSampai(e.target.value)}
+                    className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
+                </div>
+              </div>
+            </div>
 
             {/* Ringkasan total */}
             <div className="grid grid-cols-2 gap-2">
