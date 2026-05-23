@@ -2038,13 +2038,17 @@ function findRate(productType, model, process) {
 
 
   function isGajianMarker(p) {
-    return Boolean(
-      p &&
-      normalizeWorkerNameKey(p.employeeName) &&
-      (p.source === "gallery-produksi-gaji-marker" ||
-        p.type === "status_gajian_periode" ||
-        p.status === "sudah_dibayar")
-    );
+    if (!p || !normalizeWorkerNameKey(p.employeeName)) return false;
+
+    // Hanya dokumen marker status gajian yang boleh dipakai untuk badge
+    // Sudah/Belum Gajian. Jangan membaca payroll gaji asli hanya karena
+    // punya status "sudah_dibayar", supaya nominal gaji tidak salah dianggap
+    // sebagai marker periode.
+    const isMarkerSource = p.source === "gallery-produksi-gaji-marker";
+    const isMarkerType = p.type === "status_gajian_periode";
+    const zeroAmount = Number(p.totalAmount || 0) === 0;
+
+    return Boolean((isMarkerSource || isMarkerType) && zeroAmount);
   }
 
   function markerMatchesPeriode(p, dari = rekapDari, sampai = rekapSampai) {
