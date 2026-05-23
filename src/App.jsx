@@ -938,6 +938,7 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [tab, setTab] = useState("dashboard");
   const [modal, setModal] = useState(null);
+  const [pesananOnlyNeedCheck, setPesananOnlyNeedCheck] = useState(false);
   const [search, setSearch] = useState("");
   const initialRekapPeriod = useMemo(() => currentSundayToSaturdayPeriod(), []);
   const [rekapDari, setRekapDari] = useState(initialRekapPeriod.dari);
@@ -1418,6 +1419,36 @@ export default function App() {
       })
       .filter(Boolean);
   }, [orders, produksiByOrderId, shipmentByOrderId]);
+
+  const ordersPerluDicekIds = useMemo(() => new Set(ordersPerluDicek.map((o) => o.id)), [ordersPerluDicek]);
+
+  const visiblePesananOrders = useMemo(() => {
+    if (!pesananOnlyNeedCheck) return filteredOrders;
+    return filteredOrders.filter((o) => ordersPerluDicekIds.has(o.id));
+  }, [filteredOrders, pesananOnlyNeedCheck, ordersPerluDicekIds]);
+
+  function openPengirimanForOrder(order) {
+    const items = (order?.items || []).length > 0
+      ? (order.items || []).map((it) => ({
+          nama: it.name || it.item || order.item || "",
+          qtyPesan: Number(it.qty || 0),
+          qtyKirim: 0,
+        }))
+      : [{ nama: order?.item || "", qtyPesan: Number(order?.qty || 0), qtyKirim: 0 }];
+
+    setKirimForm({
+      pesananId: order?.id || "",
+      tanggalKirim: todayStr(),
+      penerima: order?.customer || "",
+      ekspedisi: "",
+      items,
+      shortShipmentMode: "temporary",
+      shortShipmentReason: "Stok kain habis",
+      shortShipmentNote: "",
+      catatan: "",
+    });
+    setModal("kirim");
+  }
 
   const stats = useMemo(() => {
     const selesaiOrders = orders.filter((o) => isDoneStatus(o.status) || isSentStatus(o.status));
@@ -3059,13 +3090,13 @@ function findRate(productType, model, process) {
                   </div>
                 ))}
                 {ordersPerluDicek.length > 4 && (
-                  <div className="text-[11px] font-bold" style={{ color: "#be123c" }}>+ {ordersPerluDicek.length - 4} pesanan lain. Buka tab Pesanan/Pengiriman untuk detail lengkap.</div>
+                  <div className="text-[11px] font-bold" style={{ color: "#be123c" }}>+ {ordersPerluDicek.length - 4} pesanan lain. Klik Buka untuk melihat daftar khusus pesanan perlu dicek.</div>
                 )}
               </div>
             </div>
             <button
               type="button"
-              onClick={() => setTab("pesanan")}
+              onClick={() => { setPesananOnlyNeedCheck(true); setSearch(""); setTab("pesanan"); }}
               className="text-xs font-bold px-3 py-1.5 rounded-full text-white shrink-0"
               style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
             >
@@ -3088,7 +3119,10 @@ function findRate(productType, model, process) {
         ].map((t) => (
           <button
             key={t.id}
-            onClick={() => setTab(t.id)}
+            onClick={() => {
+              if (t.id === "pesanan") setPesananOnlyNeedCheck(false);
+              setTab(t.id);
+            }}
             className="flex-1 py-3 text-[10px] font-semibold flex flex-col items-center gap-1 relative"
             style={{
               color: tab === t.id ? "#ec4899" : "#94a3b8",
@@ -3280,11 +3314,29 @@ function findRate(productType, model, process) {
       {tab === "pesanan" && (
         <div className="space-y-3 p-4">
           <InfoBox title="Sumber: Gallery Kerudung" subtitle="Data realtime dari collection orders" icon="🏪" />
-          {filteredOrders.length === 0 && <Empty text="Tidak ada data pesanan" />}
-          {filteredOrders.map((o) => {
+          {pesananOnlyNeedCheck && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fb7185" }}>
+              <span className="text-xl">🔎</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>Hanya menampilkan pesanan yang perlu dicek</div>
+                <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Admin bisa langsung membuka pengiriman dari kartu ini. Pesanan lain disembunyikan sementara agar tidak membingungkan.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPesananOnlyNeedCheck(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+          {visiblePesananOrders.length === 0 && <Empty text={pesananOnlyNeedCheck ? "Tidak ada pesanan yang perlu dicek" : "Tidak ada data pesanan"} />}
+          {visiblePesananOrders.map((o) => {
             const prod = produksiByOrderId.get(o.id);
             const small = orderSmallStatus(o);
             const canStart = ordersBelumProduksi.some((x) => x.id === o.id);
+            const needCheckInfo = ordersPerluDicek.find((x) => x.id === o.id);
             return (
               <div key={o.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: canStart ? "2px solid #fbbf24" : "1px solid #fce7f3" }}>
                 <div className="flex justify-between items-start">
@@ -3343,6 +3395,31 @@ function findRate(productType, model, process) {
                     )}
                   </div>
                 )}
+                {needCheckInfo && (
+                  <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#fff1f2", border: "1px solid #fecdd3" }}>
+                    <div className="text-xs font-black" style={{ color: "#be123c" }}>🔎 Perlu Dicek</div>
+                    <div className="text-xs mt-1" style={{ color: "#9f1239" }}>{needCheckInfo.alasan}</div>
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <Button
+                        type="button"
+                        onClick={() => openPengirimanForOrder(o)}
+                        className="text-xs"
+                        style={{ background: "linear-gradient(135deg,#0ea5e9,#2563eb)" }}
+                      >
+                        🚚 Edit Pengiriman
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => { setSearch(o.invoice || o.customer || ""); setPesananOnlyNeedCheck(false); }}
+                        className="text-xs"
+                        style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+                      >
+                        Lihat Konteks
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 {canStart && (
                   <Button
                     onClick={() => {
