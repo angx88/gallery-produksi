@@ -125,23 +125,151 @@ function todayStr() {
   return new Date().toISOString().split("T")[0];
 }
 
-// Normalisasi nama pekerja → Title Case
-function toTitleCase(str) {
-  return String(str || "").replace(/\b\w/g, (c) => c.toUpperCase());
+
+function dateKey(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const raw = String(value).trim();
+  if (!raw) return "";
+
+  const isoMatch = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, "0")}-${String(isoMatch[3]).padStart(2, "0")}`;
+  }
+
+  const slashMatch = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+  if (slashMatch) {
+    return `${slashMatch[3]}-${String(slashMatch[2]).padStart(2, "0")}-${String(slashMatch[1]).padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return "";
 }
 
-// Nama pekerja dibuat konsisten agar beda huruf kapital tidak menjadi pekerja berbeda.
-// Contoh: "a muslim", "A muslim", "A Muslim" => satu nama: "A Muslim".
-function normalizeWorkerNameKey(name) {
-  return String(name || "")
-    .trim()
+function dateInRange(value, dari, sampai) {
+  const t = dateKey(value);
+  const d = dateKey(dari);
+  const s = dateKey(sampai);
+  return Boolean(t && d && s && t >= d && t <= s);
+}
+
+function dateBefore(value, compareTo) {
+  const t = dateKey(value);
+  const c = dateKey(compareTo);
+  return Boolean(t && c && t < c);
+}
+
+function dateAfter(value, compareTo) {
+  const t = dateKey(value);
+  const c = dateKey(compareTo);
+  return Boolean(t && c && t > c);
+}
+
+// ─── Master Data Normalization ──────────────────────────────────────────────
+// Tujuan: data lama yang beda kapital, titik, strip, spasi, atau typo ringan
+// tetap dianggap satu master. Contoh: "A muslim", "A. Muslim", "a-muslim"
+// → "A Muslim". Untuk model: "Alya L", "alya-l", "Alya  L" → "Alya L".
+function stripDiacritics(value) {
+  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function toTitleCase(str) {
+  return String(str || "")
+    .toLowerCase()
+    .replace(/\b[a-z0-9]+/g, (word) => {
+      if (/^[ivxlcdm]+$/i.test(word) && word.length <= 4) return word.toUpperCase();
+      if (/^[a-z]$/i.test(word)) return word.toUpperCase();
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    });
+}
+
+function cleanMasterText(value) {
+  return stripDiacritics(value)
+    .replace(/[’`]/g, "'")
+    .replace(/[._\-/\\]+/g, " ")
     .replace(/\s+/g, " ")
-    .toLowerCase();
+    .trim();
+}
+
+function normalizeMasterKey(value) {
+  return cleanMasterText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCompactKey(value) {
+  return normalizeMasterKey(value).replace(/\s+/g, "");
+}
+
+const WORKER_PROCESS_WORDS = new Set([
+  "jahit", "potong", "qc", "packing", "pack", "pengemasan", "borongan",
+  "pcs", "pc", "setor", "hasil"
+]);
+
+const WORKER_TITLE_WORDS = new Set(["teh", "ibu", "mbak", "mba", "pak"]);
+
+const WORKER_NOISE_WORDS = new Set([...WORKER_PROCESS_WORDS, ...WORKER_TITLE_WORDS]);
+
+function normalizeWorkerNameKey(name) {
+  const words = normalizeMasterKey(name)
+    .split(" ")
+    .filter(Boolean)
+    .filter((w) => !WORKER_NOISE_WORDS.has(w));
+  return words.join(" ") || normalizeMasterKey(name);
 }
 
 function displayWorkerName(name) {
-  const clean = String(name || "").trim().replace(/\s+/g, " ");
+  // Tampilan tetap mempertahankan panggilan seperti Teh/Ibu/Mbak/Pak jika memang ada.
+  // Yang dibuang dari tampilan hanya kata proses yang sering ikut salah ketik di nama pekerja.
+  const words = cleanMasterText(name)
+    .split(" ")
+    .filter(Boolean)
+    .filter((w) => !WORKER_PROCESS_WORDS.has(w.toLowerCase()));
+  const clean = words.join(" ");
   return clean ? toTitleCase(clean) : "Tidak Diketahui";
+}
+
+function workerDisplayScore(name) {
+  const words = normalizeMasterKey(name).split(" ").filter(Boolean);
+  const hasTitle = words.some((w) => WORKER_TITLE_WORDS.has(w));
+  const cleanLen = displayWorkerName(name).length;
+  return (hasTitle ? 1000 : 0) - cleanLen;
+}
+
+function normalizeModelKey(name) {
+  return normalizeMasterKey(name);
+}
+
+function displayModelName(name) {
+  const clean = cleanMasterText(name);
+  return clean ? toTitleCase(clean) : "-";
+}
+
+function normalizeProductTypeKey(name) {
+  return normalizeMasterKey(name);
+}
+
+function displayProductTypeName(name) {
+  const key = normalizeProductTypeKey(name);
+  const found = PRODUCT_TYPES.find((p) => normalizeProductTypeKey(p) === key);
+  return found || (cleanMasterText(name) ? toTitleCase(cleanMasterText(name)) : "Kerudung");
+}
+
+function canonicalByExisting(value, candidates, kind = "text") {
+  const keyFn = kind === "worker" ? normalizeWorkerNameKey : kind === "model" ? normalizeModelKey : normalizeMasterKey;
+  const displayFn = kind === "worker" ? displayWorkerName : kind === "model" ? displayModelName : toTitleCase;
+  const key = keyFn(value);
+  if (!key) return displayFn(value);
+  const direct = (candidates || []).find((x) => keyFn(x) === key);
+  if (direct) return displayFn(direct);
+  const compact = normalizeCompactKey(value);
+  const fuzzy = (candidates || []).find((x) => normalizeCompactKey(x) === compact);
+  return displayFn(fuzzy || value);
 }
 
 // Hitung periode minggu (Minggu s/d Sabtu) dari tanggal tertentu
@@ -231,10 +359,7 @@ function setorTotals(entry) {
 }
 
 function setorHistoryInRange(entry, dari, sampai) {
-  return normalizeSetorHistory(entry).filter((h) => {
-    const t = h.tanggalSetor || "";
-    return t >= dari && t <= sampai;
-  });
+  return normalizeSetorHistory(entry).filter((h) => dateInRange(h.tanggalSetor || h.tanggal || "", dari, sampai));
 }
 
 function setorTotalsFromHistory(history) {
@@ -258,7 +383,7 @@ function safeOrder(d) {
 
   if (rawItems.length > 0) {
     items = rawItems.map((it) => ({
-      name: it.name || it.nama || it.item || it.productName || it.model || "-",
+      name: displayModelName(it.name || it.nama || it.item || it.productName || it.model || "-"),
       qty: Number(it.qty || it.quantity || it.jumlah || 0),
       price: Number(it.price || it.harga || it.hargaPcs || 0),
     })).filter((it) => it.qty > 0 || it.name !== "-");
@@ -267,13 +392,13 @@ function safeOrder(d) {
   const totalQty = Number(d.qty || d.quantity || d.jumlah || d.totalQty || 0);
 
   if (items.length === 0) {
-    items = [{ name: d.item || d.productName || d.produk || d.product || "Pesanan", qty: totalQty, price: Number(d.hargaPcs || d.price || 0) }];
+    items = [{ name: displayModelName(d.item || d.productName || d.produk || d.product || "Pesanan"), qty: totalQty, price: Number(d.hargaPcs || d.price || 0) }];
   }
 
   return {
     id: d.id,
     customer: d.customer || d.customerName || d.nama || d.name || "-",
-    item: d.item || d.productName || d.produk || d.product || "-",
+    item: displayModelName(d.item || d.productName || d.produk || d.product || "-"),
     qty: totalQty,
     items,
     invoice: d.invoice || d.orderId || d.kode || d.code || "",
@@ -296,7 +421,7 @@ function rawOrderItemsForDelivery(order) {
       : [{ name: order?.item || raw.item || raw.productName || "Produk", qty: order?.qty || raw.qty || 0, price: raw.hargaPcs || raw.price || 0 }];
 
   return rawItems.map((it, idx) => {
-    const name = it?.name || it?.nama || it?.item || it?.productName || it?.model || order?.item || raw.item || "Produk";
+    const name = displayModelName(it?.name || it?.nama || it?.item || it?.productName || it?.model || order?.item || raw.item || "Produk");
     const orderedQty = Number(it?.qty ?? it?.quantity ?? it?.jumlah ?? order?.qty ?? raw.qty ?? 0);
     const price = Number(it?.price ?? it?.harga ?? it?.hargaPcs ?? raw.hargaPcs ?? raw.price ?? 0);
     const hppPerPcs = Number(it?.hppPerPcs ?? it?.hpp ?? it?.bahanCost ?? it?.materialCost ?? 0);
@@ -724,8 +849,8 @@ export default function App() {
   const [tab, setTab] = useState("pesanan");
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
-  const [rekapDari, setRekapDari] = useState(() => getMingguIni().dari);
-  const [rekapSampai, setRekapSampai] = useState(() => getMingguIni().sampai);
+  const [rekapDari, setRekapDari] = useState("");
+  const [rekapSampai, setRekapSampai] = useState("");
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -1146,17 +1271,34 @@ export default function App() {
 
   
   const workerNameOptions = useMemo(() => {
-    const names = new Set();
-    productionEntries.forEach((e) => {
-      if (e.employeeName) names.add(displayWorkerName(e.employeeName));
-    });
-    produksi.forEach((p) => {
-      (p.workers || []).forEach((w) => {
-        if (w.employeeName) names.add(displayWorkerName(w.employeeName));
-      });
-    });
-    return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [productionEntries, produksi]);
+    const map = new Map();
+    const addName = (raw) => {
+      const key = normalizeWorkerNameKey(raw);
+      if (!key) return;
+      const display = displayWorkerName(raw);
+      if (!map.has(key)) map.set(key, display);
+      else if (workerDisplayScore(display) > workerDisplayScore(map.get(key))) map.set(key, display);
+    };
+    productionEntries.forEach((e) => addName(e.employeeName));
+    produksi.forEach((p) => (p.workers || []).forEach((w) => addName(w.employeeName)));
+    payrollExpenses.forEach((p) => addName(p.employeeName));
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
+  }, [productionEntries, produksi, payrollExpenses]);
+
+  const modelNameOptions = useMemo(() => {
+    const map = new Map();
+    const addModel = (raw) => {
+      const key = normalizeModelKey(raw);
+      if (!key || key === "-") return;
+      const display = displayModelName(raw);
+      if (!map.has(key)) map.set(key, display);
+    };
+    productionEntries.forEach((e) => addModel(e.model));
+    workRates.forEach((r) => addModel(r.model));
+    orders.forEach((o) => (o.items || []).forEach((it) => addModel(it.name || it.item)));
+    produksi.forEach((p) => (p.items || []).forEach((it) => addModel(it.name || it.item)));
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
+  }, [productionEntries, workRates, orders, produksi]);
 
   function processQtyForOrder(orderId, process) {
     return productionEntries
@@ -1170,7 +1312,7 @@ export default function App() {
         e.id !== excludeEntryId &&
         e.orderId === orderId &&
         e.process === process &&
-        lower(e.model || "") === lower(model || "")
+        normalizeModelKey(e.model || "") === normalizeModelKey(model || "")
       )
       .reduce((sum, e) => sum + Number(e.qty || 0), 0);
   }
@@ -1178,7 +1320,7 @@ export default function App() {
   function getOrderProcessLimit(order, process, model) {
     if (!order) return { limit: 0, label: "pesanan" };
     if (process !== "QC Packing" && model) {
-      const item = (order.items || []).find((it) => lower(it.name || it.item || "") === lower(model));
+      const item = (order.items || []).find((it) => normalizeModelKey(it.name || it.item || "") === normalizeModelKey(model));
       if (item) return { limit: Number(item.qty || 0), label: `model ${item.name || item.item}` };
     }
     return { limit: Number(order.qty || 0), label: "pesanan" };
@@ -1189,17 +1331,17 @@ export default function App() {
       normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(payload.employeeName) &&
       e.orderId === payload.orderId &&
       e.process === payload.process &&
-      lower(e.model) === lower(payload.model) &&
+      normalizeModelKey(e.model) === normalizeModelKey(payload.model) &&
       String(e.tanggal || "") === String(payload.tanggal || "")
     );
   }
 
 function findRate(productType, model, process) {
     return workRates.find((r) => {
-      const sameType = lower(r.productType) === lower(productType);
+      const sameType = normalizeProductTypeKey(r.productType) === normalizeProductTypeKey(productType);
       const sameProcess = lower(r.process) === lower(process);
       if (process === "QC Packing") return sameType && sameProcess;
-      return sameType && sameProcess && lower(r.model) === lower(model);
+      return sameType && sameProcess && normalizeModelKey(r.model) === normalizeModelKey(model);
     });
   }
 
@@ -1323,8 +1465,8 @@ function findRate(productType, model, process) {
     setIsSaving(true);
     try {
       await addDoc(collection(db, C.WORK_RATES), {
-        productType: rateForm.productType,
-        model: rateForm.process === "QC Packing" ? "" : rateForm.model.trim(),
+        productType: displayProductTypeName(rateForm.productType),
+        model: rateForm.process === "QC Packing" ? "" : canonicalByExisting(rateForm.model, modelNameOptions, "model"),
         process: rateForm.process,
         rate: Number(rateForm.rate),
         source: "gallery-produksi",
@@ -1344,7 +1486,10 @@ function findRate(productType, model, process) {
     if (!entryForm.qty || Number(entryForm.qty) <= 0) return alert("Qty wajib diisi");
     if (entryForm.process !== "QC Packing" && !entryForm.model.trim()) return alert("Model wajib diisi");
 
-    const rate = getRateForEmployee(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName);
+    const cleanEmployeeName = canonicalByExisting(entryForm.employeeName, workerNameOptions, "worker");
+    const cleanProductType = displayProductTypeName(entryForm.productType);
+    const cleanModel = entryForm.process === "QC Packing" ? "" : canonicalByExisting(entryForm.model, modelNameOptions, "model");
+    const rate = getRateForEmployee(cleanProductType, cleanModel, entryForm.process, cleanEmployeeName);
     if (!rate) return alert("Tarif belum ada. Tambahkan dulu di menu Tarif.");
 
     const order = orders.find((o) => o.id === entryForm.orderId);
@@ -1352,10 +1497,10 @@ function findRate(productType, model, process) {
     const totalWage = Number(entryForm.qty) * Number(rate.rate || 0);
 
     const draftPayloadForCheck = {
-      employeeName: displayWorkerName(entryForm.employeeName),
+      employeeName: cleanEmployeeName,
       orderId: entryForm.orderId || "",
       process: entryForm.process,
-      model: entryForm.process === "QC Packing" ? "" : entryForm.model.trim(),
+      model: cleanModel,
       tanggal: entryForm.tanggal,
     };
 
@@ -1364,10 +1509,10 @@ function findRate(productType, model, process) {
     }
 
     if (order) {
-      const { limit, label } = getOrderProcessLimit(order, entryForm.process, entryForm.model);
+      const { limit, label } = getOrderProcessLimit(order, entryForm.process, cleanModel);
       const alreadyQty = entryForm.process === "QC Packing"
         ? processQtyForOrder(order.id, entryForm.process)
-        : processQtyForOrderModel(order.id, entryForm.process, entryForm.model);
+        : processQtyForOrderModel(order.id, entryForm.process, cleanModel);
       const nextQty = alreadyQty + Number(entryForm.qty || 0);
       if (limit > 0 && nextQty > limit) {
         return alert(
@@ -1382,14 +1527,14 @@ function findRate(productType, model, process) {
     setIsSaving(true);
     try {
       const entryPayload = {
-        employeeName: displayWorkerName(entryForm.employeeName),
+        employeeName: cleanEmployeeName,
         orderId: entryForm.orderId || "",
         produksiId: prod?.id || "",
         invoice: order?.invoice || "",
         customer: order?.customer || "",
         item: order?.item || "",
-        productType: entryForm.productType,
-        model: entryForm.process === "QC Packing" ? "" : entryForm.model.trim(),
+        productType: cleanProductType,
+        model: cleanModel,
         process: entryForm.process,
         qty: Number(entryForm.qty),
         rate: Number(rate.rate || 0),
@@ -1559,7 +1704,7 @@ function findRate(productType, model, process) {
 
     const items = kirimForm.items.map((i, idx) => {
       const name = i.nama || baseItems[idx]?.name || "Produk";
-      const matchIndex = Math.max(0, baseItems.findIndex((b) => lower(b.name) === lower(name)));
+      const matchIndex = Math.max(0, baseItems.findIndex((b) => normalizeModelKey(b.name) === normalizeModelKey(name)));
       const base = baseItems[matchIndex >= 0 ? matchIndex : idx] || baseItems[0] || {};
       const qtyPesan = Number(i.qtyPesan || base.orderedQty || 0);
       const qtyKirim = Number(i.qtyKirim || 0);
@@ -1618,7 +1763,7 @@ function findRate(productType, model, process) {
 
     const totalDeliveredForItem = (base, idx) => nextDeliveries.reduce((sum, delivery) => {
       const found = (delivery.items || []).filter((it) =>
-        Number(it.itemIndex ?? -1) === idx || lower(it.name || it.nama) === lower(base.name)
+        Number(it.itemIndex ?? -1) === idx || normalizeModelKey(it.name || it.nama) === normalizeModelKey(base.name)
       );
       return sum + found.reduce((s, it) => s + Number(it.qty ?? it.shippedQty ?? it.qtyKirim ?? 0), 0);
     }, 0);
@@ -1791,7 +1936,7 @@ function findRate(productType, model, process) {
 
     const editOrder = orders.find((o) => o.id === editEntryModal.orderId);
     if (editOrder) {
-      const nextModel = editEntryModal.process === "QC Packing" ? "" : (editEntryForm.model || editEntryModal.model || "");
+      const nextModel = editEntryModal.process === "QC Packing" ? "" : canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
       const { limit, label } = getOrderProcessLimit(editOrder, editEntryModal.process, nextModel);
       const alreadyQty = editEntryModal.process === "QC Packing"
         ? productionEntries
@@ -1818,7 +1963,7 @@ function findRate(productType, model, process) {
         updatedAt: todayStr(),
       };
       if (editEntryModal.process !== "QC Packing") {
-        updates.model = editEntryForm.model || editEntryModal.model;
+        updates.model = nextModel;
       }
       await updateDoc(doc(db, C.PRODUCTION_ENTRIES, editEntryModal.id), updates);
       setEditEntryModal(null);
@@ -2636,10 +2781,10 @@ function findRate(productType, model, process) {
                         const modelName = it.name || it.item || "-";
                         const modelQty = Number(it.qty || 0);
                         const potongQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && lower(e.process) === "potong" && lower(e.model || "") === lower(modelName))
+                          .filter(e => e.orderId === p.orderId && lower(e.process) === "potong" && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
                         const jahitQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && lower(e.process) === "jahit" && lower(e.model || "") === lower(modelName))
+                          .filter(e => e.orderId === p.orderId && lower(e.process) === "jahit" && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
                         const qcQty = productionEntries
                           .filter(e => e.orderId === p.orderId && lower(e.process) === "qc packing")
@@ -2814,10 +2959,8 @@ function findRate(productType, model, process) {
       )}
 
       {tab === "rekap" && (() => {
-        const inRange = (tanggal) => {
-          if (!tanggal) return false;
-          return tanggal >= rekapDari && tanggal <= rekapSampai;
-        };
+        const rekapPeriodReady = Boolean(rekapDari && rekapSampai);
+        const inRange = (tanggal) => rekapPeriodReady && dateInRange(tanggal, rekapDari, rekapSampai);
         const filtered = productionEntries.filter((e) => {
           const hasInputInRange = inRange(e.tanggal);
           const hasSetorInRange = setorHistoryInRange(e, rekapDari, rekapSampai).length > 0;
@@ -2852,7 +2995,8 @@ function findRate(productType, model, process) {
         // Rekap per pekerja: gaji dihitung dari transaksi setor yang masuk periode, bukan sekadar qty awal.
         const rekapMap = {};
         filtered.forEach((e) => {
-          const nama = displayWorkerName(e.employeeName);
+          const namaKey = normalizeWorkerNameKey(e.employeeName);
+          const nama = canonicalByExisting(e.employeeName, workerNameOptions, "worker");
           const inputInRange = inRange(e.tanggal);
           const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
           const rangeTotals = setorTotalsFromHistory(rangeHistory);
@@ -2868,7 +3012,7 @@ function findRate(productType, model, process) {
           rekapMap[nama].detail.push({
             customer: e.customer || entryOrder?.customer || "-",
             invoice: e.invoice || entryOrder?.invoice || "",
-            model: e.model || "-",
+            model: displayModelName(e.model || "-"),
             process: e.process || "",
             qty: Number(e.qty || 0),
             qtySetor: Number(rangeTotals.qtySetor || 0),
@@ -2913,7 +3057,7 @@ function findRate(productType, model, process) {
           totalBelumSetor: 0,
         });
 
-        const boronganBelumMasukRekap = productionEntries
+        const boronganBelumMasukRekap = !rekapPeriodReady ? [] : productionEntries
           .map((e) => {
             const totals = setorTotals(e);
             const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
@@ -2925,9 +3069,8 @@ function findRate(productType, model, process) {
             let alasan = "";
             if (sisaSetor > 0 && inputInRange && rangeHistory.length === 0) alasan = "Diberikan periode ini, belum setor";
             else if (sisaSetor > 0 && inputInRange && rangeHistory.length > 0) alasan = "Setor sebagian, masih ada sisa";
-            else if (sisaSetor > 0 && e.tanggal < rekapDari) alasan = "Tanggungan dari periode sebelumnya";
-            else if (sisaSetor > 0 && e.tanggal > rekapSampai) alasan = "Borongan setelah periode rekap";
-            else if (rangeHistory.length === 0 && totalProgress > 0) alasan = "Setor ada, tapi di luar periode ini";
+            else if (sisaSetor > 0 && dateBefore(e.tanggal, rekapDari)) alasan = "Tanggungan dari periode sebelumnya";
+            else if (sisaSetor > 0 && dateAfter(e.tanggal, rekapSampai)) alasan = "Borongan setelah periode rekap";
             return {
               ...e,
               customer: e.customer || entryOrder?.customer || "-",
@@ -2944,7 +3087,7 @@ function findRate(productType, model, process) {
               alasan,
             };
           })
-          .filter((e) => e.alasan)
+          .filter((e) => e.alasan && Number(e.sisaSetor || 0) > 0)
           .sort((a, b) => {
             if (a.tanggal !== b.tanggal) return String(a.tanggal || "").localeCompare(String(b.tanggal || ""));
             return displayWorkerName(a.employeeName).localeCompare(displayWorkerName(b.employeeName));
@@ -2972,6 +3115,12 @@ function findRate(productType, model, process) {
               </div>
             </div>
 
+            {!rekapPeriodReady && (
+              <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-semibold" style={{ border: "1px solid #fde68a", color: "#92400e" }}>
+                📌 Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
+              </div>
+            )}
+
             {/* Ringkasan total */}
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fce7f3" }}>
@@ -2996,7 +3145,7 @@ function findRate(productType, model, process) {
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>💰 Rekap Gajian Keseluruhan</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapDari} s/d {rekapSampai}</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button type="button" onClick={() => setRekapDetailModal("sudah")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
@@ -3043,7 +3192,7 @@ function findRate(productType, model, process) {
               const getCarryOver = (nama) => productionEntries.filter((e) =>
                 normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
                 e.statusSetor !== "sudah_setor" &&
-                e.tanggal < rekapDari
+                dateBefore(e.tanggal, rekapDari)
               );
               const baseRows = rekapPerkerja.map(([nama, r]) => ({
                 nama,
@@ -3082,7 +3231,7 @@ function findRate(productType, model, process) {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-base font-black" style={{ color: "#2d1b69" }}>{titleMap[rekapDetailModal] || "Rincian Rekap"}</div>
-                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{rekapDari} s/d {rekapSampai} · {filteredRows.length} pekerja</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"} · {filteredRows.length} pekerja</div>
                         </div>
                         <button type="button" onClick={() => setRekapDetailModal(null)} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#f1f5f9", color: "#64748b" }}>Tutup</button>
                       </div>
@@ -3148,7 +3297,7 @@ function findRate(productType, model, process) {
                   <div>
                     <div className="text-xs font-bold" style={{ color: "#c2410c" }}>⚠️ Borongan Belum Masuk Rekap Gaji</div>
                     <div className="text-[11px] mt-1" style={{ color: "#9a3412" }}>
-                      Data ini ada di Borongan, tapi belum menghasilkan gaji pada periode {rekapDari} s/d {rekapSampai}.
+                      Data ini ada di Borongan, tapi belum menghasilkan gaji pada periode {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}.
                     </div>
                   </div>
                   <div className="text-right shrink-0">
@@ -3258,7 +3407,7 @@ function findRate(productType, model, process) {
                   const carryOver = productionEntries.filter((e) =>
                     normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
                     e.statusSetor !== "sudah_setor" &&
-                    e.tanggal < rekapDari
+                    dateBefore(e.tanggal, rekapDari)
                   );
                   const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number(e.qty || 0), 0);
                   return (
@@ -3319,7 +3468,7 @@ function findRate(productType, model, process) {
                         className="w-full rounded-xl py-2.5 text-xs font-bold text-white flex items-center justify-center gap-2"
                         style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                       >
-                        👁️ Lihat Slip Gaji · {rekapDari} s/d {rekapSampai}
+                        👁️ Lihat Slip Gaji · {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}
                       </button>
                     </div>
                   </div>
@@ -3443,6 +3592,9 @@ function findRate(productType, model, process) {
                   ))}
                 </div>
               )}
+              <div className="mt-2 rounded-xl px-3 py-2 text-[11px] font-semibold" style={{ background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>
+                Master data otomatis dari nama yang sudah pernah dipakai. Nama mirip akan dirapikan dan digabung saat disimpan.
+              </div>
             </div>
             <Select
               label="Pesanan terkait"
@@ -3479,13 +3631,13 @@ function findRate(productType, model, process) {
                     </div>
                     <div className="space-y-1.5">
                       {orderModels.map((it, i) => {
-                        const nama = it.name || it.item || "-";
+                        const nama = displayModelName(it.name || it.item || "-");
                         const qtyModel = Number(it.qty || 0);
                         const sudahInput = productionEntries
-                          .filter(e => e.orderId === entryForm.orderId && lower(e.process) === lower(entryForm.process) && lower(e.model || "") === lower(nama))
+                          .filter(e => e.orderId === entryForm.orderId && lower(e.process) === lower(entryForm.process) && normalizeModelKey(e.model || "") === normalizeModelKey(nama))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
                         const sisaQty = Math.max(0, qtyModel - sudahInput);
-                        const selected = entryForm.model === nama;
+                        const selected = normalizeModelKey(entryForm.model) === normalizeModelKey(nama);
                         const habis = sisaQty === 0;
                         return (
                           <button
@@ -3526,7 +3678,24 @@ function findRate(productType, model, process) {
               } else {
                 // Tidak ada multi-model / pesanan tidak dipilih — input model manual
                 return (
-                  <Input label="Model" value={entryForm.model} onChange={(v) => setEntryForm((f) => ({ ...f, model: v }))} placeholder="Harus sama dengan tarif" />
+                  <div>
+                    <Input label="Model" value={entryForm.model} onChange={(v) => setEntryForm((f) => ({ ...f, model: v }))} placeholder="Harus sama dengan tarif" />
+                    {modelNameOptions.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {modelNameOptions.slice(0, 10).map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => setEntryForm((f) => ({ ...f, model: name }))}
+                            className="rounded-full px-3 py-1 text-xs font-bold"
+                            style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" }}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               }
             })()}
@@ -3634,7 +3803,24 @@ function findRate(productType, model, process) {
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
             </Select>
             {rateForm.process !== "QC Packing" && (
-              <Input label="Model" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Alya L" />
+              <div>
+                <Input label="Model" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Alya L" />
+                {modelNameOptions.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {modelNameOptions.slice(0, 10).map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => setRateForm((f) => ({ ...f, model: name }))}
+                        className="rounded-full px-3 py-1 text-xs font-bold"
+                        style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" }}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             <Input label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
             <Button onClick={addWorkRate} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
