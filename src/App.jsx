@@ -1792,15 +1792,18 @@ function findRate(productType, model, process) {
     });
 
     const items = kirimForm.items.map((i, idx) => {
-      const name = i.nama || baseItems[idx]?.name || "Produk";
-      const matchIndex = Math.max(0, baseItems.findIndex((b) => normalizeModelKey(b.name) === normalizeModelKey(name)));
-      const base = baseItems[matchIndex >= 0 ? matchIndex : idx] || baseItems[0] || {};
+      // Pengiriman harus mengikuti urutan item pesanan.
+      // Jangan jadikan nama sebagai kunci utama karena dua baris bisa punya nama/model mirip atau sama.
+      const preferredIndex = Number.isInteger(Number(i.itemIndex)) ? Number(i.itemIndex) : idx;
+      const baseIndex = baseItems[preferredIndex] ? preferredIndex : idx;
+      const base = baseItems[baseIndex] || baseItems[0] || {};
+      const name = i.nama || base.name || "Produk";
       const qtyPesan = Number(i.qtyPesan || base.orderedQty || 0);
       const qtyKirim = Number(i.qtyKirim || 0);
       return {
         nama: name,
         name,
-        itemIndex: Number(base.itemIndex ?? idx),
+        itemIndex: Number(base.itemIndex ?? baseIndex),
         qtyPesan,
         orderedQty: qtyPesan,
         qtyKirim,
@@ -1851,9 +1854,13 @@ function findRate(productType, model, process) {
     const nextDeliveries = [...existingDeliveries, newDelivery];
 
     const totalDeliveredForItem = (base, idx) => nextDeliveries.reduce((sum, delivery) => {
-      const found = (delivery.items || []).filter((it) =>
-        Number(it.itemIndex ?? -1) === idx || normalizeModelKey(it.name || it.nama) === normalizeModelKey(base.name)
-      );
+      const found = (delivery.items || []).filter((it) => {
+        // Data baru wajib cocok berdasarkan itemIndex.
+        // Fallback ke nama hanya untuk data lama yang belum punya itemIndex.
+        const hasItemIndex = it.itemIndex !== undefined && it.itemIndex !== null && it.itemIndex !== "";
+        if (hasItemIndex) return Number(it.itemIndex) === idx;
+        return normalizeModelKey(it.name || it.nama) === normalizeModelKey(base.name);
+      });
       return sum + found.reduce((s, it) => s + Number(it.qty ?? it.shippedQty ?? it.qtyKirim ?? 0), 0);
     }, 0);
 
@@ -1896,6 +1903,10 @@ function findRate(productType, model, process) {
       : deliveryStatus === "Kelebihan Kirim"
         ? "Kelebihan Kirim"
         : "Dikirim Sebagian";
+    const productionDoneByDelivery = totalOrdered > 0 && totalShipped >= totalOrdered;
+    const nextProduksiStatus = productionDoneByDelivery
+      ? "Selesai"
+      : (order?.raw?.statusProduksi || order?.raw?.produksiStatus || "Proses");
 
     setIsSaving(true);
     try {
@@ -1929,13 +1940,13 @@ function findRate(productType, model, process) {
       });
 
       const prod = produksiByOrderId.get(order.id);
-      if (prod) {
+      if (prod && productionDoneByDelivery && prod.status !== "Selesai") {
         await updateDoc(doc(db, C.PRODUKSI, prod.id), {
           status: "Selesai",
           updatedAt: todayStr(),
           history: [
             ...(prod.history || []),
-            { tanggal: todayStr(), status: "Selesai", catatan: "Otomatis selesai karena sudah dikirim" },
+            { tanggal: todayStr(), status: "Selesai", catatan: "Otomatis selesai karena pengiriman sudah memenuhi pesanan" },
           ],
         });
       }
@@ -1950,8 +1961,10 @@ function findRate(productType, model, process) {
           shippedItems,
           deliveredTotal,
           deliveredHppTotal,
-          statusProduksi: "Selesai",
-          produksiStatus: "Selesai",
+          totalKirim: totalShipped,
+          totalPesan: totalOrdered,
+          statusProduksi: nextProduksiStatus,
+          produksiStatus: nextProduksiStatus,
           produksiSource: "gallery-produksi",
           produksiUpdatedAt: todayStr(),
           updatedAt: todayStr(),
