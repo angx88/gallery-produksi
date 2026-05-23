@@ -125,6 +125,25 @@ function todayStr() {
   return new Date().toISOString().split("T")[0];
 }
 
+function localDateStr(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function currentSundayToSaturdayPeriod(baseDate = new Date()) {
+  const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+  // JavaScript: Minggu = 0, Senin = 1, ..., Sabtu = 6.
+  // Periode rekap yang benar adalah Minggu s/d Sabtu.
+  start.setDate(start.getDate() - start.getDay());
+
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+
+  return { dari: localDateStr(start), sampai: localDateStr(end) };
+}
+
 
 function dateKey(value) {
   if (value === null || value === undefined || value === "") return "";
@@ -849,8 +868,10 @@ export default function App() {
   const [tab, setTab] = useState("pesanan");
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
-  const [rekapDari, setRekapDari] = useState("");
-  const [rekapSampai, setRekapSampai] = useState("");
+  const initialRekapPeriod = useMemo(() => currentSundayToSaturdayPeriod(), []);
+  const [rekapDari, setRekapDari] = useState(initialRekapPeriod.dari);
+  const [rekapSampai, setRekapSampai] = useState(initialRekapPeriod.sampai);
+  const rekapManualPeriodRef = useRef(false);
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -864,6 +885,36 @@ export default function App() {
   const slipRef = useRef(null);
   const backUiRef = useRef({});
   const lastBackPressRef = useRef(0);
+
+  useEffect(() => {
+    const syncAutoPeriod = () => {
+      if (rekapManualPeriodRef.current) return;
+      const next = currentSundayToSaturdayPeriod();
+      setRekapDari((prev) => (prev === next.dari ? prev : next.dari));
+      setRekapSampai((prev) => (prev === next.sampai ? prev : next.sampai));
+    };
+
+    syncAutoPeriod();
+    const timer = window.setInterval(syncAutoPeriod, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  function handleRekapDariChange(value) {
+    rekapManualPeriodRef.current = true;
+    setRekapDari(value);
+  }
+
+  function handleRekapSampaiChange(value) {
+    rekapManualPeriodRef.current = true;
+    setRekapSampai(value);
+  }
+
+  function resetRekapToCurrentWeek() {
+    const next = currentSundayToSaturdayPeriod();
+    rekapManualPeriodRef.current = false;
+    setRekapDari(next.dari);
+    setRekapSampai(next.sampai);
+  }
 
   const [orders, setOrders] = useState([]);
   const [produksi, setProduksi] = useState([]);
@@ -3104,14 +3155,25 @@ function findRate(productType, model, process) {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
-                  <input type="date" value={rekapDari} onChange={(e) => setRekapDari(e.target.value)}
+                  <input type="date" value={rekapDari} onChange={(e) => handleRekapDariChange(e.target.value)}
                     className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
                 </div>
                 <div>
                   <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Sampai</div>
-                  <input type="date" value={rekapSampai} onChange={(e) => setRekapSampai(e.target.value)}
+                  <input type="date" value={rekapSampai} onChange={(e) => handleRekapSampaiChange(e.target.value)}
                     className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
                 </div>
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-2 text-xs" style={{ color: "#94a3b8" }}>
+                <span>Periode otomatis: Minggu s/d Sabtu</span>
+                <button
+                  type="button"
+                  onClick={resetRekapToCurrentWeek}
+                  className="rounded-full px-3 py-1 font-bold"
+                  style={{ background: "#f5f3ff", color: "#7c3aed" }}
+                >
+                  Minggu ini
+                </button>
               </div>
             </div>
 
