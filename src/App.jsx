@@ -447,6 +447,7 @@ export default function App() {
   const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
   const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
+  const slipRef = useRef(null);
 
   const [orders, setOrders] = useState([]);
   const [produksi, setProduksi] = useState([]);
@@ -1843,6 +1844,155 @@ function findRate(productType, model, process) {
           return html; // kembalikan untuk keperluan lain
         }
 
+        // Share slip gaji sebagai gambar ke WA menggunakan Canvas API native
+        async function shareSlipGajiAsImage(nama, r) {
+          const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+          const sortedDetail = [...r.detail].sort((a, b) => (a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||""));
+          const cetakTgl = new Date().toLocaleDateString("id-ID", { day:"2-digit", month:"long", year:"numeric" });
+
+          const W = 600;
+          const rowH = 44;
+          const detailCount = sortedDetail.length;
+          const H = 320 + detailCount * rowH + (r.belumSetor > 0 ? 44 : 0) + 120;
+
+          const canvas = document.createElement("canvas");
+          canvas.width = W;
+          canvas.height = H;
+          const ctx = canvas.getContext("2d");
+
+          // Helper
+          const rr = (x, y, w, h, rad) => { ctx.beginPath(); ctx.moveTo(x+rad,y); ctx.lineTo(x+w-rad,y); ctx.quadraticCurveTo(x+w,y,x+w,y+rad); ctx.lineTo(x+w,y+h-rad); ctx.quadraticCurveTo(x+w,y+h,x+w-rad,y+h); ctx.lineTo(x+rad,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-rad); ctx.lineTo(x,y+rad); ctx.quadraticCurveTo(x,y,x+rad,y); ctx.closePath(); };
+
+          // Background
+          ctx.fillStyle = "#fdf2f8";
+          ctx.fillRect(0, 0, W, H);
+
+          // Header gradient
+          const grad = ctx.createLinearGradient(0,0,W,80);
+          grad.addColorStop(0,"#ec4899"); grad.addColorStop(1,"#a855f7");
+          rr(0,0,W,80,0); ctx.fillStyle=grad; ctx.fill();
+
+          // Header text
+          ctx.fillStyle = "white";
+          ctx.font = "bold 18px 'Segoe UI', Arial, sans-serif";
+          ctx.fillText("Slip Pendapatan Borongan", 24, 32);
+          ctx.font = "13px 'Segoe UI', Arial, sans-serif";
+          ctx.fillStyle = "rgba(255,255,255,0.85)";
+          ctx.fillText("Gallery Kerudung", 24, 52);
+          ctx.font = "11px 'Segoe UI', Arial, sans-serif";
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          ctx.fillText("Dokumen resmi penggajian borongan", 24, 68);
+
+          // Info box
+          let y = 96;
+          rr(16,y,W-32,80,12); ctx.fillStyle="#fdf4ff"; ctx.fill();
+          ctx.strokeStyle="#e9d5ff"; ctx.lineWidth=1; ctx.stroke();
+          ctx.font = "12px 'Segoe UI', Arial, sans-serif";
+          const infoRows = [["Nama Pekerja", nama], ["Periode", `${r.dari||""} s/d ${r.sampai||""}`], ["Tanggal Cetak", cetakTgl]];
+          infoRows.forEach(([label, val], i) => {
+            const iy = y + 16 + i * 22;
+            ctx.fillStyle="#94a3b8"; ctx.fillText(label, 28, iy);
+            ctx.fillStyle="#2d1b69"; ctx.font="bold 12px 'Segoe UI', Arial, sans-serif";
+            ctx.textAlign="right"; ctx.fillText(val, W-28, iy);
+            ctx.textAlign="left"; ctx.font="12px 'Segoe UI', Arial, sans-serif";
+          });
+
+          // Ringkasan 3 kotak
+          y += 96;
+          const bw = (W-48)/3;
+          [["Diberikan", r.pcsAwal, "#ede9fe","#5b21b6"], ["Disetor", r.pcsSetor,"#dcfce7","#16a34a"], ["Reject", r.pcsReject, r.pcsReject>0?"#fee2e2":"#f1f5f9", r.pcsReject>0?"#ef4444":"#94a3b8"]].forEach(([label,val,bg,color],i) => {
+            const bx = 16 + i*(bw+8);
+            rr(bx,y,bw,44,10); ctx.fillStyle=bg; ctx.fill();
+            ctx.fillStyle=color; ctx.font="bold 16px 'Segoe UI', Arial, sans-serif"; ctx.textAlign="center";
+            ctx.fillText(String(val), bx+bw/2, y+20);
+            ctx.font="11px 'Segoe UI', Arial, sans-serif"; ctx.fillStyle="#94a3b8";
+            ctx.fillText(label, bx+bw/2, y+36);
+            ctx.textAlign="left";
+          });
+
+          // Detail header
+          y += 56;
+          rr(16,y,W-32,24,8);
+          const hgrad = ctx.createLinearGradient(16,0,W-16,0);
+          hgrad.addColorStop(0,"#ede9fe"); hgrad.addColorStop(1,"#fce7f3");
+          ctx.fillStyle=hgrad; ctx.fill();
+          ctx.fillStyle="#7c3aed"; ctx.font="bold 11px 'Segoe UI', Arial, sans-serif";
+          ctx.fillText("Detail Pekerjaan", 28, y+16);
+          y += 24;
+
+          // Detail rows
+          sortedDetail.forEach((d, i) => {
+            const rowBg = d.sudahSetor ? "#f0fdf4" : "#fefce8";
+            rr(16,y,W-32,rowH-2,0); ctx.fillStyle=rowBg; ctx.fill();
+            ctx.strokeStyle="#f3e8ff"; ctx.lineWidth=1;
+            ctx.beginPath(); ctx.moveTo(16,y+rowH-2); ctx.lineTo(W-16,y+rowH-2); ctx.stroke();
+
+            const label = `${d.process}${d.model&&d.model!=="-"?" · "+d.model:""}`;
+            const tgl = d.tanggalSetor||d.tanggal||"-";
+            ctx.fillStyle="#2d1b69"; ctx.font="bold 11px 'Segoe UI', Arial, sans-serif";
+            ctx.fillText(label.length>38?label.slice(0,36)+"…":label, 28, y+16);
+            ctx.fillStyle="#94a3b8"; ctx.font="10px 'Segoe UI', Arial, sans-serif";
+            ctx.fillText(`📅 ${tgl}  |  ${fmt(d.rate)}/pcs × ${d.sudahSetor?d.qtySetor:d.qty} pcs`, 28, y+30);
+            ctx.textAlign="right";
+            if (d.sudahSetor) {
+              ctx.fillStyle="#7c3aed"; ctx.font="bold 12px 'Segoe UI', Arial, sans-serif";
+              ctx.fillText(fmt(d.gaji), W-28, y+20);
+              ctx.fillStyle="#16a34a"; ctx.font="10px 'Segoe UI', Arial, sans-serif";
+              ctx.fillText(`${d.qtySetor} pcs setor`, W-28, y+33);
+            } else {
+              ctx.fillStyle="#b45309"; ctx.font="bold 11px 'Segoe UI', Arial, sans-serif";
+              ctx.fillText("⏳ Blm setor", W-28, y+24);
+            }
+            ctx.textAlign="left";
+            y += rowH;
+          });
+
+          // Belum setor warning
+          if (r.belumSetor > 0) {
+            rr(16,y,W-32,36,8); ctx.fillStyle="#fefce8"; ctx.fill();
+            ctx.strokeStyle="#fde68a"; ctx.lineWidth=1; ctx.stroke();
+            ctx.fillStyle="#b45309"; ctx.font="11px 'Segoe UI', Arial, sans-serif";
+            ctx.fillText(`⚠️ Masih ada ${r.belumSetor} pcs belum disetor, belum termasuk total di bawah.`, 28, y+22);
+            y += 44;
+          }
+
+          // Total box
+          y += 8;
+          rr(16,y,W-32,60,12);
+          const tgrad = ctx.createLinearGradient(16,y,W-16,y+60);
+          tgrad.addColorStop(0,"#f0fdf4"); tgrad.addColorStop(1,"#dcfce7");
+          ctx.fillStyle=tgrad; ctx.fill();
+          ctx.strokeStyle="#bbf7d0"; ctx.lineWidth=1.5; ctx.stroke();
+          ctx.fillStyle="#64748b"; ctx.font="11px 'Segoe UI', Arial, sans-serif";
+          ctx.fillText("Total Pendapatan Bersih", 28, y+22);
+          ctx.fillStyle="#16a34a"; ctx.font="bold 26px 'Segoe UI', Arial, sans-serif";
+          ctx.fillText(fmt(r.gaji), 28, y+50);
+
+          // Footer
+          y += 72;
+          ctx.fillStyle="#a855f7"; ctx.font="10px 'Segoe UI', Arial, sans-serif";
+          ctx.textAlign="center";
+          ctx.fillText(`Dicetak otomatis oleh sistem Gallery Kerudung · ${cetakTgl}`, W/2, y+16);
+          ctx.textAlign="left";
+
+          // Convert ke blob dan share/download
+          canvas.toBlob(async (blob) => {
+            if (!blob) return;
+            const file = new File([blob], `SlipGaji_${nama.replace(/\s+/g,"_")}.png`, { type:"image/png" });
+            if (navigator.share && navigator.canShare({ files:[file] })) {
+              try { await navigator.share({ files:[file], title:`Slip Gaji ${nama}`, text:`Slip Pendapatan Borongan - ${nama}` }); }
+              catch(e) { if(e.name!=="AbortError") fallbackDownload(blob, nama); }
+            } else { fallbackDownload(blob, nama); }
+          }, "image/png");
+
+          function fallbackDownload(blob, nama) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url; a.download = `SlipGaji_${nama.replace(/\s+/g,"_")}.png`;
+            a.click(); URL.revokeObjectURL(url);
+          }
+        }
+
         return (
           <div className="space-y-3 p-4">
             {/* Filter Tanggal Manual */}
@@ -2487,7 +2637,7 @@ function findRate(productType, model, process) {
                 <div className="text-white text-sm opacity-90">Gallery Kerudung</div>
               </div>
 
-              <div className="p-5 space-y-4">
+              <div ref={slipRef} className="p-5 space-y-4">
                 {/* Info pekerja & periode */}
                 <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fdf4ff", border: "1px solid #e9d5ff" }}>
                   <div className="flex justify-between text-sm">
@@ -2613,42 +2763,23 @@ function findRate(productType, model, process) {
                   </div>
                 )}
 
-                {/* Tombol Share WA */}
+                {/* Tombol Download Slip */}
                 <button
-                    onClick={() => {
-                      const fmt2 = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
-                      const lines = [
-                        "🧾 *Slip Pendapatan Borongan*",
-                        "📍 Gallery Kerudung",
-                        "━━━━━━━━━━━━━━━━━━",
-                        `👤 *${nama}*`,
-                        `📅 Periode: ${slipPreview.dari} s/d ${slipPreview.sampai}`,
-                        "━━━━━━━━━━━━━━━━━━",
-                        ...([...r.detail].sort((a,b)=>(a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||"")).map((d,i)=>{
-                          const tgl = d.tanggalSetor||d.tanggal||"-";
-                          const model = d.model && d.model!=="-" ? ` · ${d.model}` : "";
-                          const qty = d.sudahSetor ? d.qtySetor : d.qty;
-                          const ket = d.sudahSetor ? fmt2(d.gaji) : "⏳ blm setor";
-                          return `${i+1}. ${tgl} | ${d.process}${model} | ${qty} pcs | ${ket}`;
-                        })),
-                        "━━━━━━━━━━━━━━━━━━",
-                        `📦 Diberikan: ${r.pcsAwal} pcs`,
-                        `✅ Disetor: ${r.pcsSetor} pcs`,
-                        r.pcsReject > 0 ? `❌ Reject: ${r.pcsReject} pcs` : null,
-                        r.belumSetor > 0 ? `⏳ Blm setor: ${r.belumSetor} pcs` : null,
-                        "━━━━━━━━━━━━━━━━━━",
-                        `💰 *Total: ${fmt2(r.gaji)}*`,
-                        "",
-                        `_Dikirim via Gallery Kerudung · ${new Date().toLocaleDateString("id-ID")}_`
-                      ].filter(Boolean).join("\n");
-                      const waUrl = `https://wa.me/?text=${encodeURIComponent(lines)}`;
-                      window.open(waUrl, "_blank");
-                    }}
-                    className="rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
-                    style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.523 5.847L.057 23.882l6.19-1.438A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.173-1.4l-.371-.22-3.674.853.884-3.561-.242-.381A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
-                    Share ke WA
+                  onClick={() => downloadSlipGaji(nama, r)}
+                  className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                  style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                >
+                  🖨️ Download / Cetak Slip PDF
+                </button>
+
+                {/* Tombol Share WA sebagai Gambar (Canvas Native) */}
+                <button
+                  onClick={() => shareSlipGajiAsImage(nama, r)}
+                  className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                  style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.523 5.847L.057 23.882l6.19-1.438A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.173-1.4l-.371-.22-3.674.853.884-3.561-.242-.381A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
+                  Share Gambar ke WA
                 </button>
               </div>
             </div>
