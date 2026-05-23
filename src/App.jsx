@@ -1194,6 +1194,349 @@ function findRate(productType, model, process) {
     }
   }
 
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function safeFileName(value) {
+    return String(value || "SlipGaji")
+      .trim()
+      .replace(/[^a-zA-Z0-9-_]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "SlipGaji";
+  }
+
+  function buildSlipHtml(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
+    const fmt = (v) => new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+      maximumFractionDigits: 0,
+    }).format(Number(v || 0));
+
+    const sortedDetail = [...(r?.detail || [])].sort((a, b) => {
+      const da = a.tanggalSetor || a.tanggal || "";
+      const db = b.tanggalSetor || b.tanggal || "";
+      return da.localeCompare(db);
+    });
+
+    const rows = sortedDetail.map((d, i) => {
+      const tgl = escapeHtml(d.tanggalSetor || d.tanggal || "-");
+      const invoice = d.invoice ? `<br><span style="font-size:10px;color:#94a3b8;">${escapeHtml(d.invoice)}</span>` : "";
+      const pesanan = d.customer && d.customer !== "-" ? `${escapeHtml(d.customer)}${invoice}` : escapeHtml(d.invoice || "-");
+      const prosesModel = `${escapeHtml(d.process || "")}${d.model && d.model !== "-" ? " · " + escapeHtml(d.model) : ""}`;
+      const setor = d.sudahSetor ? Number(d.qtySetor || 0) : null;
+      const reject = Number(d.qtyReject || 0);
+      const pendapatan = d.sudahSetor
+        ? `<strong style="color:#16a34a;">${fmt(d.gaji)}</strong>`
+        : `<span style="color:#b45309;">Belum setor</span>`;
+
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${tgl}</td>
+        <td>${pesanan}</td>
+        <td>${prosesModel}</td>
+        <td class="center">${Number(d.qty || 0)} pcs</td>
+        <td class="center ${setor !== null ? "ok" : "muted"}">${setor !== null ? setor + " pcs" : "-"}</td>
+        <td class="center ${reject > 0 ? "bad" : "muted"}">${reject > 0 ? reject + " pcs" : "-"}</td>
+        <td class="right">${Number(d.rate || 0) > 0 ? fmt(d.rate) + "/pcs" : "-"}</td>
+        <td class="right">${pendapatan}</td>
+      </tr>`;
+    }).join("");
+
+    const carryRows = (carryOver || []).map((e) => {
+      const entryOrder = orders.find((o) => o.id === e.orderId);
+      const model = e.model && e.model !== "-" ? ` · ${escapeHtml(e.model)}` : "";
+      const periodeAsli = e.tanggal ? getMingguPeriod(e.tanggal) : null;
+      const periode = periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : (e.tanggal || "-");
+      const cust = e.customer || entryOrder?.customer || "-";
+      return `<div class="carry-item">
+        <strong>${escapeHtml(e.process || "")}${model}</strong>
+        <span>${escapeHtml(cust)}${e.invoice ? " · " + escapeHtml(e.invoice) : ""}</span>
+        <span>${escapeHtml(periode)} · ${Number(e.qty || 0)} pcs belum disetor</span>
+      </div>`;
+    }).join("");
+
+    const cetakTgl = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+    const logoSrc = "/logo-gk.png";
+
+    return `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Slip Pendapatan - ${escapeHtml(nama)}</title>
+      <style>
+        *{box-sizing:border-box} body{font-family:Segoe UI,Arial,sans-serif;background:#fdf2f8;margin:0;padding:18px;color:#2d1b69}
+        .toolbar{position:sticky;top:0;z-index:5;display:flex;gap:10px;justify-content:center;margin-bottom:14px}.toolbar button{background:linear-gradient(135deg,#ec4899,#a855f7);color:#fff;border:0;border-radius:14px;padding:12px 22px;font-size:14px;font-weight:800;cursor:pointer}
+        .slip{max-width:900px;margin:0 auto;background:#fff;border-radius:22px;overflow:hidden;box-shadow:0 8px 30px rgba(124,58,237,.18)}
+        .header{background:linear-gradient(135deg,#ec4899,#a855f7);color:#fff;padding:24px 28px;display:flex;align-items:center;gap:16px}.header img{width:62px;height:62px;border-radius:16px;border:3px solid rgba(255,255,255,.45);background:#fff;object-fit:cover}.header h1{margin:0 0 4px;font-size:22px}.header p{margin:0;font-size:13px;opacity:.88}.body{padding:24px 28px}.info{background:#fdf4ff;border:1px solid #e9d5ff;border-radius:16px;padding:14px 16px;margin-bottom:16px}.info-row{display:flex;justify-content:space-between;gap:14px;font-size:13px;padding:4px 0}.info-row span{color:#94a3b8}.info-row strong{text-align:right;color:#2d1b69}
+        table{width:100%;border-collapse:collapse;font-size:12px;overflow:hidden;border-radius:14px}thead tr{background:linear-gradient(135deg,#ede9fe,#fce7f3)}th{padding:10px 8px;text-align:left;color:#7c3aed;font-size:11px;white-space:nowrap}td{padding:9px 8px;border-bottom:1px solid #f3e8ff;vertical-align:top}.center{text-align:center}.right{text-align:right}.ok{color:#16a34a}.bad{color:#ef4444}.muted{color:#94a3b8}.total-row{background:linear-gradient(135deg,#ede9fe,#fce7f3);font-weight:800}.warning{margin-top:12px;background:#fefce8;border:1px solid #fde68a;border-radius:12px;padding:10px 14px;font-size:12px;color:#b45309}.total-box{margin-top:16px;background:linear-gradient(135deg,#f0fdf4,#dcfce7);border:1.5px solid #bbf7d0;border-radius:16px;padding:16px 18px}.total-box div:first-child{font-size:12px;color:#64748b;margin-bottom:4px}.total-box div:last-child{font-size:28px;font-weight:900;color:#16a34a}.carry{margin-top:16px;background:#fff7ed;border:1.5px solid #fed7aa;border-radius:16px;padding:14px;color:#92400e}.carry h3{margin:0 0 8px;font-size:13px;color:#b45309}.carry-item{background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:8px 10px;margin-top:7px;font-size:12px;display:grid;gap:2px}.carry-item span{color:#92400e}.ttd{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px}.ttd-box{border:1px solid #e9d5ff;border-radius:14px;padding:14px;text-align:center}.ttd-box .label{font-size:11px;color:#94a3b8;margin-bottom:54px}.ttd-box .name{font-size:12px;font-weight:800;border-top:1.5px solid #c4b5fd;padding-top:7px}.footer{text-align:center;font-size:11px;color:#a855f7;padding:15px 20px;border-top:1px solid #fce7f3}
+        @media(max-width:720px){body{padding:8px}.body{padding:16px}.header{padding:18px}.header h1{font-size:18px}table{font-size:10px}th,td{padding:7px 5px}.ttd{grid-template-columns:1fr}.toolbar{padding:8px;background:#fdf2f8}}
+        @media print{body{background:#fff;padding:0}.toolbar{display:none}.slip{box-shadow:none;border-radius:0;max-width:none}@page{margin:1cm}}
+      </style>
+    </head><body>
+      <div class="toolbar"><button onclick="window.print()">Cetak / Simpan PDF</button></div>
+      <div class="slip">
+        <div class="header"><img src="${logoSrc}" onerror="this.style.display='none'" /><div><h1>Slip Pendapatan Borongan</h1><p>Gallery Kerudung · Dokumen resmi penggajian borongan</p></div></div>
+        <div class="body">
+          <div class="info">
+            <div class="info-row"><span>Nama Pekerja</span><strong>${escapeHtml(nama)}</strong></div>
+            <div class="info-row"><span>Periode</span><strong>${escapeHtml(dari)} s/d ${escapeHtml(sampai)}</strong></div>
+            <div class="info-row"><span>Tanggal Cetak</span><strong>${escapeHtml(cetakTgl)}</strong></div>
+          </div>
+          <table><thead><tr><th>#</th><th>Tanggal</th><th>Pesanan</th><th>Proses / Model</th><th class="center">Diberi</th><th class="center">Setor</th><th class="center">Reject</th><th class="right">Tarif</th><th class="right">Pendapatan</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="9" class="center muted">Tidak ada detail pekerjaan</td></tr>`}</tbody>
+          <tfoot><tr class="total-row"><td colspan="4">TOTAL</td><td class="center">${Number(r?.pcsAwal || 0)} pcs</td><td class="center ok">${Number(r?.pcsSetor || 0)} pcs</td><td class="center ${Number(r?.pcsReject || 0) > 0 ? "bad" : "muted"}">${Number(r?.pcsReject || 0) > 0 ? Number(r.pcsReject) + " pcs" : "-"}</td><td></td><td class="right ok">${fmt(r?.gaji)}</td></tr></tfoot></table>
+          ${Number(r?.belumSetor || 0) > 0 ? `<div class="warning">Masih ada <strong>${Number(r.belumSetor)} pcs</strong> belum disetor, belum termasuk total di atas.</div>` : ""}
+          <div class="total-box"><div>Total Pendapatan Bersih</div><div>${fmt(r?.gaji)}</div></div>
+          ${carryRows ? `<div class="carry"><h3>Tanggungan Minggu Lalu (Belum Dibayar)</h3>${carryRows}</div>` : ""}
+          <div class="ttd"><div class="ttd-box"><div class="label">Hormat saya, pekerja</div><div class="name">${escapeHtml(nama)}</div></div><div class="ttd-box"><div class="label">Mengetahui, Gallery Kerudung</div><div class="name">( ________________ )</div></div></div>
+        </div>
+        <div class="footer">Dicetak otomatis oleh sistem Gallery Kerudung · ${escapeHtml(cetakTgl)}</div>
+      </div>
+    </body></html>`;
+  }
+
+  function downloadSlipGaji(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
+    try {
+      const html = buildSlipHtml(nama, r, dari, sampai, carryOver);
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const filename = `SlipGaji_${safeFileName(nama)}_${safeFileName(dari)}_sd_${safeFileName(sampai)}.html`;
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+      const printTab = window.open("", "_blank", "noopener,noreferrer");
+      if (printTab) {
+        printTab.document.open();
+        printTab.document.write(html);
+        printTab.document.close();
+      }
+
+      setToast("✅ Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.");
+      setTimeout(() => setToast(""), 4500);
+      return html;
+    } catch (e) {
+      alert("Gagal membuat slip gaji: " + (e?.message || e));
+      return "";
+    }
+  }
+
+  function drawRoundedRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
+    const words = String(text || "").split(/\s+/);
+    let line = "";
+    let lines = 0;
+    for (let n = 0; n < words.length; n++) {
+      const testLine = line ? line + " " + words[n] : words[n];
+      if (ctx.measureText(testLine).width > maxWidth && line) {
+        ctx.fillText(line, x, y);
+        line = words[n];
+        y += lineHeight;
+        lines += 1;
+        if (lines >= maxLines - 1) break;
+      } else {
+        line = testLine;
+      }
+    }
+    if (line) ctx.fillText(line, x, y);
+    return y + lineHeight;
+  }
+
+  async function shareSlipGajiAsImage(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
+    try {
+      const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+      const sortedDetail = [...(r?.detail || [])].sort((a, b) => (a.tanggalSetor || a.tanggal || "").localeCompare(b.tanggalSetor || b.tanggal || ""));
+      const detailRows = sortedDetail.slice(0, 14);
+      const extraRows = Math.max(0, sortedDetail.length - detailRows.length);
+      const W = 900;
+      const H = 420 + detailRows.length * 74 + (Number(r?.belumSetor || 0) > 0 ? 48 : 0) + ((carryOver || []).length > 0 ? 76 : 0);
+      const canvas = document.createElement("canvas");
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas tidak tersedia di browser ini.");
+
+      ctx.fillStyle = "#fdf2f8";
+      ctx.fillRect(0, 0, W, H);
+
+      const grad = ctx.createLinearGradient(0, 0, W, 120);
+      grad.addColorStop(0, "#ec4899");
+      grad.addColorStop(1, "#a855f7");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, 120);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 30px Segoe UI, Arial";
+      ctx.fillText("Slip Pendapatan Borongan", 36, 48);
+      ctx.font = "18px Segoe UI, Arial";
+      ctx.fillStyle = "rgba(255,255,255,0.88)";
+      ctx.fillText("Gallery Kerudung", 36, 76);
+      ctx.font = "15px Segoe UI, Arial";
+      ctx.fillStyle = "rgba(255,255,255,0.72)";
+      ctx.fillText(`Periode ${dari} s/d ${sampai}`, 36, 100);
+
+      let y = 148;
+      drawRoundedRect(ctx, 28, y, W - 56, 96, 18);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      ctx.font = "16px Segoe UI, Arial";
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillText("Nama Pekerja", 52, y + 34);
+      ctx.fillText("Tanggal Cetak", 52, y + 68);
+      ctx.textAlign = "right";
+      ctx.font = "bold 18px Segoe UI, Arial";
+      ctx.fillStyle = "#2d1b69";
+      ctx.fillText(String(nama || "-"), W - 52, y + 34);
+      ctx.fillText(new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" }), W - 52, y + 68);
+      ctx.textAlign = "left";
+
+      y += 118;
+      const statW = (W - 76) / 3;
+      [["Diberikan", r?.pcsAwal || 0, "#ede9fe", "#5b21b6"], ["Disetor", r?.pcsSetor || 0, "#dcfce7", "#16a34a"], ["Reject", r?.pcsReject || 0, Number(r?.pcsReject || 0) > 0 ? "#fee2e2" : "#f1f5f9", Number(r?.pcsReject || 0) > 0 ? "#ef4444" : "#64748b"]].forEach(([label, val, bg, color], i) => {
+        const x = 28 + i * (statW + 10);
+        drawRoundedRect(ctx, x, y, statW, 70, 16);
+        ctx.fillStyle = bg;
+        ctx.fill();
+        ctx.textAlign = "center";
+        ctx.fillStyle = color;
+        ctx.font = "bold 24px Segoe UI, Arial";
+        ctx.fillText(String(val), x + statW / 2, y + 31);
+        ctx.font = "15px Segoe UI, Arial";
+        ctx.fillStyle = "#64748b";
+        ctx.fillText(label, x + statW / 2, y + 54);
+        ctx.textAlign = "left";
+      });
+
+      y += 94;
+      drawRoundedRect(ctx, 28, y, W - 56, 44, 14);
+      const hgrad = ctx.createLinearGradient(28, y, W - 28, y + 44);
+      hgrad.addColorStop(0, "#ede9fe");
+      hgrad.addColorStop(1, "#fce7f3");
+      ctx.fillStyle = hgrad;
+      ctx.fill();
+      ctx.fillStyle = "#7c3aed";
+      ctx.font = "bold 16px Segoe UI, Arial";
+      ctx.fillText("Detail Pekerjaan", 50, y + 28);
+      y += 54;
+
+      detailRows.forEach((d) => {
+        drawRoundedRect(ctx, 28, y, W - 56, 64, 14);
+        ctx.fillStyle = d.sudahSetor ? "#f0fdf4" : "#fefce8";
+        ctx.fill();
+        ctx.fillStyle = "#2d1b69";
+        ctx.font = "bold 16px Segoe UI, Arial";
+        drawWrappedText(ctx, `${d.process || ""}${d.model && d.model !== "-" ? " · " + d.model : ""}`, 50, y + 23, 450, 18, 1);
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "13px Segoe UI, Arial";
+        drawWrappedText(ctx, `${d.customer || "-"}${d.invoice ? " / " + d.invoice : ""}`, 50, y + 45, 440, 16, 1);
+        ctx.textAlign = "right";
+        ctx.font = "bold 16px Segoe UI, Arial";
+        ctx.fillStyle = d.sudahSetor ? "#16a34a" : "#b45309";
+        ctx.fillText(d.sudahSetor ? `${Number(d.qtySetor || 0)} pcs` : `${Number(d.qty || 0)} pcs`, W - 50, y + 24);
+        ctx.font = "bold 16px Segoe UI, Arial";
+        ctx.fillStyle = "#7c3aed";
+        ctx.fillText(d.sudahSetor ? fmt(d.gaji) : "Belum setor", W - 50, y + 48);
+        ctx.textAlign = "left";
+        y += 74;
+      });
+
+      if (extraRows > 0) {
+        ctx.fillStyle = "#64748b";
+        ctx.font = "14px Segoe UI, Arial";
+        ctx.fillText(`+ ${extraRows} detail lain ada di slip PDF/HTML`, 50, y + 8);
+        y += 28;
+      }
+
+      if (Number(r?.belumSetor || 0) > 0) {
+        drawRoundedRect(ctx, 28, y, W - 56, 42, 12);
+        ctx.fillStyle = "#fefce8";
+        ctx.fill();
+        ctx.fillStyle = "#b45309";
+        ctx.font = "bold 15px Segoe UI, Arial";
+        ctx.fillText(`Masih ada ${Number(r.belumSetor)} pcs belum disetor`, 50, y + 27);
+        y += 56;
+      }
+
+      if ((carryOver || []).length > 0) {
+        drawRoundedRect(ctx, 28, y, W - 56, 58, 12);
+        ctx.fillStyle = "#fff7ed";
+        ctx.fill();
+        ctx.fillStyle = "#b45309";
+        ctx.font = "bold 15px Segoe UI, Arial";
+        ctx.fillText(`Tanggungan minggu lalu: ${(carryOver || []).reduce((s, e) => s + Number(e.qty || 0), 0)} pcs`, 50, y + 34);
+        y += 72;
+      }
+
+      drawRoundedRect(ctx, 28, y, W - 56, 86, 18);
+      const totalGrad = ctx.createLinearGradient(28, y, W - 28, y + 86);
+      totalGrad.addColorStop(0, "#f0fdf4");
+      totalGrad.addColorStop(1, "#dcfce7");
+      ctx.fillStyle = totalGrad;
+      ctx.fill();
+      ctx.fillStyle = "#64748b";
+      ctx.font = "16px Segoe UI, Arial";
+      ctx.fillText("Total Pendapatan Bersih", 52, y + 30);
+      ctx.fillStyle = "#16a34a";
+      ctx.font = "bold 34px Segoe UI, Arial";
+      ctx.fillText(fmt(r?.gaji), 52, y + 66);
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("Gagal membuat gambar slip.");
+
+      const filename = `SlipGaji_${safeFileName(nama)}_${safeFileName(dari)}_sd_${safeFileName(sampai)}.png`;
+      const file = new File([blob], filename, { type: "image/png" });
+      const canShareFiles = Boolean(navigator.share && navigator.canShare && navigator.canShare({ files: [file] }));
+
+      if (canShareFiles) {
+        await navigator.share({
+          files: [file],
+          title: `Slip Gaji ${nama}`,
+          text: `Slip Pendapatan Borongan - ${nama} (${dari} s/d ${sampai})`,
+        });
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+      const waText = encodeURIComponent(`Slip Pendapatan Borongan - ${nama}\nPeriode: ${dari} s/d ${sampai}\nTotal: ${fmt(r?.gaji)}\n\nGambar slip sudah terunduh. Silakan lampirkan file PNG tersebut di WhatsApp.`);
+      window.open(`https://wa.me/?text=${waText}`, "_blank", "noopener,noreferrer");
+      setToast("✅ Gambar slip diunduh. Lampirkan file PNG itu di WhatsApp.");
+      setTimeout(() => setToast(""), 4500);
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+      alert("Gagal share slip gaji: " + (e?.message || e));
+    }
+  }
+
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center" style={{ background: "#fdf2f8" }}>
@@ -1694,304 +2037,6 @@ function findRate(productType, model, process) {
           });
         });
         const rekapPerkerja = Object.entries(rekapMap).sort((a, b) => b[1].gaji - a[1].gaji);
-
-        // Fungsi download slip gaji per pekerja
-        function downloadSlipGaji(nama, r) {
-          const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
-          // Urutkan detail berdasarkan tanggal ascending
-          const sortedDetail = [...r.detail].sort((a, b) => {
-            const da = a.tanggalSetor || a.tanggal || "";
-            const db = b.tanggalSetor || b.tanggal || "";
-            return da.localeCompare(db);
-          });
-          const rows = sortedDetail.map((d, i) => {
-            const tgl = d.tanggalSetor || d.tanggal || "-";
-            const pesanan = d.customer && d.customer !== "-" ? d.customer + (d.invoice ? "<br><span style=\"font-size:10px;color:#94a3b8;\">" + d.invoice + "</span>" : "") : (d.invoice || "-");
-            const prosesModel = d.process + (d.model && d.model !== "-" ? " · " + d.model : "");
-            const diberi = d.qty;
-            const setor = d.sudahSetor ? d.qtySetor : "-";
-            const reject = d.qtyReject > 0 ? d.qtyReject : "-";
-            const pendapatan = d.sudahSetor ? `<strong style="color:#16a34a;">${fmt(d.gaji)}</strong>` : `<span style="color:#b45309;">⏳ Blm setor</span>`;
-            return `<tr style="border-bottom:1px solid #f3e8ff;">
-              <td style="padding:8px 10px;font-size:12px;color:#94a3b8;">${i + 1}</td>
-              <td style="padding:8px 10px;font-size:12px;">${tgl}</td>
-              <td style="padding:8px 10px;font-size:12px;">${pesanan}</td>
-              <td style="padding:8px 10px;font-size:12px;">${prosesModel}</td>
-              <td style="padding:8px 10px;text-align:center;font-size:12px;">${diberi} pcs</td>
-              <td style="padding:8px 10px;text-align:center;font-size:12px;color:${setor !== "-" ? "#16a34a" : "#94a3b8"};">${setor !== "-" ? setor + " pcs" : "-"}</td>
-              <td style="padding:8px 10px;text-align:center;font-size:12px;color:${reject !== "-" ? "#ef4444" : "#94a3b8"};">${reject !== "-" ? reject + " pcs" : "-"}</td>
-              <td style="padding:8px 10px;text-align:right;font-size:12px;">${d.rate > 0 ? fmt(d.rate) + "/pcs" : "-"}</td>
-              <td style="padding:8px 10px;text-align:right;font-size:12px;">${pendapatan}</td>
-            </tr>`;
-          }).join("");
-
-          const logoSrc = "data:image/png;base64,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";
-          const cetakTgl = new Date().toLocaleDateString("id-ID", { day:"2-digit", month:"long", year:"numeric" });
-          const html = `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8">
-            <title>Slip Pendapatan - ${nama}</title>
-            <style>
-              * { box-sizing: border-box; }
-              body { font-family: 'Segoe UI', Arial, sans-serif; background: #fdf2f8; margin: 0; padding: 20px; }
-              .slip { max-width: 780px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 24px rgba(236,72,153,0.15); }
-              .header { background: linear-gradient(135deg,#ec4899,#a855f7); color: white; padding: 24px 28px; display:flex; align-items:center; gap:18px; }
-              .header img { width:64px; height:64px; border-radius:14px; border:3px solid rgba(255,255,255,0.4); object-fit:cover; background:white; }
-              .header-text h1 { margin:0 0 3px; font-size:20px; font-weight:900; }
-              .header-text p { margin:0; font-size:12px; opacity:0.85; }
-              .header-text small { font-size:11px; opacity:0.7; }
-              .body { padding: 22px 28px; }
-              .info-box { background:#fdf4ff; border:1px solid #e9d5ff; border-radius:14px; padding:14px 16px; margin-bottom:16px; }
-              .info-row { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; }
-              .info-row span { color:#94a3b8; }
-              .info-row strong { color:#2d1b69; }
-              .divider { border:none; border-top:1.5px solid #f3e8ff; margin:16px 0; }
-              table { width:100%; border-collapse:collapse; font-size:12px; }
-              thead tr { background:linear-gradient(135deg,#ede9fe,#fce7f3); }
-              th { padding:9px 10px; font-size:11px; color:#7c3aed; text-align:left; font-weight:700; white-space:nowrap; }
-              .total-row { background:linear-gradient(135deg,#ede9fe,#fce7f3); }
-              .total-row td { padding:10px; font-size:13px; font-weight:700; }
-              .total-box { margin-top:16px; background:linear-gradient(135deg,#f0fdf4,#dcfce7); border-radius:14px; padding:16px 18px; border:1.5px solid #bbf7d0; }
-              .ttd-row { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:24px; }
-              .ttd-box { border:1px solid #e9d5ff; border-radius:14px; padding:14px 16px; text-align:center; }
-              .ttd-box .label { font-size:11px; color:#94a3b8; margin-bottom:52px; }
-              .ttd-box .name { font-size:12px; font-weight:700; color:#2d1b69; border-top:1.5px solid #c4b5fd; padding-top:6px; margin-top:4px; }
-              .footer { text-align:center; font-size:11px; color:#a855f7; padding:14px 28px 18px; border-top:1.5px solid #fce7f3; }
-              @media print {
-                body { background:white; padding:0; }
-                .slip { box-shadow:none; border-radius:0; }
-                @page { margin: 1cm; }
-              }
-            </style>
-          </head><body>
-            <div class="slip">
-              <div class="header">
-                <img src="${logoSrc}" alt="Logo Gallery Kerudung" />
-                <div class="header-text">
-                  <h1>Slip Pendapatan Borongan</h1>
-                  <p>Gallery Kerudung</p>
-                  <small>Dokumen resmi penggajian borongan</small>
-                </div>
-              </div>
-              <div class="body">
-                <div class="info-box">
-                  <div class="info-row"><span>Nama Pekerja</span><strong>👤 ${nama}</strong></div>
-                  <div class="info-row"><span>Periode</span><strong>📅 ${r.dari || ""} s/d ${r.sampai || ""}</strong></div>
-                  <div class="info-row"><span>Tanggal Cetak</span><strong>${cetakTgl}</strong></div>
-                </div>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Tanggal</th>
-                      <th>Pesanan</th>
-                      <th>Proses / Model</th>
-                      <th style="text-align:center;">Diberi</th>
-                      <th style="text-align:center;">Setor</th>
-                      <th style="text-align:center;">Reject</th>
-                      <th style="text-align:right;">Tarif</th>
-                      <th style="text-align:right;">Pendapatan</th>
-                    </tr>
-                  </thead>
-                  <tbody>${rows}</tbody>
-                  <tfoot>
-                    <tr class="total-row">
-                      <td colspan="4">TOTAL</td>
-                      <td style="text-align:center;">${r.pcsAwal} pcs</td>
-                      <td style="text-align:center;color:#16a34a;">${r.pcsSetor} pcs</td>
-                      <td style="text-align:center;color:${r.pcsReject > 0 ? "#ef4444" : "#94a3b8"};">${r.pcsReject > 0 ? r.pcsReject + " pcs" : "-"}</td>
-                      <td></td>
-                      <td style="text-align:right;color:#16a34a;font-size:15px;">${fmt(r.gaji)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-                ${r.belumSetor > 0 ? `<div style="margin-top:12px;background:#fefce8;border-radius:10px;padding:10px 14px;font-size:12px;color:#b45309;border:1px solid #fde68a;">⚠️ Masih ada <strong>${r.belumSetor} pcs</strong> belum disetor, belum termasuk total di atas.</div>` : ""}
-                <div class="total-box">
-                  <div style="font-size:12px;color:#64748b;margin-bottom:4px;">Total Pendapatan Bersih</div>
-                  <div style="font-size:26px;font-weight:900;color:#16a34a;">${fmt(r.gaji)}</div>
-                </div>
-                <div class="ttd-row">
-                  <div class="ttd-box">
-                    <div class="label">Hormat saya, pekerja</div>
-                    <div class="name">${nama}</div>
-                  </div>
-                  <div class="ttd-box">
-                    <div class="label">Mengetahui, Gallery Kerudung</div>
-                    <div class="name">( ________________ )</div>
-                  </div>
-                </div>
-              </div>
-              <div class="footer">
-                Dicetak otomatis oleh sistem Gallery Kerudung · ${cetakTgl}
-              </div>
-            </div>
-            <div style="text-align:center;padding:20px 0 10px;"><button onclick="window.print()" style="background:linear-gradient(135deg,#ec4899,#a855f7);color:white;border:none;border-radius:14px;padding:12px 32px;font-size:15px;font-weight:700;cursor:pointer;">🖨️ Cetak / Simpan PDF</button></div>
-          </body></html>`;
-
-          // Buka di tab baru (lebih kompatibel mobile/PWA)
-          const newTab = window.open("", "_blank");
-          if (newTab) {
-            newTab.document.write(html);
-            newTab.document.close();
-          } else {
-            // Fallback blob jika popup diblokir
-            const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `SlipGaji_${nama.replace(/\s+/g, "_")}_${r.dari}_sd_${r.sampai}.html`;
-            a.click();
-            URL.revokeObjectURL(url);
-          }
-          return html; // kembalikan untuk keperluan lain
-        }
-
-        // Share slip gaji sebagai gambar ke WA menggunakan Canvas API native
-        async function shareSlipGajiAsImage(nama, r) {
-          const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
-          const sortedDetail = [...r.detail].sort((a, b) => (a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||""));
-          const cetakTgl = new Date().toLocaleDateString("id-ID", { day:"2-digit", month:"long", year:"numeric" });
-
-          const W = 600;
-          const rowH = 44;
-          const detailCount = sortedDetail.length;
-          const H = 320 + detailCount * rowH + (r.belumSetor > 0 ? 44 : 0) + 120;
-
-          const canvas = document.createElement("canvas");
-          canvas.width = W;
-          canvas.height = H;
-          const ctx = canvas.getContext("2d");
-
-          // Helper
-          const rr = (x, y, w, h, rad) => { ctx.beginPath(); ctx.moveTo(x+rad,y); ctx.lineTo(x+w-rad,y); ctx.quadraticCurveTo(x+w,y,x+w,y+rad); ctx.lineTo(x+w,y+h-rad); ctx.quadraticCurveTo(x+w,y+h,x+w-rad,y+h); ctx.lineTo(x+rad,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-rad); ctx.lineTo(x,y+rad); ctx.quadraticCurveTo(x,y,x+rad,y); ctx.closePath(); };
-
-          // Background
-          ctx.fillStyle = "#fdf2f8";
-          ctx.fillRect(0, 0, W, H);
-
-          // Header gradient
-          const grad = ctx.createLinearGradient(0,0,W,80);
-          grad.addColorStop(0,"#ec4899"); grad.addColorStop(1,"#a855f7");
-          rr(0,0,W,80,0); ctx.fillStyle=grad; ctx.fill();
-
-          // Header text
-          ctx.fillStyle = "white";
-          ctx.font = "bold 18px 'Segoe UI', Arial, sans-serif";
-          ctx.fillText("Slip Pendapatan Borongan", 24, 32);
-          ctx.font = "13px 'Segoe UI', Arial, sans-serif";
-          ctx.fillStyle = "rgba(255,255,255,0.85)";
-          ctx.fillText("Gallery Kerudung", 24, 52);
-          ctx.font = "11px 'Segoe UI', Arial, sans-serif";
-          ctx.fillStyle = "rgba(255,255,255,0.7)";
-          ctx.fillText("Dokumen resmi penggajian borongan", 24, 68);
-
-          // Info box
-          let y = 96;
-          rr(16,y,W-32,80,12); ctx.fillStyle="#fdf4ff"; ctx.fill();
-          ctx.strokeStyle="#e9d5ff"; ctx.lineWidth=1; ctx.stroke();
-          ctx.font = "12px 'Segoe UI', Arial, sans-serif";
-          const infoRows = [["Nama Pekerja", nama], ["Periode", `${r.dari||""} s/d ${r.sampai||""}`], ["Tanggal Cetak", cetakTgl]];
-          infoRows.forEach(([label, val], i) => {
-            const iy = y + 16 + i * 22;
-            ctx.fillStyle="#94a3b8"; ctx.fillText(label, 28, iy);
-            ctx.fillStyle="#2d1b69"; ctx.font="bold 12px 'Segoe UI', Arial, sans-serif";
-            ctx.textAlign="right"; ctx.fillText(val, W-28, iy);
-            ctx.textAlign="left"; ctx.font="12px 'Segoe UI', Arial, sans-serif";
-          });
-
-          // Ringkasan 3 kotak
-          y += 96;
-          const bw = (W-48)/3;
-          [["Diberikan", r.pcsAwal, "#ede9fe","#5b21b6"], ["Disetor", r.pcsSetor,"#dcfce7","#16a34a"], ["Reject", r.pcsReject, r.pcsReject>0?"#fee2e2":"#f1f5f9", r.pcsReject>0?"#ef4444":"#94a3b8"]].forEach(([label,val,bg,color],i) => {
-            const bx = 16 + i*(bw+8);
-            rr(bx,y,bw,44,10); ctx.fillStyle=bg; ctx.fill();
-            ctx.fillStyle=color; ctx.font="bold 16px 'Segoe UI', Arial, sans-serif"; ctx.textAlign="center";
-            ctx.fillText(String(val), bx+bw/2, y+20);
-            ctx.font="11px 'Segoe UI', Arial, sans-serif"; ctx.fillStyle="#94a3b8";
-            ctx.fillText(label, bx+bw/2, y+36);
-            ctx.textAlign="left";
-          });
-
-          // Detail header
-          y += 56;
-          rr(16,y,W-32,24,8);
-          const hgrad = ctx.createLinearGradient(16,0,W-16,0);
-          hgrad.addColorStop(0,"#ede9fe"); hgrad.addColorStop(1,"#fce7f3");
-          ctx.fillStyle=hgrad; ctx.fill();
-          ctx.fillStyle="#7c3aed"; ctx.font="bold 11px 'Segoe UI', Arial, sans-serif";
-          ctx.fillText("Detail Pekerjaan", 28, y+16);
-          y += 24;
-
-          // Detail rows
-          sortedDetail.forEach((d, i) => {
-            const rowBg = d.sudahSetor ? "#f0fdf4" : "#fefce8";
-            rr(16,y,W-32,rowH-2,0); ctx.fillStyle=rowBg; ctx.fill();
-            ctx.strokeStyle="#f3e8ff"; ctx.lineWidth=1;
-            ctx.beginPath(); ctx.moveTo(16,y+rowH-2); ctx.lineTo(W-16,y+rowH-2); ctx.stroke();
-
-            const label = `${d.process}${d.model&&d.model!=="-"?" · "+d.model:""}`;
-            const tgl = d.tanggalSetor||d.tanggal||"-";
-            ctx.fillStyle="#2d1b69"; ctx.font="bold 11px 'Segoe UI', Arial, sans-serif";
-            ctx.fillText(label.length>38?label.slice(0,36)+"…":label, 28, y+16);
-            ctx.fillStyle="#94a3b8"; ctx.font="10px 'Segoe UI', Arial, sans-serif";
-            ctx.fillText(`📅 ${tgl}  |  ${fmt(d.rate)}/pcs × ${d.sudahSetor?d.qtySetor:d.qty} pcs`, 28, y+30);
-            ctx.textAlign="right";
-            if (d.sudahSetor) {
-              ctx.fillStyle="#7c3aed"; ctx.font="bold 12px 'Segoe UI', Arial, sans-serif";
-              ctx.fillText(fmt(d.gaji), W-28, y+20);
-              ctx.fillStyle="#16a34a"; ctx.font="10px 'Segoe UI', Arial, sans-serif";
-              ctx.fillText(`${d.qtySetor} pcs setor`, W-28, y+33);
-            } else {
-              ctx.fillStyle="#b45309"; ctx.font="bold 11px 'Segoe UI', Arial, sans-serif";
-              ctx.fillText("⏳ Blm setor", W-28, y+24);
-            }
-            ctx.textAlign="left";
-            y += rowH;
-          });
-
-          // Belum setor warning
-          if (r.belumSetor > 0) {
-            rr(16,y,W-32,36,8); ctx.fillStyle="#fefce8"; ctx.fill();
-            ctx.strokeStyle="#fde68a"; ctx.lineWidth=1; ctx.stroke();
-            ctx.fillStyle="#b45309"; ctx.font="11px 'Segoe UI', Arial, sans-serif";
-            ctx.fillText(`⚠️ Masih ada ${r.belumSetor} pcs belum disetor, belum termasuk total di bawah.`, 28, y+22);
-            y += 44;
-          }
-
-          // Total box
-          y += 8;
-          rr(16,y,W-32,60,12);
-          const tgrad = ctx.createLinearGradient(16,y,W-16,y+60);
-          tgrad.addColorStop(0,"#f0fdf4"); tgrad.addColorStop(1,"#dcfce7");
-          ctx.fillStyle=tgrad; ctx.fill();
-          ctx.strokeStyle="#bbf7d0"; ctx.lineWidth=1.5; ctx.stroke();
-          ctx.fillStyle="#64748b"; ctx.font="11px 'Segoe UI', Arial, sans-serif";
-          ctx.fillText("Total Pendapatan Bersih", 28, y+22);
-          ctx.fillStyle="#16a34a"; ctx.font="bold 26px 'Segoe UI', Arial, sans-serif";
-          ctx.fillText(fmt(r.gaji), 28, y+50);
-
-          // Footer
-          y += 72;
-          ctx.fillStyle="#a855f7"; ctx.font="10px 'Segoe UI', Arial, sans-serif";
-          ctx.textAlign="center";
-          ctx.fillText(`Dicetak otomatis oleh sistem Gallery Kerudung · ${cetakTgl}`, W/2, y+16);
-          ctx.textAlign="left";
-
-          // Convert ke blob dan share/download
-          canvas.toBlob(async (blob) => {
-            if (!blob) return;
-            const file = new File([blob], `SlipGaji_${nama.replace(/\s+/g,"_")}.png`, { type:"image/png" });
-            if (navigator.share && navigator.canShare({ files:[file] })) {
-              try { await navigator.share({ files:[file], title:`Slip Gaji ${nama}`, text:`Slip Pendapatan Borongan - ${nama}` }); }
-              catch(e) { if(e.name!=="AbortError") fallbackDownload(blob, nama); }
-            } else { fallbackDownload(blob, nama); }
-          }, "image/png");
-
-          function fallbackDownload(blob, nama) {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url; a.download = `SlipGaji_${nama.replace(/\s+/g,"_")}.png`;
-            a.click(); URL.revokeObjectURL(url);
-          }
-        }
 
         return (
           <div className="space-y-3 p-4">
@@ -2765,7 +2810,7 @@ function findRate(productType, model, process) {
 
                 {/* Tombol Download Slip */}
                 <button
-                  onClick={() => downloadSlipGaji(nama, r)}
+                  onClick={() => downloadSlipGaji(nama, r, dari, sampai, carryOver)}
                   className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
                   style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                 >
@@ -2774,7 +2819,7 @@ function findRate(productType, model, process) {
 
                 {/* Tombol Share WA sebagai Gambar (Canvas Native) */}
                 <button
-                  onClick={() => shareSlipGajiAsImage(nama, r)}
+                  onClick={() => shareSlipGajiAsImage(nama, r, dari, sampai, carryOver)}
                   className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
                   style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
                 >
