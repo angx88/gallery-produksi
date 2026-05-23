@@ -987,6 +987,23 @@ function findRate(productType, model, process) {
         updatedAt: todayStr(),
         history: [{ tanggal: todayStr(), status: "Antri", catatan: "Masuk produksi" }],
       });
+
+      // Sinkron ke Gallery Kerudung: order langsung tahu sudah masuk alur produksi.
+      // Field statusProduksi dibaca sebagai penanda produksi, sementara status tetap aman sebagai Proses
+      // agar pesanan tidak hilang dari alur tagihan/pengiriman Gallery Kerudung.
+      try {
+        await updateDoc(doc(db, C.ORDERS, order.id), {
+          statusProduksi: "Antri",
+          produksiStatus: "Antri",
+          produksiSource: "gallery-produksi",
+          produksiUpdatedAt: todayStr(),
+          status: isSentStatus(order.status) || lower(order.status) === "lunas" ? order.status : "Proses",
+          updatedAt: todayStr(),
+        });
+      } catch (syncError) {
+        console.warn("Order Gallery Kerudung tidak bisa disinkronkan saat mulai produksi:", syncError);
+      }
+
       setProdForm({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
       setModal(null);
     } catch (e) {
@@ -1024,7 +1041,11 @@ function findRate(productType, model, process) {
           try {
             await updateDoc(doc(db, C.ORDERS, item.orderId), {
               statusProduksi: newStatus,
-              ...(newStatus === "Selesai" ? { status: "Selesai Produksi" } : {}),
+              produksiStatus: newStatus,
+              produksiSource: "gallery-produksi",
+              produksiUpdatedAt: todayStr(),
+              ...(newStatus === "Selesai" ? { status: "Selesai Produksi" } : { status: orderStatusBaru }),
+              updatedAt: todayStr(),
             });
           } catch (_) {
             // Jika order tidak ditemukan, abaikan (mungkin sudah dihapus)
@@ -1225,15 +1246,117 @@ function findRate(productType, model, process) {
     const order = orders.find((o) => o.id === kirimForm.pesananId);
     if (!order) return alert("Pesanan tidak ditemukan");
 
-    const items = kirimForm.items.map((i) => ({
-      nama: i.nama || "",
-      qtyPesan: Number(i.qtyPesan || 0),
-      qtyKirim: Number(i.qtyKirim || 0),
-      selisih: Number(i.qtyKirim || 0) - Number(i.qtyPesan || 0),
-    }));
+    const rawOrderItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
+      ? order.raw.items
+      : Array.isArray(order?.items) && order.items.length > 0
+        ? order.items
+        : [{ name: order.item || "Produk", qty: order.qty || 0, price: order.raw?.hargaPcs || order.raw?.price || 0 }];
+
+    const baseItems = rawOrderItems.map((it, idx) => {
+      const name = it.name || it.nama || it.item || it.productName || it.model || order.item || "Produk";
+      const qty = Number(it.qty ?? it.quantity ?? it.jumlah ?? order.qty ?? 0);
+      const price = Number(it.price ?? it.harga ?? it.hargaPcs ?? order.raw?.hargaPcs ?? 0);
+      return {
+        itemIndex: idx,
+        name,
+        orderedQty: qty,
+        price,
+        bahanCost: Number(it.bahanCost ?? it.materialCost ?? 0),
+        hppPerPcs: Number(it.hppPerPcs ?? 0),
+        mainMaterial: it.mainMaterial || it.materialName || it.kain || it.namaKain || "",
+        materialQtyPerPcs: Number(it.materialQtyPerPcs ?? it.kebutuhanKainPerPcs ?? it.kebutuhanKain ?? it.kainPerPcs ?? 0),
+        unit: it.unit || it.satuan || "yard",
+      };
+    });
+
+    const items = kirimForm.items.map((i, idx) => {
+      const name = i.nama || baseItems[idx]?.name || "Produk";
+      const matchIndex = Math.max(0, baseItems.findIndex((b) => lower(b.name) === lower(name)));
+      const base = baseItems[matchIndex >= 0 ? matchIndex : idx] || baseItems[0] || {};
+      const qtyPesan = Number(i.qtyPesan || base.orderedQty || 0);
+      const qtyKirim = Number(i.qtyKirim || 0);
+      return {
+        nama: name,
+        name,
+        itemIndex: Number(base.itemIndex ?? idx),
+        qtyPesan,
+        orderedQty: qtyPesan,
+        qtyKirim,
+        shippedQty: qtyKirim,
+        qty: qtyKirim,
+        selisih: qtyKirim - qtyPesan,
+        price: Number(base.price || 0),
+        bahanCost: Number(base.bahanCost || 0),
+        hppPerPcs: Number(base.hppPerPcs || 0),
+        mainMaterial: base.mainMaterial || "",
+        materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
+        unit: base.unit || "yard",
+      };
+    });
 
     if (items.some((i) => Number(i.qtyKirim || 0) < 0)) return alert("Qty kirim tidak boleh negatif.");
     if (items.reduce((s, i) => s + Number(i.qtyKirim || 0), 0) <= 0) return alert("Minimal ada qty kirim lebih dari 0 pcs.");
+
+    const cleanDeliveryItems = items
+      .filter((i) => Number(i.qtyKirim || 0) > 0)
+      .map((i) => ({
+        itemIndex: Number(i.itemIndex || 0),
+        name: i.name || i.nama || "Produk",
+        qty: Number(i.qtyKirim || 0),
+        shippedQty: Number(i.qtyKirim || 0),
+        orderedQty: Number(i.qtyPesan || i.orderedQty || 0),
+        price: Number(i.price || 0),
+        bahanCost: Number(i.bahanCost || 0),
+        hppPerPcs: Number(i.hppPerPcs || 0),
+        mainMaterial: i.mainMaterial || "",
+        materialQtyPerPcs: Number(i.materialQtyPerPcs || 0),
+        unit: i.unit || "yard",
+      }));
+
+    const existingDeliveries = Array.isArray(order?.raw?.deliveries) ? order.raw.deliveries : [];
+    const newDelivery = {
+      date: kirimForm.tanggalKirim || todayStr(),
+      createdAt: new Date().toISOString(),
+      source: "gallery-produksi",
+      receiver: kirimForm.penerima.trim(),
+      penerima: kirimForm.penerima.trim(),
+      courier: kirimForm.ekspedisi || "",
+      ekspedisi: kirimForm.ekspedisi || "",
+      note: kirimForm.catatan || "",
+      items: cleanDeliveryItems,
+      total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
+    };
+    const nextDeliveries = [...existingDeliveries, newDelivery];
+
+    const totalDeliveredForItem = (base, idx) => nextDeliveries.reduce((sum, delivery) => {
+      const found = (delivery.items || []).filter((it) =>
+        Number(it.itemIndex ?? -1) === idx || lower(it.name || it.nama) === lower(base.name)
+      );
+      return sum + found.reduce((s, it) => s + Number(it.qty ?? it.shippedQty ?? it.qtyKirim ?? 0), 0);
+    }, 0);
+
+    const shippedItems = baseItems.map((base, idx) => {
+      const shippedQty = totalDeliveredForItem(base, idx);
+      return {
+        name: base.name,
+        orderedQty: Number(base.orderedQty || 0),
+        shippedQty,
+        price: Number(base.price || 0),
+        bahanCost: Number(base.bahanCost || 0),
+        hppPerPcs: Number(base.hppPerPcs || 0),
+        mainMaterial: base.mainMaterial || "",
+        materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
+        unit: base.unit || "yard",
+        note: shippedQty >= Number(base.orderedQty || 0) ? "Sesuai pesanan" : `Belum dikirim ${Math.max(Number(base.orderedQty || 0) - shippedQty, 0)} pcs`,
+      };
+    });
+
+    const totalOrdered = shippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
+    const totalShipped = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
+    const deliveredTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
+    const deliveredHppTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
+    const deliveryStatus = totalShipped >= totalOrdered && totalOrdered > 0 ? "Selesai" : "Dikirim Sebagian";
+    const orderStatus = deliveryStatus === "Selesai" ? "Dikirim" : "Dikirim Sebagian";
 
     setIsSaving(true);
     try {
@@ -1251,9 +1374,12 @@ function findRate(productType, model, process) {
         ekspedisi: kirimForm.ekspedisi || "",
         courier: kirimForm.ekspedisi || "",
         items,
+        deliveryItems: cleanDeliveryItems,
         qty: items.reduce((s, i) => s + i.qtyKirim, 0),
         totalPesan: items.reduce((s, i) => s + i.qtyPesan, 0),
         totalKirim: items.reduce((s, i) => s + i.qtyKirim, 0),
+        deliveredTotal,
+        deliveredHppTotal,
         catatan: kirimForm.catatan || "",
         note: kirimForm.catatan || "",
         source: "gallery-produksi",
@@ -1274,12 +1400,22 @@ function findRate(productType, model, process) {
 
       try {
         await updateDoc(doc(db, C.ORDERS, order.id), {
-          status: "Dikirim",
-          shippingStatus: "Dikirim",
+          status: orderStatus,
+          shippingStatus: orderStatus,
+          deliveryStatus,
+          tanggalKirim: kirimForm.tanggalKirim || todayStr(),
+          deliveries: nextDeliveries,
+          shippedItems,
+          deliveredTotal,
+          deliveredHppTotal,
+          statusProduksi: "Selesai",
+          produksiStatus: "Selesai",
+          produksiSource: "gallery-produksi",
+          produksiUpdatedAt: todayStr(),
           updatedAt: todayStr(),
         });
       } catch (e) {
-        console.warn("Order status tidak bisa diupdate:", e);
+        console.warn("Order status/pengiriman Gallery Kerudung tidak bisa diupdate:", e);
       }
 
       setKirimForm({
