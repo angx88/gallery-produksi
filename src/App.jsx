@@ -42,6 +42,7 @@ const C = {
   WORK_RATES: "work_rates",
   PRODUCTION_ENTRIES: "production_entries",
   PAYROLL_EXPENSES: "payroll_expenses",
+  GAJIAN_HISTORY: "gajian_history",
 };
 
 const PROD_STATUS = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
@@ -996,6 +997,9 @@ export default function App() {
   const [materials, setMaterials] = useState([]);
   const [shipments, setShipments] = useState([]);
   const [payrollExpenses, setPayrollExpenses] = useState([]);
+  const [gajianHistory, setGajianHistory] = useState([]);
+  const [showFormGajianLama, setShowFormGajianLama] = useState(false);
+  const [formGajianLama, setFormGajianLama] = useState({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
 
   const previousOrderIdsRef = useRef(new Set());
   const firstOrderLoadRef = useRef(true);
@@ -1116,6 +1120,7 @@ export default function App() {
     const unsubMaterials = onSnapshot(collection(db, C.MATERIALS), (snap) => setMaterials(snap.docs.map((d) => safeMaterial({ id: d.id, ...d.data() }))));
     const unsubShipments = onSnapshot(collection(db, C.SHIPMENTS), (snap) => setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }))));
     const unsubPayroll = onSnapshot(collection(db, C.PAYROLL_EXPENSES), (snap) => setPayrollExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubGajianHistory = onSnapshot(collection(db, C.GAJIAN_HISTORY), (snap) => setGajianHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
 
     return () => {
       unsubOrders();
@@ -1125,6 +1130,7 @@ export default function App() {
       unsubMaterials();
       unsubShipments();
       unsubPayroll();
+      unsubGajianHistory();
     };
   }, [user]);
 
@@ -2451,47 +2457,6 @@ function findRate(productType, model, process) {
     return Boolean(payrollMarkerFor(nama, dari, sampai));
   }
 
-  async function tandaiSudahGajian(nama, r, dari = rekapDari, sampai = rekapSampai) {
-    if (!nama) return;
-    if (sudahGajian(nama, dari, sampai)) {
-      setToast("✅ Status gajian sudah tercatat");
-      setTimeout(() => setToast(""), 2500);
-      return;
-    }
-    if (Number(r?.gaji || 0) <= 0) {
-      return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
-    }
-
-    const ok = window.confirm(`Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?`);
-    if (!ok) return;
-
-    setIsSaving(true);
-    try {
-      await addDoc(collection(db, C.PAYROLL_EXPENSES), {
-        source: "gallery-produksi-gaji-marker",
-        type: "status_gajian_periode",
-        employeeName: displayWorkerName(nama),
-        periodeGajiDari: dari,
-        periodeGajiSampai: sampai,
-        tanggal: todayStr(),
-        tanggalBayar: todayStr(),
-        status: "sudah_dibayar",
-        totalAmount: 0,
-        gajiAmount: Number(r?.gaji || 0),
-        totalPcs: Number(r?.pcsSetor || 0),
-        totalReject: Number(r?.pcsReject || 0),
-        detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
-        createdAt: todayStr(),
-      });
-      setToast("✅ Status berubah menjadi Sudah gajian");
-      setTimeout(() => setToast(""), 3000);
-    } catch (e) {
-      alert("Gagal menandai sudah gajian: " + (e?.message || e));
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   async function batalkanSudahGajian(nama, dari = rekapDari, sampai = rekapSampai) {
     const marker = payrollMarkerFor(nama, dari, sampai);
     if (!marker?.id) return alert("Data status gajian tidak ditemukan.");
@@ -2513,6 +2478,95 @@ function findRate(productType, model, process) {
     }
   }
 
+
+  async function simpanGajianLama(form) {
+    if (!form.employeeName || !form.tanggalGaji || !form.periodeGajiDari || !form.periodeGajiSampai || !form.jumlah) {
+      return alert("Lengkapi semua field: nama pekerja, tanggal gaji, periode, dan jumlah.");
+    }
+    const jumlah = Number(String(form.jumlah).replace(/[^0-9]/g, ""));
+    if (jumlah <= 0) return alert("Jumlah gaji harus lebih dari 0.");
+    setIsSaving(true);
+    try {
+      await addDoc(collection(db, C.GAJIAN_HISTORY), {
+        employeeName: displayWorkerName(form.employeeName),
+        tanggalGaji: form.tanggalGaji,
+        periodeGajiDari: form.periodeGajiDari,
+        periodeGajiSampai: form.periodeGajiSampai,
+        jumlah,
+        source: "input_manual_lama",
+        createdAt: todayStr(),
+      });
+      setToast("✅ Riwayat gajian berhasil disimpan");
+      setTimeout(() => setToast(""), 3000);
+      setFormGajianLama({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
+    } catch (e) {
+      alert("Gagal menyimpan: " + (e?.message || e));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
+    if (!nama) return;
+    if (sudahGajian(nama, dari, sampai)) {
+      setToast("✅ Status gajian sudah tercatat");
+      setTimeout(() => setToast(""), 2500);
+      return;
+    }
+    const jumlah = Number(r?.gaji || 0);
+    if (jumlah <= 0) return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
+    const ok = window.confirm(`Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nJumlah: ${money(jumlah)}`);
+    if (!ok) return;
+    setIsSaving(true);
+    try {
+      // Simpan marker ke payroll_expenses (existing logic)
+      await addDoc(collection(db, C.PAYROLL_EXPENSES), {
+        source: "gallery-produksi-gaji-marker",
+        type: "status_gajian_periode",
+        employeeName: displayWorkerName(nama),
+        periodeGajiDari: dari,
+        periodeGajiSampai: sampai,
+        tanggal: todayStr(),
+        tanggalBayar: todayStr(),
+        status: "sudah_dibayar",
+        totalAmount: 0,
+        gajiAmount: jumlah,
+        totalPcs: Number(r?.pcsSetor || 0),
+        totalReject: Number(r?.pcsReject || 0),
+        detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
+        createdAt: todayStr(),
+      });
+      // Simpan ke gajian_history untuk riwayat
+      await addDoc(collection(db, C.GAJIAN_HISTORY), {
+        employeeName: displayWorkerName(nama),
+        tanggalGaji: todayStr(),
+        periodeGajiDari: dari,
+        periodeGajiSampai: sampai,
+        jumlah,
+        totalPcs: Number(r?.pcsSetor || 0),
+        totalReject: Number(r?.pcsReject || 0),
+        source: "tandai_sudah_gajian",
+        createdAt: todayStr(),
+      });
+      setToast("✅ Status berubah menjadi Sudah gajian");
+      setTimeout(() => setToast(""), 3000);
+    } catch (e) {
+      alert("Gagal menandai sudah gajian: " + (e?.message || e));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function hapusGajianHistory(id) {
+    if (!window.confirm("Hapus riwayat gajian ini?")) return;
+    try {
+      await deleteDoc(doc(db, C.GAJIAN_HISTORY, id));
+      setToast("🗑️ Riwayat gajian dihapus");
+      setTimeout(() => setToast(""), 2500);
+    } catch (e) {
+      alert("Gagal menghapus: " + (e?.message || e));
+    }
+  }
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -3309,6 +3363,96 @@ function findRate(productType, model, process) {
               })}
             </div>
           </div>
+
+          {/* Section Riwayat Gajian */}
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #a7f3d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#065f46" }}>💸 Riwayat Gajian</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{gajianHistory.length} catatan gajian tersimpan</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#d1fae5", color: "#065f46" }}>Input ›</button>
+            </div>
+            {gajianHistory.length === 0 ? (
+              <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada riwayat gajian. Input data lama di menu Rekap.</div>
+            ) : (
+              <div className="space-y-2">
+                {[...gajianHistory]
+                  .sort((a, b) => String(b.tanggalGaji || "").localeCompare(String(a.tanggalGaji || "")))
+                  .slice(0, 5)
+                  .map((g) => (
+                    <div key={g.id} className="flex items-center justify-between gap-2 rounded-2xl p-2.5" style={{ background: "#f8fafc", border: "1px solid #d1fae5" }}>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>
+                          {g.tanggalGaji} · Periode {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                        </div>
+                        {g.source === "input_manual_lama" && (
+                          <div className="text-[9px] font-bold" style={{ color: "#a855f7" }}>input manual</div>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-xs font-black" style={{ color: "#16a34a" }}>{money(g.jumlah)}</div>
+                        {g.totalPcs > 0 && <div className="text-[10px]" style={{ color: "#64748b" }}>{fmtQty(g.totalPcs)} pcs</div>}
+                      </div>
+                    </div>
+                  ))}
+                {gajianHistory.length > 5 && (
+                  <div className="text-[10px] text-center" style={{ color: "#94a3b8" }}>+{gajianHistory.length - 5} riwayat lainnya di menu Rekap</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Section Riwayat Setor Terbaru */}
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bfdbfe", background: "linear-gradient(135deg,#eff6ff,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#1e40af" }}>📦 Riwayat Setor Terbaru</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>10 transaksi setor terakhir</div>
+              </div>
+              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dbeafe", color: "#1e40af" }}>Borongan ›</button>
+            </div>
+            {(() => {
+              const recentSetor = productionEntries
+                .flatMap((e) =>
+                  normalizeSetorHistory(e).map((s) => ({
+                    nama: displayWorkerName(e.employeeName),
+                    process: e.process || "-",
+                    model: displayModelName(e.model || "-"),
+                    tanggalSetor: s.tanggalSetor || "-",
+                    qtySetor: Number(s.qtySetor || 0),
+                    qtyReject: Number(s.qtyReject || 0),
+                    gaji: Number(s.totalWageSetor || 0),
+                    key: s.id || `${e.id}-${s.tanggalSetor}`,
+                  }))
+                )
+                .filter((s) => s.qtySetor > 0 || s.qtyReject > 0)
+                .sort((a, b) => String(b.tanggalSetor).localeCompare(String(a.tanggalSetor)))
+                .slice(0, 10);
+              if (recentSetor.length === 0) return (
+                <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada transaksi setor.</div>
+              );
+              return (
+                <div className="space-y-2">
+                  {recentSetor.map((s) => (
+                    <div key={s.key} className="flex items-center justify-between gap-2 rounded-2xl p-2.5" style={{ background: "#f8fafc", border: "1px solid #bfdbfe" }}>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black truncate" style={{ color: "#1e3a8a" }}>{s.nama}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>{s.tanggalSetor} · {s.process} {s.model !== "-" ? `· ${s.model}` : ""}</div>
+                        {s.qtyReject > 0 && <div className="text-[10px]" style={{ color: "#ef4444" }}>reject: {fmtQty(s.qtyReject)} pcs</div>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-xs font-black" style={{ color: "#16a34a" }}>{money(s.gaji)}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>{fmtQty(s.qtySetor)} pcs</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+
         </div>
       )}
 
@@ -3961,6 +4105,102 @@ function findRate(productType, model, process) {
             {!rekapPeriodReady && (
               <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-semibold" style={{ border: "1px solid #fde68a", color: "#92400e" }}>
                 📌 Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
+              </div>
+            )}
+
+            {/* Form Input Riwayat Gajian Lama */}
+            <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
+              <button
+                type="button"
+                onClick={() => setShowFormGajianLama((v) => !v)}
+                className="w-full flex items-center justify-between"
+              >
+                <div className="text-xs font-bold" style={{ color: "#065f46" }}>📝 Input Riwayat Gajian Lama</div>
+                <span className="text-xs" style={{ color: "#94a3b8" }}>{showFormGajianLama ? "▲ Tutup" : "▼ Buka"}</span>
+              </button>
+              {showFormGajianLama && (
+                <div className="space-y-2 pt-1">
+                  <div>
+                    <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Nama Pekerja</div>
+                    <select
+                      value={formGajianLama.employeeName}
+                      onChange={(e) => setFormGajianLama((f) => ({ ...f, employeeName: e.target.value }))}
+                      className="w-full rounded-xl border px-3 py-2 text-sm"
+                      style={{ borderColor: "#a7f3d0" }}
+                    >
+                      <option value="">-- Pilih Pekerja --</option>
+                      {workerNameOptions.map((w) => (
+                        <option key={w} value={w}>{displayWorkerName(w)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Tanggal Digaji</div>
+                      <input type="date" value={formGajianLama.tanggalGaji}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, tanggalGaji: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Jumlah Dibayar</div>
+                      <input type="number" placeholder="0" value={formGajianLama.jumlah}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, jumlah: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Dari</div>
+                      <input type="date" value={formGajianLama.periodeGajiDari}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiDari: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Sampai</div>
+                      <input type="date" value={formGajianLama.periodeGajiSampai}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiSampai: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => simpanGajianLama(formGajianLama)}
+                    className="w-full rounded-xl py-2.5 text-sm font-bold text-white"
+                    style={{ background: "linear-gradient(135deg,#065f46,#16a34a)" }}
+                  >
+                    {isSaving ? "Menyimpan..." : "💾 Simpan Riwayat Gajian"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Daftar Riwayat Gajian Tersimpan */}
+            {gajianHistory.length > 0 && (
+              <div className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #a7f3d0" }}>
+                <div className="text-xs font-bold mb-2" style={{ color: "#065f46" }}>📋 Semua Riwayat Gajian ({gajianHistory.length})</div>
+                {[...gajianHistory]
+                  .sort((a, b) => String(b.tanggalGaji || "").localeCompare(String(a.tanggalGaji || "")))
+                  .map((g) => (
+                    <div key={g.id} className="flex items-center justify-between gap-2 rounded-xl p-2.5" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>
+                          Digaji: {g.tanggalGaji} · Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                        </div>
+                        {g.source === "input_manual_lama" && (
+                          <div className="text-[9px] font-bold" style={{ color: "#a855f7" }}>input manual lama</div>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                        <div className="text-xs font-black" style={{ color: "#16a34a" }}>{money(g.jumlah)}</div>
+                        {g.source === "input_manual_lama" && (
+                          <button type="button" onClick={() => hapusGajianHistory(g.id)}
+                            className="text-[10px] font-bold" style={{ color: "#ef4444" }}>Hapus</button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
               </div>
             )}
 
@@ -5042,7 +5282,7 @@ function findRate(productType, model, process) {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => tandaiSudahGajian(nama, r, dari, sampai)}
+                        onClick={() => tandaiSudahGajianDanSimpanHistory(nama, r, dari, sampai)}
                         className="rounded-xl px-3 py-2 text-xs font-bold text-white"
                         style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)" }}
                       >
