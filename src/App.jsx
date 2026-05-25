@@ -4955,7 +4955,13 @@ function findRate(productType, model, process) {
               }}
             >
               <option value="">-- Pilih Pesanan --</option>
-              {orders.map((p) => <option key={p.id} value={p.id}>{p.customer} · {p.item} · {p.qty} pcs</option>)}
+              {orders
+                .filter((p) => {
+                  const status = String(p.status || "").toLowerCase();
+                  return !status.includes("lunas") && !status.includes("selesai") && !status.includes("done") && !status.includes("complete");
+                })
+                .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+                .map((p) => <option key={p.id} value={p.id}>{p.customer} · {p.item} · {p.qty} pcs</option>)}
             </Select>
             <Input label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
             <Input label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
