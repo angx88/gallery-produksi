@@ -12,6 +12,7 @@ import {
   doc,
   query,
   where,
+  runTransaction,
 } from "firebase/firestore";
 import {
   GoogleAuthProvider,
@@ -1807,32 +1808,56 @@ function findRate(productType, model, process) {
     if (prod.status === "Selesai") return; // Sudah selesai, tidak perlu update
 
     // Kumpulkan semua entries untuk order ini (termasuk yang baru saja diupdate)
-    const allEntries = productionEntries.map((e) =>
-      e.id === entryUpdated.id ? { ...e, setorHistory: nextHistory } : e
-    ).filter((e) => e.orderId === entryUpdated.orderId);
-
-    // Hitung total setor per proses
-    const totalJahitSetor = allEntries
-      .filter((e) => lower(e.process) === "jahit")
-      .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
-    const totalPotongSetor = allEntries
-      .filter((e) => lower(e.process) === "potong")
-      .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
-    const totalQcSetor = allEntries
-      .filter((e) => lower(e.process) === "qc packing")
-      .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
+    const allEntries = productionEntries
+      .map((e) => e.id === entryUpdated.id ? { ...e, setorHistory: nextHistory } : e)
+      .filter((e) => e.orderId === entryUpdated.orderId);
 
     const qtyPesanan = Number(prod.qty || 0);
     if (qtyPesanan <= 0) return;
 
-    // Tentukan status baru berdasarkan progress
+    // Hitung total setor per proses.
+    // Untuk Jahit/Potong: setor dihitung per model, lalu ambil minimum progress
+    // lintas model agar tidak dianggap "selesai" saat baru 1 model yang tuntas.
+    const orderItems = (prod.items || []).filter((it) => Number(it.qty || 0) > 0);
+
+    function totalSetorProcess(process) {
+      return allEntries
+        .filter((e) => lower(e.process) === lower(process))
+        .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
+    }
+
+    // Untuk proses per-model: selesai jika SETIAP model sudah tersetor >= qty-nya,
+    // atau jika tidak ada breakdown model → cek total saja (backward compat).
+    function allModelsCompleted(process) {
+      if (orderItems.length === 0) {
+        return totalSetorProcess(process) >= qtyPesanan;
+      }
+      return orderItems.every((item) => {
+        const modelQty = Number(item.qty || 0);
+        if (modelQty <= 0) return true;
+        const modelKey = normalizeModelKey(item.name || "");
+        const modelSetor = allEntries
+          .filter((e) => lower(e.process) === lower(process) && normalizeModelKey(e.model || "") === modelKey)
+          .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
+        return modelSetor >= modelQty;
+      });
+    }
+
+    const totalQcSetor = totalSetorProcess("qc packing");
+    const jahitSelesai = allModelsCompleted("jahit");
+    const potongSelesai = allModelsCompleted("potong");
+    const totalPotongSetor = totalSetorProcess("potong");
+    const totalJahitSetor = totalSetorProcess("jahit");
+
     let newStatus = prod.status;
     if (totalQcSetor >= qtyPesanan) {
       newStatus = "Selesai";
-    } else if (totalJahitSetor >= qtyPesanan) {
+    } else if (jahitSelesai) {
       newStatus = "QC Packing";
     } else if (totalJahitSetor > 0) {
       newStatus = "Jahit";
+    } else if (potongSelesai) {
+      newStatus = "Jahit"; // Potong sudah selesai semua → lanjut ke Jahit
     } else if (totalPotongSetor > 0) {
       newStatus = "Potong";
     }
@@ -1844,16 +1869,15 @@ function findRate(productType, model, process) {
     if (newIdx <= currentIdx) return; // Tidak mundurkan status
 
     try {
-      const statusOrderMap = {
-        "Antri": "Proses", "Potong": "Proses", "Jahit": "Proses",
-        "QC Packing": "Proses", "Selesai": "Selesai Produksi",
-      };
       await updateDoc(doc(db, C.PRODUKSI, prod.id), {
         status: newStatus,
         updatedAt: todayStr(),
         history: [
           ...(prod.history || []),
-          { tanggal: todayStr(), status: newStatus, catatan: `Otomatis dari progress setor borongan (${newStatus === "Selesai" ? "QC" : newStatus === "QC Packing" ? "Jahit" : "Potong"} ${newStatus === "Selesai" ? totalQcSetor : newStatus === "QC Packing" ? totalJahitSetor : totalPotongSetor}/${qtyPesanan} pcs)` },
+          {
+            tanggal: todayStr(), status: newStatus,
+            catatan: `Otomatis dari progress setor borongan (${newStatus})`,
+          },
         ],
       });
       // Sync ke Gallery Kerudung
@@ -2232,9 +2256,11 @@ function findRate(productType, model, process) {
       items: cleanDeliveryItems,
       total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
     };
-    const nextDeliveries = [...existingDeliveries, newDelivery];
+    // Gunakan existingDeliveries dari snapshot lokal untuk kalkulasi shippedItems.
+    // Write sesungguhnya pakai transaction agar tidak overwrite delivery dari operator lain.
+    const nextDeliveriesForCalc = [...existingDeliveries, newDelivery];
 
-    const totalDeliveredForItem = (base, idx) => nextDeliveries.reduce((sum, delivery) => {
+    const totalDeliveredForItem = (base, idx, delArray) => delArray.reduce((sum, delivery) => {
       const found = (delivery.items || []).filter((it) => {
         // Data baru wajib cocok berdasarkan itemIndex.
         // Fallback ke nama hanya untuk data lama yang belum punya itemIndex.
@@ -2245,33 +2271,33 @@ function findRate(productType, model, process) {
       return sum + found.reduce((s, it) => s + Number(it.qty ?? it.shippedQty ?? it.qtyKirim ?? 0), 0);
     }, 0);
 
-    const shippedItems = baseItems.map((base, idx) => {
-      const shippedQty = totalDeliveredForItem(base, idx);
-      return {
-        name: base.name,
-        orderedQty: Number(base.orderedQty || 0),
-        shippedQty,
-        price: Number(base.price || 0),
-        bahanCost: Number(base.bahanCost || 0),
-        hppPerPcs: Number(base.hppPerPcs || 0),
-        mainMaterial: base.mainMaterial || "",
-        materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
-        unit: base.unit || "yard",
-        note: (() => {
-          const ordered = Number(base.orderedQty || 0);
-          const diff = shippedQty - ordered;
-          if (diff === 0) return "Sesuai pesanan";
-          if (diff < 0) return `Kekurangan pengiriman ${Math.abs(diff)} pcs`;
-          return `Kelebihan pengiriman ${diff} pcs`;
-        })(),
-      };
-    });
+    function buildShippedItems(deliveriesArr) {
+      return baseItems.map((base, idx) => {
+        const shippedQty = totalDeliveredForItem(base, idx, deliveriesArr);
+        const ordered = Number(base.orderedQty || 0);
+        const diff = shippedQty - ordered;
+        return {
+          name: base.name,
+          orderedQty: ordered,
+          shippedQty,
+          price: Number(base.price || 0),
+          bahanCost: Number(base.bahanCost || 0),
+          hppPerPcs: Number(base.hppPerPcs || 0),
+          mainMaterial: base.mainMaterial || "",
+          materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
+          unit: base.unit || "yard",
+          note: diff === 0 ? "Sesuai pesanan" : diff < 0 ? `Kekurangan pengiriman ${Math.abs(diff)} pcs` : `Kelebihan pengiriman ${diff} pcs`,
+        };
+      });
+    }
 
-    const totalOrdered = shippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
-    const totalShipped = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
-    const deliveredTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
-    const deliveredHppTotal = shippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
-    const hasOverDelivery = shippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
+    // Hitung shippedItems berdasarkan snapshot lokal untuk validasi UI
+    const shippedItemsCalc = buildShippedItems(nextDeliveriesForCalc);
+    const totalOrdered = shippedItemsCalc.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
+    const totalShipped = shippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
+    const deliveredTotal = shippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
+    const deliveredHppTotal = shippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
+    const hasOverDelivery = shippedItemsCalc.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
     const isShortShipment = totalOrdered > 0 && totalShipped > 0 && totalShipped < totalOrdered;
     const isShortFinal = isShortShipment && kirimForm.shortShipmentMode === "final";
     const shortShipmentReason = isShortFinal ? String(kirimForm.shortShipmentReason || "").trim() : "";
@@ -2356,28 +2382,43 @@ function findRate(productType, model, process) {
         });
       }
 
+      // Gunakan Firestore transaction untuk update deliveries di order
+      // sehingga tidak ada delivery yang teroverwrite jika dua operator kirim bersamaan.
       try {
-        await updateDoc(doc(db, C.ORDERS, order.id), {
-          status: orderStatus,
-          shippingStatus,
-          deliveryStatus,
-          shortShipmentClosed: isShortFinal,
-          shortShipmentMode: isShortFinal ? "final" : (isShortShipment ? "temporary" : ""),
-          shortShipmentReason,
-          shortShipmentNote,
-          shortShipmentRemaining,
-          tanggalKirim: kirimForm.tanggalKirim || todayStr(),
-          deliveries: nextDeliveries,
-          shippedItems,
-          deliveredTotal,
-          deliveredHppTotal,
-          totalKirim: totalShipped,
-          totalPesan: totalOrdered,
-          statusProduksi: nextProduksiStatus,
-          produksiStatus: nextProduksiStatus,
-          produksiSource: "gallery-produksi",
-          produksiUpdatedAt: todayStr(),
-          updatedAt: todayStr(),
+        const orderRef = doc(db, C.ORDERS, order.id);
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(orderRef);
+          if (!snap.exists()) throw new Error("Order tidak ditemukan");
+
+          const currentData = snap.data();
+          const currentDeliveries = Array.isArray(currentData.deliveries) ? currentData.deliveries : existingDeliveries;
+          // Cegah duplicate: kalau delivery ini sudah ada (by createdAt), skip
+          const isDuplicate = currentDeliveries.some((d) => d.createdAt === newDelivery.createdAt);
+          const finalDeliveries = isDuplicate ? currentDeliveries : [...currentDeliveries, newDelivery];
+          const finalShippedItems = buildShippedItems(finalDeliveries);
+
+          transaction.update(orderRef, {
+            status: orderStatus,
+            shippingStatus,
+            deliveryStatus,
+            shortShipmentClosed: isShortFinal,
+            shortShipmentMode: isShortFinal ? "final" : (isShortShipment ? "temporary" : ""),
+            shortShipmentReason,
+            shortShipmentNote,
+            shortShipmentRemaining,
+            tanggalKirim: kirimForm.tanggalKirim || todayStr(),
+            deliveries: finalDeliveries,
+            shippedItems: finalShippedItems,
+            deliveredTotal,
+            deliveredHppTotal,
+            totalKirim: totalShipped,
+            totalPesan: totalOrdered,
+            statusProduksi: nextProduksiStatus,
+            produksiStatus: nextProduksiStatus,
+            produksiSource: "gallery-produksi",
+            produksiUpdatedAt: todayStr(),
+            updatedAt: todayStr(),
+          });
         });
       } catch (e) {
         console.warn("Order status/pengiriman Gallery Kerudung tidak bisa diupdate:", e);
