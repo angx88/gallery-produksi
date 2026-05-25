@@ -1435,13 +1435,14 @@ export default function App() {
   }, [filteredOrders, pesananOnlyNeedCheck, ordersPerluDicekIds]);
 
   function openPengirimanForOrder(order) {
-    const items = (order?.items || []).length > 0
-      ? (order.items || []).map((it) => ({
+    const items = Array.isArray(order?.items) && order.items.length > 0
+      ? order.items.map((it, idx) => ({
           nama: it.name || it.item || order.item || "",
           qtyPesan: Number(it.qty || 0),
           qtyKirim: 0,
+          itemIndex: idx,
         }))
-      : [{ nama: order?.item || "", qtyPesan: Number(order?.qty || 0), qtyKirim: 0 }];
+      : [{ nama: order?.item || "", qtyPesan: Number(order?.qty || 0), qtyKirim: 0, itemIndex: 0 }];
 
     setKirimForm({
       pesananId: order?.id || "",
@@ -4934,11 +4935,19 @@ function findRate(productType, model, process) {
               value={kirimForm.pesananId}
               onChange={(v) => {
                 const p = orders.find((o) => o.id === v);
+                const rawItems = Array.isArray(p?.items) && p.items.length > 0
+                  ? p.items.map((it, idx) => ({
+                      nama: it.name || it.item || p.item || "",
+                      qtyPesan: Number(it.qty || 0),
+                      qtyKirim: 0,
+                      itemIndex: idx,
+                    }))
+                  : [{ nama: p?.item || "", qtyPesan: Number(p?.qty || 0), qtyKirim: 0, itemIndex: 0 }];
                 setKirimForm((f) => ({
                   ...f,
                   pesananId: v,
                   penerima: p?.customer || "",
-                  items: p ? [{ nama: p.item || "", qtyPesan: Number(p.qty || 0), qtyKirim: 0 }] : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
+                  items: rawItems,
                   shortShipmentMode: "temporary",
                   shortShipmentReason: "Stok kain habis",
                   shortShipmentNote: "",
