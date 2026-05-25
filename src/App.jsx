@@ -1797,6 +1797,83 @@ function findRate(productType, model, process) {
     }
   }
 
+  // Auto-update status produksi berdasarkan progress setor borongan
+  // Dipanggil setelah simpanSetor berhasil
+  async function autoUpdateProduksiStatus(entryUpdated, nextHistory) {
+    if (!entryUpdated?.orderId) return;
+
+    const prod = produksi.find((p) => p.orderId === entryUpdated.orderId);
+    if (!prod) return;
+    if (prod.status === "Selesai") return; // Sudah selesai, tidak perlu update
+
+    // Kumpulkan semua entries untuk order ini (termasuk yang baru saja diupdate)
+    const allEntries = productionEntries.map((e) =>
+      e.id === entryUpdated.id ? { ...e, setorHistory: nextHistory } : e
+    ).filter((e) => e.orderId === entryUpdated.orderId);
+
+    // Hitung total setor per proses
+    const totalJahitSetor = allEntries
+      .filter((e) => lower(e.process) === "jahit")
+      .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
+    const totalPotongSetor = allEntries
+      .filter((e) => lower(e.process) === "potong")
+      .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
+    const totalQcSetor = allEntries
+      .filter((e) => lower(e.process) === "qc packing")
+      .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
+
+    const qtyPesanan = Number(prod.qty || 0);
+    if (qtyPesanan <= 0) return;
+
+    // Tentukan status baru berdasarkan progress
+    let newStatus = prod.status;
+    if (totalQcSetor >= qtyPesanan) {
+      newStatus = "Selesai";
+    } else if (totalJahitSetor >= qtyPesanan) {
+      newStatus = "QC Packing";
+    } else if (totalJahitSetor > 0) {
+      newStatus = "Jahit";
+    } else if (totalPotongSetor > 0) {
+      newStatus = "Potong";
+    }
+
+    // Hanya update jika status berubah ke yang lebih maju
+    const statusOrder = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
+    const currentIdx = statusOrder.indexOf(prod.status);
+    const newIdx = statusOrder.indexOf(newStatus);
+    if (newIdx <= currentIdx) return; // Tidak mundurkan status
+
+    try {
+      const statusOrderMap = {
+        "Antri": "Proses", "Potong": "Proses", "Jahit": "Proses",
+        "QC Packing": "Proses", "Selesai": "Selesai Produksi",
+      };
+      await updateDoc(doc(db, C.PRODUKSI, prod.id), {
+        status: newStatus,
+        updatedAt: todayStr(),
+        history: [
+          ...(prod.history || []),
+          { tanggal: todayStr(), status: newStatus, catatan: `Otomatis dari progress setor borongan (${newStatus === "Selesai" ? "QC" : newStatus === "QC Packing" ? "Jahit" : "Potong"} ${newStatus === "Selesai" ? totalQcSetor : newStatus === "QC Packing" ? totalJahitSetor : totalPotongSetor}/${qtyPesanan} pcs)` },
+        ],
+      });
+      // Sync ke Gallery Kerudung
+      if (prod.orderId) {
+        try {
+          await updateDoc(doc(db, C.ORDERS, prod.orderId), {
+            statusProduksi: newStatus,
+            produksiStatus: newStatus,
+            produksiSource: "gallery-produksi",
+            produksiUpdatedAt: todayStr(),
+            ...(newStatus === "Selesai" ? { status: "Selesai Produksi" } : {}),
+            updatedAt: todayStr(),
+          });
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.warn("Auto-update status produksi gagal:", e);
+    }
+  }
+
   async function updateProduksiStatus(id, newStatus) {
     const item = produksi.find((p) => p.id === id);
     if (!item || item.status === newStatus) return;
@@ -2049,6 +2126,10 @@ function findRate(productType, model, process) {
 
       setToast(nextSisa > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisa} pcs.` : "✅ Setor selesai tersimpan.");
       setTimeout(() => setToast(""), 3500);
+
+      // Auto-update status produksi berdasarkan progress setor
+      await autoUpdateProduksiStatus(setorModal, nextHistory);
+
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
     } catch (e) {
