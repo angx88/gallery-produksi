@@ -957,6 +957,9 @@ export default function App() {
   const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
+  const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false); // filter tab borongan hanya belum setor
+  const [alertDetailModal, setAlertDetailModal] = useState(false); // modal popup alert bermasalah dari dashboard
+  const [tugasDetailModal, setTugasDetailModal] = useState(false); // modal popup semua tugas hari ini
   const slipRef = useRef(null);
   const backUiRef = useRef({});
   const lastBackPressRef = useRef(0);
@@ -3299,6 +3302,7 @@ function findRate(productType, model, process) {
             key={t.id}
             onClick={() => {
               if (t.id === "pesanan") setPesananOnlyNeedCheck(false);
+              if (t.id !== "borongan") setBoronganOnlyBelumSetor(false);
               setTab(t.id);
             }}
             className="flex-1 py-3 text-[10px] font-semibold flex flex-col items-center gap-1 relative"
@@ -3378,30 +3382,62 @@ function findRate(productType, model, process) {
                 <div className="text-sm font-black" style={{ color: "#c2410c" }}>✅ Tugas Hari Ini</div>
                 <div className="text-[11px]" style={{ color: "#9a3412" }}>Ringkasan yang perlu dicek admin.</div>
               </div>
-              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan ›</button>
+              <button onClick={() => setTugasDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan ›</button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {[
-                { label: "Borongan belum setor", value: dashboardInsights.tugas.boronganBelumSetor, tab: "borongan" },
-                { label: "Produksi belum selesai", value: dashboardInsights.tugas.produksiBelumSelesai, tab: "produksi" },
-                { label: "Kirim belum lengkap", value: dashboardInsights.tugas.kirimanBelumLengkap, tab: "kirim" },
-              ].map((item) => (
-                <button key={item.label} onClick={() => setTab(item.tab)} className="rounded-2xl bg-white p-2 text-left" style={{ border: "1px solid #fed7aa" }}>
-                  <div className="text-lg font-black" style={{ color: item.value > 0 ? "#c2410c" : "#16a34a" }}>{item.value.toLocaleString()}</div>
-                  <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>{item.label}</div>
-                </button>
-              ))}
+              <button
+                onClick={() => { setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
+                style={{ border: "1px solid #fed7aa" }}
+              >
+                <div className="text-lg font-black" style={{ color: dashboardInsights.tugas.boronganBelumSetor > 0 ? "#c2410c" : "#16a34a" }}>{dashboardInsights.tugas.boronganBelumSetor.toLocaleString()}</div>
+                <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Borongan belum setor</div>
+              </button>
+              <button
+                onClick={() => setTab("produksi")}
+                className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
+                style={{ border: "1px solid #fed7aa" }}
+              >
+                <div className="text-lg font-black" style={{ color: dashboardInsights.tugas.produksiBelumSelesai > 0 ? "#c2410c" : "#16a34a" }}>{dashboardInsights.tugas.produksiBelumSelesai.toLocaleString()}</div>
+                <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Produksi belum selesai</div>
+              </button>
+              <button
+                onClick={() => setTab("kirim")}
+                className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
+                style={{ border: "1px solid #fed7aa" }}
+              >
+                <div className="text-lg font-black" style={{ color: dashboardInsights.tugas.kirimanBelumLengkap > 0 ? "#c2410c" : "#16a34a" }}>{dashboardInsights.tugas.kirimanBelumLengkap.toLocaleString()}</div>
+                <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Kirim belum lengkap</div>
+              </button>
             </div>
             {(dashboardInsights.tugas.activeBorongan.length > 0 || dashboardInsights.tugas.activeProduksi.length > 0 || dashboardInsights.tugas.kirimBelumLengkap.length > 0) && (
               <div className="space-y-1 text-[11px]" style={{ color: "#7c2d12" }}>
                 {dashboardInsights.tugas.activeBorongan.slice(0, 2).map(({ entry, totals }) => (
-                  <div key={`bor-${entry.id}`}>• {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})</div>
+                  <button
+                    key={`bor-${entry.id}`}
+                    onClick={() => { setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                    className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
+                  >
+                    • {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})
+                  </button>
                 ))}
                 {dashboardInsights.tugas.activeProduksi.slice(0, 1).map((item) => (
-                  <div key={`prod-${item.id}`}>• Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}</div>
+                  <button
+                    key={`prod-${item.id}`}
+                    onClick={() => setTab("produksi")}
+                    className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
+                  >
+                    • Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}
+                  </button>
                 ))}
                 {dashboardInsights.tugas.kirimBelumLengkap.slice(0, 1).map(({ order, sisa }) => (
-                  <div key={`ship-${order.id}`}>• {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs</div>
+                  <button
+                    key={`ship-${order.id}`}
+                    onClick={() => setTab("kirim")}
+                    className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
+                  >
+                    • {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs
+                  </button>
                 ))}
               </div>
             )}
@@ -3441,7 +3477,7 @@ function findRate(productType, model, process) {
                 <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
               </div>
-              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
+              <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
             </div>
             {dashboardInsights.alerts.length === 0 ? (
               <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>Tidak ada alert data bermasalah.</div>
@@ -3877,6 +3913,26 @@ function findRate(productType, model, process) {
           <Button onClick={() => setModal("borongan")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
             💪 + Input Hasil Borongan
           </Button>
+
+          {/* Banner filter belum setor */}
+          {boronganOnlyBelumSetor && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fefce8", border: "1.5px solid #fbbf24" }}>
+              <span className="text-xl">🟡</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#92400e" }}>Hanya menampilkan yang belum setor</div>
+                <div className="text-xs mt-1" style={{ color: "#b45309" }}>Setor hasil kerjaan di bawah ini agar masuk rekap gaji.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBoronganOnlyBelumSetor(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+
           <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #fce7f3" }}>
             <div className="text-xs font-bold" style={{ color: "#a855f7" }}>Total hasil borongan</div>
             <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{stats.boronganPcs} pcs</div>
@@ -3884,7 +3940,10 @@ function findRate(productType, model, process) {
           </div>
 
 
-          {filteredEntries.map((e) => {
+          {(boronganOnlyBelumSetor
+            ? filteredEntries.filter((e) => setorTotals(e).statusSetor !== "sudah_setor")
+            : filteredEntries
+          ).map((e) => {
             const totals = setorTotals(e);
             const sudahSetor = totals.statusSetor === "sudah_setor";
             const setorSebagian = totals.statusSetor === "setor_sebagian";
@@ -5488,6 +5547,226 @@ function findRate(productType, model, process) {
           </div>
         );
       })()}
+
+      {/* Modal Tugas Hari Ini */}
+      {tugasDetailModal && (
+        <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }}>
+          <motion.div
+            initial={{ y: 80 }}
+            animate={{ y: 0 }}
+            className="max-h-[92vh] w-full overflow-auto p-5"
+            style={{ background: "white", borderRadius: "32px 32px 0 0", borderTop: "3px solid #fb923c" }}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-black" style={{ color: "#c2410c" }}>✅ Tugas Hari Ini</h2>
+                <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>Ketuk item untuk langsung ke datanya</div>
+              </div>
+              <button
+                onClick={() => setTugasDetailModal(false)}
+                className="rounded-2xl px-4 py-2 text-sm font-semibold"
+                style={{ background: "#fdf2f8", color: "#ec4899" }}
+              >
+                Tutup
+              </button>
+            </div>
+
+            {/* Bagian Borongan Belum Setor */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-black" style={{ color: "#c2410c" }}>
+                  💪 Borongan Belum Setor
+                  <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
+                    {dashboardInsights.tugas.boronganBelumSetor}
+                  </span>
+                </div>
+                <button
+                  onClick={() => { setTugasDetailModal(false); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                  className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
+                  style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                >
+                  Lihat Semua ›
+                </button>
+              </div>
+              {dashboardInsights.tugas.activeBorongan.length === 0 ? (
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua sudah setor</div>
+              ) : (
+                <div className="space-y-2">
+                  {dashboardInsights.tugas.activeBorongan.map(({ entry, totals }) => (
+                    <button
+                      key={`tugas-bor-${entry.id}`}
+                      onClick={() => { setTugasDetailModal(false); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                      className="w-full rounded-2xl p-3 text-left"
+                      style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}
+                    >
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(entry.employeeName)}</div>
+                      <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>{entry.process || "-"}{entry.model && entry.model !== "-" ? ` · ${displayModelName(entry.model)}` : ""}</div>
+                      {entry.customer && <div className="text-xs" style={{ color: "#94a3b8" }}>{entry.customer}{entry.invoice ? ` · ${entry.invoice}` : ""}</div>}
+                      <div className="mt-1 text-sm font-black" style={{ color: "#c2410c" }}>⏳ Sisa {fmtQty(totals.sisaSetor)} pcs belum setor</div>
+                    </button>
+                  ))}
+                  {dashboardInsights.tugas.boronganBelumSetor > dashboardInsights.tugas.activeBorongan.length && (
+                    <button
+                      onClick={() => { setTugasDetailModal(false); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                      className="w-full rounded-2xl py-2 text-xs font-bold"
+                      style={{ background: "#ffedd5", color: "#c2410c" }}
+                    >
+                      + {dashboardInsights.tugas.boronganBelumSetor - dashboardInsights.tugas.activeBorongan.length} lainnya → Lihat semua borongan belum setor
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Bagian Produksi Belum Selesai */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-black" style={{ color: "#c2410c" }}>
+                  🧵 Produksi Belum Selesai
+                  <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
+                    {dashboardInsights.tugas.produksiBelumSelesai}
+                  </span>
+                </div>
+                <button
+                  onClick={() => { setTugasDetailModal(false); setTab("produksi"); }}
+                  className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
+                  style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                >
+                  Lihat Semua ›
+                </button>
+              </div>
+              {dashboardInsights.tugas.activeProduksi.length === 0 ? (
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua produksi selesai</div>
+              ) : (
+                <div className="space-y-2">
+                  {dashboardInsights.tugas.activeProduksi.map((item) => (
+                    <button
+                      key={`tugas-prod-${item.id}`}
+                      onClick={() => { setTugasDetailModal(false); setTab("produksi"); }}
+                      className="w-full rounded-2xl p-3 text-left"
+                      style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}
+                    >
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {item.customer || item.orderCustomer || "-"}</div>
+                      {item.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {item.invoice}</div>}
+                      <div className="mt-1 text-sm font-black" style={{ color: "#7c3aed" }}>
+                        Status: {item.status || "Antri"}
+                      </div>
+                    </button>
+                  ))}
+                  {dashboardInsights.tugas.produksiBelumSelesai > dashboardInsights.tugas.activeProduksi.length && (
+                    <button
+                      onClick={() => { setTugasDetailModal(false); setTab("produksi"); }}
+                      className="w-full rounded-2xl py-2 text-xs font-bold"
+                      style={{ background: "#ede9fe", color: "#7c3aed" }}
+                    >
+                      + {dashboardInsights.tugas.produksiBelumSelesai - dashboardInsights.tugas.activeProduksi.length} lainnya → Lihat semua produksi
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Bagian Kirim Belum Lengkap */}
+            <div className="mb-2">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-black" style={{ color: "#c2410c" }}>
+                  🚚 Kirim Belum Lengkap
+                  <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
+                    {dashboardInsights.tugas.kirimanBelumLengkap}
+                  </span>
+                </div>
+                <button
+                  onClick={() => { setTugasDetailModal(false); setTab("kirim"); }}
+                  className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
+                  style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                >
+                  Lihat Semua ›
+                </button>
+              </div>
+              {dashboardInsights.tugas.kirimBelumLengkap.length === 0 ? (
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua pengiriman lengkap</div>
+              ) : (
+                <div className="space-y-2">
+                  {dashboardInsights.tugas.kirimBelumLengkap.map(({ order, sisa }) => (
+                    <button
+                      key={`tugas-kirim-${order.id}`}
+                      onClick={() => { setTugasDetailModal(false); setTab("kirim"); }}
+                      className="w-full rounded-2xl p-3 text-left"
+                      style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}
+                    >
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {order.customer || "-"}</div>
+                      {order.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {order.invoice}</div>}
+                      <div className="mt-1 text-sm font-black" style={{ color: "#1d4ed8" }}>⏳ Sisa kirim {fmtQty(sisa)} pcs</div>
+                    </button>
+                  ))}
+                  {dashboardInsights.tugas.kirimanBelumLengkap > dashboardInsights.tugas.kirimBelumLengkap.length && (
+                    <button
+                      onClick={() => { setTugasDetailModal(false); setTab("kirim"); }}
+                      className="w-full rounded-2xl py-2 text-xs font-bold"
+                      style={{ background: "#dbeafe", color: "#1d4ed8" }}
+                    >
+                      + {dashboardInsights.tugas.kirimanBelumLengkap - dashboardInsights.tugas.kirimBelumLengkap.length} lainnya → Lihat semua pengiriman
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Modal Alert Data Bermasalah */}
+      {alertDetailModal && (
+        <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }}>
+          <motion.div
+            initial={{ y: 80 }}
+            animate={{ y: 0 }}
+            className="max-h-[88vh] w-full overflow-auto p-5"
+            style={{ background: "white", borderRadius: "32px 32px 0 0", borderTop: "3px solid #fb7185" }}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-black" style={{ color: "#be123c" }}>🚨 Data Bermasalah</h2>
+                <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
+              </div>
+              <button
+                onClick={() => setAlertDetailModal(false)}
+                className="rounded-2xl px-4 py-2 text-sm font-semibold"
+                style={{ background: "#fdf2f8", color: "#ec4899" }}
+              >
+                Tutup
+              </button>
+            </div>
+            {dashboardInsights.alerts.length === 0 ? (
+              <div className="rounded-2xl p-6 text-center text-sm font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>
+                ✅ Tidak ada data bermasalah saat ini.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {dashboardInsights.alerts.map((alert, idx) => (
+                  <div key={`alert-modal-${alert.type}-${idx}`} className="rounded-2xl p-4" style={{ background: "#fff7f7", border: "1.5px solid #fecaca" }}>
+                    <div className="font-black text-sm mb-1" style={{ color: "#be123c" }}>{alert.type}</div>
+                    <div className="text-xs" style={{ color: "#64748b" }}>{alert.text}</div>
+                    <button
+                      type="button"
+                      onClick={() => { setAlertDetailModal(false); setTab(alert.tab); }}
+                      className="mt-3 rounded-xl px-4 py-2 text-xs font-bold text-white"
+                      style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
+                    >
+                      Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Tarif" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
+                    </button>
+                  </div>
+                ))}
+                {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
+                  <div className="rounded-2xl px-4 py-3 text-xs font-semibold text-center" style={{ background: "#fff1f2", color: "#be123c", border: "1px solid #fecaca" }}>
+                    + {dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain tersembunyi. Periksa tiap tab untuk melihat semua.
+                  </div>
+                )}
+              </div>
+            )}
+          </motion.div>
+        </div>
+      )}
 
       {isSaving && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
