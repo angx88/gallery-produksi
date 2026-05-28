@@ -958,6 +958,8 @@ export default function App() {
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
   const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false); // filter tab borongan hanya belum setor
+  const [produksiOnlyBelumSelesai, setProduksiOnlyBelumSelesai] = useState(false); // filter tab produksi hanya belum selesai
+  const [kirimOnlyBelumLengkap, setKirimOnlyBelumLengkap] = useState(false); // filter tab kirim hanya belum lengkap
   const [alertDetailModal, setAlertDetailModal] = useState(false); // modal popup alert bermasalah dari dashboard
   const [tugasDetailModal, setTugasDetailModal] = useState(false); // modal popup semua tugas hari ini
   const slipRef = useRef(null);
@@ -3303,6 +3305,8 @@ function findRate(productType, model, process) {
             onClick={() => {
               if (t.id === "pesanan") setPesananOnlyNeedCheck(false);
               if (t.id !== "borongan") setBoronganOnlyBelumSetor(false);
+              if (t.id !== "produksi") setProduksiOnlyBelumSelesai(false);
+              if (t.id !== "kirim") setKirimOnlyBelumLengkap(false);
               setTab(t.id);
             }}
             className="flex-1 py-3 text-[10px] font-semibold flex flex-col items-center gap-1 relative"
@@ -3394,7 +3398,7 @@ function findRate(productType, model, process) {
                 <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Borongan belum setor</div>
               </button>
               <button
-                onClick={() => setTab("produksi")}
+                onClick={() => { setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                 className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
                 style={{ border: "1px solid #fed7aa" }}
               >
@@ -3402,7 +3406,7 @@ function findRate(productType, model, process) {
                 <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Produksi belum selesai</div>
               </button>
               <button
-                onClick={() => setTab("kirim")}
+                onClick={() => { setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                 className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
                 style={{ border: "1px solid #fed7aa" }}
               >
@@ -3424,7 +3428,7 @@ function findRate(productType, model, process) {
                 {dashboardInsights.tugas.activeProduksi.slice(0, 1).map((item) => (
                   <button
                     key={`prod-${item.id}`}
-                    onClick={() => setTab("produksi")}
+                    onClick={() => { setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
                     • Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}
@@ -3433,7 +3437,7 @@ function findRate(productType, model, process) {
                 {dashboardInsights.tugas.kirimBelumLengkap.slice(0, 1).map(({ order, sisa }) => (
                   <button
                     key={`ship-${order.id}`}
-                    onClick={() => setTab("kirim")}
+                    onClick={() => { setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
                     • {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs
@@ -3787,8 +3791,34 @@ function findRate(productType, model, process) {
           <Button onClick={() => setModal("produksi")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
             🧵 + Tambah ke Produksi
           </Button>
-          {filteredProduksi.length === 0 && <Empty text="Tidak ada data produksi" />}
-          {filteredProduksi.map((p) => {
+
+          {/* Banner filter belum selesai */}
+          {produksiOnlyBelumSelesai && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}>
+              <span className="text-xl">🧵</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#5b21b6" }}>Hanya menampilkan produksi belum selesai</div>
+                <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Update status produksi di bawah ini.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProduksiOnlyBelumSelesai(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+
+          {(() => {
+            const displayedProduksi = produksiOnlyBelumSelesai
+              ? filteredProduksi.filter((p) => p.status !== "Selesai")
+              : filteredProduksi;
+            return (
+              <>
+                {displayedProduksi.length === 0 && <Empty text={produksiOnlyBelumSelesai ? "Semua produksi sudah selesai" : "Tidak ada data produksi"} />}
+                {displayedProduksi.map((p) => {
             const qtyPesanan = Number(p.qty || 0);
             const rekapProses = [
               { label: "✂️ Potong", qty: processQtyForOrder(p.orderId, "Potong") },
@@ -3905,6 +3935,9 @@ function findRate(productType, model, process) {
             </div>
             );
           })}
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -4788,8 +4821,35 @@ function findRate(productType, model, process) {
           <Button onClick={() => setModal("kirim")} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
             🚚 + Catat Pengiriman
           </Button>
-          {filteredShipments.length === 0 && <Empty text="Tidak ada data pengiriman" />}
-          {filteredShipments.map((k) => (
+
+          {/* Banner filter belum lengkap */}
+          {kirimOnlyBelumLengkap && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}>
+              <span className="text-xl">🚚</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#1d4ed8" }}>Hanya menampilkan pengiriman belum lengkap</div>
+                <div className="text-xs mt-1" style={{ color: "#2563eb" }}>Catat sisa pengiriman untuk pesanan di bawah ini.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setKirimOnlyBelumLengkap(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+
+          {(() => {
+            const kirimBelumLengkapIds = new Set(
+              dashboardInsights.tugas.kirimBelumLengkap.map(({ order }) => order.id)
+            );
+            const displayed = kirimOnlyBelumLengkap
+              ? filteredShipments.filter((k) => kirimBelumLengkapIds.has(k.orderId) || kirimBelumLengkapIds.has(k.pesananId))
+              : filteredShipments;
+            if (displayed.length === 0) return <Empty text={kirimOnlyBelumLengkap ? "Semua pengiriman sudah lengkap" : "Tidak ada data pengiriman"} />;
+            return displayed.map((k) => (
             <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               <div className="font-bold" style={{ color: "#2d1b69" }}>{k.customer || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.customer || "-"}</div>
               <div className="text-xs" style={{ color: "#a855f7" }}>👗 {k.produk || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.item || "-"}</div>
@@ -4803,7 +4863,8 @@ function findRate(productType, model, process) {
                 ))}
               </div>
             </div>
-          ))}
+          ));
+          })()}
         </div>
       )}
 
@@ -5628,7 +5689,7 @@ function findRate(productType, model, process) {
                   </span>
                 </div>
                 <button
-                  onClick={() => { setTugasDetailModal(false); setTab("produksi"); }}
+                  onClick={() => { setTugasDetailModal(false); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
@@ -5642,7 +5703,7 @@ function findRate(productType, model, process) {
                   {dashboardInsights.tugas.activeProduksi.map((item) => (
                     <button
                       key={`tugas-prod-${item.id}`}
-                      onClick={() => { setTugasDetailModal(false); setTab("produksi"); }}
+                      onClick={() => { setTugasDetailModal(false); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}
                     >
@@ -5655,7 +5716,7 @@ function findRate(productType, model, process) {
                   ))}
                   {dashboardInsights.tugas.produksiBelumSelesai > dashboardInsights.tugas.activeProduksi.length && (
                     <button
-                      onClick={() => { setTugasDetailModal(false); setTab("produksi"); }}
+                      onClick={() => { setTugasDetailModal(false); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#ede9fe", color: "#7c3aed" }}
                     >
@@ -5676,7 +5737,7 @@ function findRate(productType, model, process) {
                   </span>
                 </div>
                 <button
-                  onClick={() => { setTugasDetailModal(false); setTab("kirim"); }}
+                  onClick={() => { setTugasDetailModal(false); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
@@ -5690,7 +5751,7 @@ function findRate(productType, model, process) {
                   {dashboardInsights.tugas.kirimBelumLengkap.map(({ order, sisa }) => (
                     <button
                       key={`tugas-kirim-${order.id}`}
-                      onClick={() => { setTugasDetailModal(false); setTab("kirim"); }}
+                      onClick={() => { setTugasDetailModal(false); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}
                     >
@@ -5701,7 +5762,7 @@ function findRate(productType, model, process) {
                   ))}
                   {dashboardInsights.tugas.kirimanBelumLengkap > dashboardInsights.tugas.kirimBelumLengkap.length && (
                     <button
-                      onClick={() => { setTugasDetailModal(false); setTab("kirim"); }}
+                      onClick={() => { setTugasDetailModal(false); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#dbeafe", color: "#1d4ed8" }}
                     >
