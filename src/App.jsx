@@ -44,6 +44,7 @@ const C = {
   PRODUCTION_ENTRIES: "production_entries",
   PAYROLL_EXPENSES: "payroll_expenses",
   GAJIAN_HISTORY: "gajian_history",
+  KASBON: "kasbon_pegawai",
 };
 
 const PROD_STATUS = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
@@ -957,7 +958,9 @@ export default function App() {
   const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
-  const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false); // filter tab borongan hanya belum setor
+  const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false);
+  const [kasbonList, setKasbonList] = useState([]); // filter tab borongan hanya belum setor
+  const [masterPekerja, setMasterPekerja] = useState([]); // daftar nama pekerja dari Gallery Kerudung (read-only)
   const [boronganOnlyOverSetor, setBoronganOnlyOverSetor] = useState(false); // filter tab borongan hanya setor melebihi diberi
   const [produksiOnlyBelumSelesai, setProduksiOnlyBelumSelesai] = useState(false); // filter tab produksi hanya belum selesai
   const [kirimOnlyBelumLengkap, setKirimOnlyBelumLengkap] = useState(false); // filter tab kirim hanya belum lengkap
@@ -1132,6 +1135,8 @@ export default function App() {
     const unsubShipments = onSnapshot(collection(db, C.SHIPMENTS), (snap) => setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }))));
     const unsubPayroll = onSnapshot(collection(db, C.PAYROLL_EXPENSES), (snap) => setPayrollExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unsubGajianHistory = onSnapshot(collection(db, C.GAJIAN_HISTORY), (snap) => setGajianHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubKasbon = onSnapshot(collection(db, C.KASBON), (snap) => setKasbonList(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubMasterPekerja = onSnapshot(collection(db, "master_pekerja"), (snap) => setMasterPekerja(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
 
     return () => {
       unsubOrders();
@@ -1142,6 +1147,8 @@ export default function App() {
       unsubShipments();
       unsubPayroll();
       unsubGajianHistory();
+      unsubKasbon();
+      unsubMasterPekerja();
     };
   }, [user]);
 
@@ -1687,11 +1694,12 @@ export default function App() {
       if (!map.has(key)) map.set(key, display);
       else if (workerDisplayScore(display) > workerDisplayScore(map.get(key))) map.set(key, display);
     };
+    masterPekerja.forEach((p) => p.nama && addName(p.nama)); // dari master daftar pekerja Gallery Kerudung
     productionEntries.forEach((e) => addName(e.employeeName));
     produksi.forEach((p) => (p.workers || []).forEach((w) => addName(w.employeeName)));
     payrollExpenses.forEach((p) => addName(p.employeeName));
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
-  }, [productionEntries, produksi, payrollExpenses]);
+  }, [masterPekerja, productionEntries, produksi, payrollExpenses]);
 
   const modelNameOptions = useMemo(() => {
     const map = new Map();
@@ -2657,6 +2665,20 @@ function findRate(productType, model, process) {
     }
   }
 
+  // ── Helper Kasbon ────────────────────────────────────────────────────────────
+  function kasbonAktifUntukPekerja(nama) {
+    const key = normalizeWorkerNameKey(nama);
+    return kasbonList.filter((k) =>
+      k.status === "aktif" &&
+      normalizeWorkerNameKey(k.employeeName || "") === key &&
+      Number(k.sisaKasbon || 0) > 0
+    ).sort((a, b) => (a.tanggal || "").localeCompare(b.tanggal || ""));
+  }
+
+  function totalSisaKasbonPekerja(nama) {
+    return kasbonAktifUntukPekerja(nama).reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
+  }
+
   async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     if (!nama) return;
     if (sudahGajian(nama, dari, sampai)) {
@@ -2666,12 +2688,22 @@ function findRate(productType, model, process) {
     }
     const jumlah = Number(r?.gaji || 0);
     if (jumlah <= 0) return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
-    const ok = window.confirm(`Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nJumlah: ${money(jumlah)}`);
+
+    // Cek kasbon aktif pekerja ini
+    const kasbonAktif = kasbonAktifUntukPekerja(nama);
+    const totalKasbon = kasbonAktif.reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
+    const potonganKasbon = Math.min(totalKasbon, jumlah);
+    const gajiDiterima = jumlah - potonganKasbon;
+
+    let konfirmasiMsg = `Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nGaji kotor: ${money(jumlah)}`;
+    if (totalKasbon > 0) {
+      konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbon)}\nGaji diterima: ${money(gajiDiterima)}`;
+    }
+    const ok = window.confirm(konfirmasiMsg);
     if (!ok) return;
     setIsSaving(true);
     try {
       // Cek duplikat langsung dari Firestore sebelum addDoc
-      // agar race condition (dua operator klik bersamaan) tidak membuat dua marker
       const existingSnap = await getDocs(
         query(
           collection(db, C.PAYROLL_EXPENSES),
@@ -2699,11 +2731,41 @@ function findRate(productType, model, process) {
         status: "sudah_dibayar",
         totalAmount: 0,
         gajiAmount: jumlah,
+        potonganKasbon: potonganKasbon,
+        gajiDiterima: gajiDiterima,
         totalPcs: Number(r?.pcsSetor || 0),
         totalReject: Number(r?.pcsReject || 0),
         detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
         createdAt: todayStr(),
       });
+
+      // Potong kasbon otomatis (FIFO — kasbon terlama dulu)
+      if (potonganKasbon > 0) {
+        let sisaPotong = potonganKasbon;
+        for (const kasbon of kasbonAktif) {
+          if (sisaPotong <= 0) break;
+          const potongKasbon = Math.min(sisaPotong, Number(kasbon.sisaKasbon || 0));
+          sisaPotong -= potongKasbon;
+          const newCicilan = {
+            id: `gaji-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            tanggal: todayStr(),
+            jumlah: potongKasbon,
+            sumber: "rekap_gaji",
+            periodeGajiDari: dari,
+            periodeGajiSampai: sampai,
+          };
+          const updatedCicilan = [...(kasbon.cicilan || []), newCicilan];
+          const totalCicilan = updatedCicilan.reduce((s, c) => s + Number(c.jumlah || 0), 0);
+          const sisaBaru = Math.max(0, Number(kasbon.jumlah || 0) - totalCicilan);
+          await updateDoc(doc(db, C.KASBON, kasbon.id), {
+            cicilan: updatedCicilan,
+            sisaKasbon: sisaBaru,
+            status: sisaBaru <= 0 ? "lunas" : "aktif",
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+
       // Simpan ke gajian_history untuk riwayat
       await addDoc(collection(db, C.GAJIAN_HISTORY), {
         employeeName: displayWorkerName(nama),
@@ -2711,13 +2773,19 @@ function findRate(productType, model, process) {
         periodeGajiDari: dari,
         periodeGajiSampai: sampai,
         jumlah,
+        potonganKasbon,
+        gajiDiterima,
         totalPcs: Number(r?.pcsSetor || 0),
         totalReject: Number(r?.pcsReject || 0),
         source: "tandai_sudah_gajian",
         createdAt: todayStr(),
       });
-      setToast("✅ Status berubah menjadi Sudah gajian");
-      setTimeout(() => setToast(""), 3000);
+
+      const toastMsg = potonganKasbon > 0
+        ? `✅ Gajian tersimpan · Kasbon dipotong ${money(potonganKasbon)}`
+        : "✅ Status berubah menjadi Sudah gajian";
+      setToast(toastMsg);
+      setTimeout(() => setToast(""), 3500);
     } catch (e) {
       alert("Gagal menandai sudah gajian: " + (e?.message || e));
     } finally {
@@ -5603,6 +5671,36 @@ function findRate(productType, model, process) {
                   <div className="text-xs mb-1" style={{ color: "#64748b" }}>Total Pendapatan Bersih</div>
                   <div className="text-3xl font-black" style={{ color: "#16a34a" }}>{fmt(r.gaji)}</div>
                 </div>
+
+                {/* Info kasbon aktif — tampil sebelum tombol gajian */}
+                {(() => {
+                  const kasbonAktif = kasbonAktifUntukPekerja(nama);
+                  if (kasbonAktif.length === 0) return null;
+                  const totalKasbon = kasbonAktif.reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
+                  const potongan = Math.min(totalKasbon, Number(r.gaji || 0));
+                  const diterima = Number(r.gaji || 0) - potongan;
+                  return (
+                    <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}>
+                      <div className="text-xs font-black" style={{ color: "#92400e" }}>💰 Kasbon Aktif — akan dipotong saat gajian</div>
+                      {kasbonAktif.map((k) => (
+                        <div key={k.id} className="flex justify-between text-xs" style={{ color: "#78716c" }}>
+                          <span>📅 {k.tanggal}{k.keterangan ? ` · ${k.keterangan}` : ""}</span>
+                          <span className="font-bold text-amber-700">{money(k.sisaKasbon)} sisa</span>
+                        </div>
+                      ))}
+                      <div className="border-t border-amber-200 pt-2 space-y-1">
+                        <div className="flex justify-between text-xs font-bold">
+                          <span style={{ color: "#92400e" }}>Total potongan kasbon</span>
+                          <span style={{ color: "#dc2626" }}>- {money(potongan)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm font-black">
+                          <span style={{ color: "#16a34a" }}>Gaji diterima</span>
+                          <span style={{ color: "#16a34a" }}>{money(diterima)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Status gajian - hanya tampil di modal slip agar rekap tetap rapi */}
                 <div className="rounded-2xl p-4 space-y-3" style={{ background: slipSudahGajian ? "#f0fdf4" : "#fff7ed", border: `1.5px solid ${slipSudahGajian ? "#bbf7d0" : "#fed7aa"}` }}>
