@@ -1,4 +1,6 @@
-// App.jsx Gallery Produksi - audit step 5 slip carry-over fix - 2026-05-23
+// App.jsx Gallery Produksi - audit & security fix - 2026-06-02
+// Perbaikan: kasbon FIFO atomic (runTransaction), produksiByOrderId duplikat-safe,
+// legacy sync double-fire guard, shipmentByOrderId O(n²)→O(n+m), ID cicilan UUID
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
@@ -959,7 +961,7 @@ export default function App() {
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
   const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false);
-  const [kasbonList, setKasbonList] = useState([]); // filter tab borongan hanya belum setor
+  const [kasbonList, setKasbonList] = useState([]); // daftar semua kasbon pegawai dari Firestore (kasbon_pegawai)
   const [masterPekerja, setMasterPekerja] = useState([]); // daftar nama pekerja dari Gallery Kerudung (read-only)
   const [boronganOnlyOverSetor, setBoronganOnlyOverSetor] = useState(false); // filter tab borongan hanya setor melebihi diberi
   const [produksiOnlyBelumSelesai, setProduksiOnlyBelumSelesai] = useState(false); // filter tab produksi hanya belum selesai
@@ -1164,7 +1166,18 @@ export default function App() {
       if (legacyDeliverySyncingRef.current.has(order.id)) return;
       legacyDeliverySyncingRef.current.add(order.id);
       try {
-        await updateDoc(doc(db, C.ORDERS, order.id), buildFullDeliveryPayload(order));
+        // Baca snapshot terbaru dari Firestore sebelum update, agar tidak
+        // double-fire jika useEffect dipanggil lagi sebelum Firestore selesai update.
+        await runTransaction(db, async (transaction) => {
+          const orderRef = doc(db, C.ORDERS, order.id);
+          const snap = await transaction.get(orderRef);
+          if (!snap.exists()) return;
+          const live = snap.data();
+          // Jika sudah ter-sync (oleh proses lain atau trigger sebelumnya), skip
+          if (live.legacyDeliverySynced === true) return;
+          if (Array.isArray(live.deliveries) && live.deliveries.length > 0) return;
+          transaction.update(orderRef, buildFullDeliveryPayload(order));
+        });
       } catch (e) {
         console.warn("Auto sinkron pengiriman data lama gagal:", order.invoice || order.id, e);
       } finally {
@@ -1203,25 +1216,60 @@ export default function App() {
   const q = search.toLowerCase();
 
   const produksiByOrderId = useMemo(() => {
+    // Simpan SEMUA produksi per orderId dalam array sementara, lalu pilih
+    // yang statusnya paling maju (atau updatedAt terbaru jika status sama).
+    // Ini mencegah data produksi tertimpa diam-diam jika ada duplikat orderId.
+    const mapArr = new Map();
+    produksi.forEach((p) => {
+      if (!p.orderId) return;
+      const arr = mapArr.get(p.orderId) || [];
+      arr.push(p);
+      mapArr.set(p.orderId, arr);
+    });
+    const statusOrder = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
     const map = new Map();
-    produksi.forEach((p) => map.set(p.orderId, p));
+    mapArr.forEach((arr, orderId) => {
+      const best = arr.reduce((a, b) => {
+        const ia = statusOrder.indexOf(a.status);
+        const ib = statusOrder.indexOf(b.status);
+        if (ib !== ia) return ib > ia ? b : a;
+        return String(b.updatedAt || b.createdAt || "") >= String(a.updatedAt || a.createdAt || "") ? b : a;
+      });
+      map.set(orderId, best);
+    });
     return map;
   }, [produksi]);
 
   const shipmentByOrderId = useMemo(() => {
+    // Bangun index orders terlebih dahulu (O(n)) sebelum loop shipments,
+    // sehingga pencocokan keseluruhan menjadi O(n+m) bukan O(n*m).
+    const orderById = new Map(orders.map((o) => [o.id, o]));
+    const orderByInvoice = new Map();
+    orders.forEach((o) => {
+      if (o.invoice) orderByInvoice.set(String(o.invoice).trim(), o);
+    });
+
     const map = new Map();
-
     shipments.forEach((p) => {
-      orders.forEach((o) => {
-        const matchById = sameText(p.pesananId, o.id) || sameText(p.orderId, o.id);
-        const matchByInvoice = sameText(p.invoice, o.invoice);
-        const matchByRaw = sameText(p.raw?.orderCode, o.invoice) || sameText(p.raw?.kode, o.invoice);
+      const candidates = new Set();
 
-        if (matchById || matchByInvoice || matchByRaw) {
-          const arr = map.get(o.id) || [];
-          arr.push(p);
-          map.set(o.id, arr);
-        }
+      // Cari lewat ID langsung
+      const byPesananId = orderById.get(String(p.pesananId || "").trim());
+      const byOrderId = orderById.get(String(p.orderId || "").trim());
+      if (byPesananId) candidates.add(byPesananId);
+      if (byOrderId) candidates.add(byOrderId);
+
+      // Cari lewat invoice
+      const inv = String(p.invoice || p.raw?.orderCode || p.raw?.kode || "").trim();
+      if (inv) {
+        const byInv = orderByInvoice.get(inv);
+        if (byInv) candidates.add(byInv);
+      }
+
+      candidates.forEach((o) => {
+        const arr = map.get(o.id) || [];
+        arr.push(p);
+        map.set(o.id, arr);
       });
     });
 
@@ -2739,30 +2787,54 @@ function findRate(productType, model, process) {
         createdAt: todayStr(),
       });
 
-      // Potong kasbon otomatis (FIFO — kasbon terlama dulu)
+      // Potong kasbon otomatis (FIFO — kasbon terlama dulu).
+      // Setiap kasbon dibungkus dalam runTransaction() agar atomic — jika dua
+      // operator klik "Gajian" bersamaan, potongan tidak bisa terjadi dua kali
+      // karena transaction membaca sisaKasbon langsung dari Firestore (bukan state lokal).
       if (potonganKasbon > 0) {
         let sisaPotong = potonganKasbon;
         for (const kasbon of kasbonAktif) {
           if (sisaPotong <= 0) break;
-          const potongKasbon = Math.min(sisaPotong, Number(kasbon.sisaKasbon || 0));
-          sisaPotong -= potongKasbon;
-          const newCicilan = {
-            id: `gaji-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            tanggal: todayStr(),
-            jumlah: potongKasbon,
-            sumber: "rekap_gaji",
-            periodeGajiDari: dari,
-            periodeGajiSampai: sampai,
-          };
-          const updatedCicilan = [...(kasbon.cicilan || []), newCicilan];
-          const totalCicilan = updatedCicilan.reduce((s, c) => s + Number(c.jumlah || 0), 0);
-          const sisaBaru = Math.max(0, Number(kasbon.jumlah || 0) - totalCicilan);
-          await updateDoc(doc(db, C.KASBON, kasbon.id), {
-            cicilan: updatedCicilan,
-            sisaKasbon: sisaBaru,
-            status: sisaBaru <= 0 ? "lunas" : "aktif",
-            updatedAt: new Date().toISOString(),
-          });
+          const kasbonRef = doc(db, C.KASBON, kasbon.id);
+          // Capture sisaPotong saat ini untuk closure di dalam transaction
+          const potongDiIterasiIni = sisaPotong;
+          let actualPotong = 0;
+          try {
+            await runTransaction(db, async (transaction) => {
+              const snap = await transaction.get(kasbonRef);
+              if (!snap.exists()) return;
+              const dataLive = snap.data();
+              const sisaLive = Math.max(0, Number(dataLive.sisaKasbon || 0));
+              if (sisaLive <= 0) return; // sudah lunas oleh proses lain
+              actualPotong = Math.min(potongDiIterasiIni, sisaLive);
+              const newCicilan = {
+                id: (typeof crypto !== "undefined" && crypto.randomUUID)
+                  ? crypto.randomUUID()
+                  : `gaji-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+                tanggal: todayStr(),
+                jumlah: actualPotong,
+                sumber: "rekap_gaji",
+                periodeGajiDari: dari,
+                periodeGajiSampai: sampai,
+              };
+              const existingCicilan = Array.isArray(dataLive.cicilan) ? dataLive.cicilan : [];
+              const updatedCicilan = [...existingCicilan, newCicilan];
+              const totalCicilan = updatedCicilan.reduce((s, c) => s + Number(c.jumlah || 0), 0);
+              const sisaBaru = Math.max(0, Number(dataLive.jumlah || 0) - totalCicilan);
+              transaction.update(kasbonRef, {
+                cicilan: updatedCicilan,
+                sisaKasbon: sisaBaru,
+                status: sisaBaru <= 0 ? "lunas" : "aktif",
+                updatedAt: new Date().toISOString(),
+              });
+            });
+          } catch (txErr) {
+            console.warn("Gagal potong kasbon (transaction):", kasbon.id, txErr);
+            // Lanjut ke kasbon berikutnya agar tidak stuck, tapi kurangi sisaPotong
+            // berdasarkan estimasi lokal supaya tidak over-potong di iterasi selanjutnya
+            actualPotong = Math.min(potongDiIterasiIni, Number(kasbon.sisaKasbon || 0));
+          }
+          sisaPotong -= actualPotong;
         }
       }
 
