@@ -1320,10 +1320,25 @@ export default function App() {
   }, [orders, produksiByOrderId, shipmentByOrderId]);
 
   const filteredProduksi = useMemo(() => {
-    return produksi.filter((p) => {
-      const txt = `${p.customer} ${p.item} ${p.invoice} ${p.status}`.toLowerCase();
-      return q === "" || txt.includes(q);
-    });
+    const statusPriority = (p) => {
+      // Yang belum/sedang proses naik ke atas, Selesai turun ke bawah
+      if (p.status === "Selesai") return 1;
+      return 0;
+    };
+    return [...produksi]
+      .filter((p) => {
+        const txt = `${p.customer} ${p.item} ${p.invoice} ${p.status}`.toLowerCase();
+        return q === "" || txt.includes(q);
+      })
+      .sort((a, b) => {
+        const pa = statusPriority(a);
+        const pb = statusPriority(b);
+        if (pa !== pb) return pa - pb; // belum selesai naik ke atas
+        // Dalam grup yang sama: terbaru di atas
+        return String(b.tanggalMulai || b.updatedAt || b.createdAt || "").localeCompare(
+          String(a.tanggalMulai || a.updatedAt || a.createdAt || "")
+        );
+      });
   }, [produksi, q]);
 
   const filteredEntries = useMemo(() => {
