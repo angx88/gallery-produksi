@@ -3094,11 +3094,16 @@ function findRate(productType, model, process) {
       const hasWarning = Number(r?.belumSetor || 0) > 0;
       const hasCarryOver = (carryOver || []).length > 0;
       const H = 870 + detailRows.length * 74 + (extraRows > 0 ? 28 : 0) + (hasWarning ? 56 : 0) + (hasCarryOver ? 72 : 0);
+      // Render 2× resolusi agar gambar tajam di layar HP (retina/high-DPI)
+      const DPR = 2;
       const canvas = document.createElement("canvas");
-      canvas.width = W;
-      canvas.height = H;
+      canvas.width = W * DPR;
+      canvas.height = H * DPR;
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Canvas tidak tersedia di browser ini.");
+      ctx.scale(DPR, DPR);
 
       ctx.fillStyle = "#fdf2f8";
       ctx.fillRect(0, 0, W, H);
