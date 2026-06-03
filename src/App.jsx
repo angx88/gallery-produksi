@@ -1,6 +1,6 @@
-// App.jsx Gallery Produksi - audit & security fix - 2026-06-02
-// Perbaikan: kasbon FIFO atomic (runTransaction), produksiByOrderId duplikat-safe,
-// legacy sync double-fire guard, shipmentByOrderId O(n²)→O(n+m), ID cicilan UUID
+// App.jsx Gallery Produksi - audit fix komprehensif - 2026-06-03
+// Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
+// legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
@@ -15,6 +15,7 @@ import {
   query,
   where,
   runTransaction,
+  writeBatch,
 } from "firebase/firestore";
 import {
   GoogleAuthProvider,
@@ -72,7 +73,8 @@ function isSentStatus(status) {
 
 function isDoneStatus(status) {
   const s = lower(status);
-  return s === "selesai" || s === "lunas" || s.includes("done") || s.includes("complete");
+  // "Lunas" adalah status pembayaran, bukan bukti produksi/pengiriman selesai.
+  return s === "selesai" || s.includes("done") || s.includes("complete");
 }
 
 function isShortShipmentClosed(order) {
@@ -81,6 +83,34 @@ function isShortShipmentClosed(order) {
     || raw.deliveryStatus === "Ditutup Kurang Kirim"
     || raw.shippingStatus === "Kurang Kirim Final"
     || raw.status === "Ditutup Kurang Kirim";
+}
+
+
+function safeDocId(value, fallback = "doc") {
+  const raw = String(value || "").trim().toLowerCase();
+  const clean = raw
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+  return clean || fallback;
+}
+
+function getDeliveryArray(orderLike) {
+  if (Array.isArray(orderLike?.raw?.deliveries)) return orderLike.raw.deliveries;
+  if (Array.isArray(orderLike?.deliveries)) return orderLike.deliveries;
+  return [];
+}
+
+function isOrderStatusClosedForShipment(status) {
+  const s = lower(status);
+  if (!s) return false;
+  if (s.includes("selesai produksi")) return false;
+  if (s.includes("dikirim") || s.includes("terkirim") || s.includes("kirim selesai")) return true;
+  if (s.includes("done") || s.includes("complete")) return true;
+  if (s === "selesai") return true;
+  return false;
 }
 
 function sameText(a, b) {
@@ -526,12 +556,13 @@ function isLegacyDoneOrSentOrder(order) {
     raw.paymentStatus,
   ].map((v) => lower(v)).join(" ");
 
+  // Legacy sync hanya boleh berjalan untuk status yang benar-benar bermakna sudah dikirim.
+  // Status lunas/selesai tidak otomatis berarti barang sudah dikirim fisik.
   return (
     isSentStatus(statusText) ||
-    isDoneStatus(statusText) ||
-    statusText.includes("lunas") ||
     statusText.includes("terkirim") ||
-    statusText.includes("dikirim")
+    statusText.includes("dikirim") ||
+    statusText.includes("shipped")
   );
 }
 
@@ -587,7 +618,7 @@ function buildFullDeliveryPayload(order) {
     penerima: order?.customer || order?.raw?.customer || "Customer",
     courier: "Data Lama",
     ekspedisi: "Data Lama",
-    note: "Auto sinkron dari status lama yang sudah selesai/dikirim/lunas.",
+    note: "Auto sinkron dari status lama yang sudah dikirim/terkirim.",
     items: deliveryItems,
     total: deliveredTotal,
   };
@@ -605,7 +636,7 @@ function buildFullDeliveryPayload(order) {
     status: lower(order?.raw?.status).includes("lunas") ? "Lunas" : "Dikirim",
     legacyDeliverySynced: true,
     legacyDeliverySyncedAt: todayStr(),
-    legacyDeliverySyncNote: "Auto sinkron data lama dari status selesai/dikirim/lunas",
+    legacyDeliverySyncNote: "Auto sinkron data lama dari status dikirim/terkirim",
     updatedAt: todayStr(),
   };
 }
@@ -765,14 +796,14 @@ function Button({ children, onClick, className = "", style = {}, disabled }) {
 function Input({ label, value, onChange, placeholder, type = "text", readOnly = false }) {
   return (
     <div className="space-y-1">
-      <label className="text-xs font-bold" style={{ color: "#a855f7" }}>{label}</label>
+      <label className="text-sm font-bold" style={{ color: "#9333ea" }}>{label}</label>
       <input
         value={value}
         type={type}
         readOnly={readOnly}
         placeholder={placeholder}
         onChange={(e) => onChange?.(e.target.value)}
-        className="w-full px-4 py-3 outline-none text-sm"
+        className="w-full px-4 py-3 outline-none text-base"
         style={{
           borderRadius: 14,
           border: "1.5px solid #f9a8d4",
@@ -787,11 +818,11 @@ function Input({ label, value, onChange, placeholder, type = "text", readOnly = 
 function Select({ label, value, onChange, children }) {
   return (
     <div className="space-y-1">
-      <label className="text-xs font-bold" style={{ color: "#a855f7" }}>{label}</label>
+      <label className="text-sm font-bold" style={{ color: "#9333ea" }}>{label}</label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-4 py-3 outline-none text-sm"
+        className="w-full px-4 py-3 outline-none text-base"
         style={{
           borderRadius: 14,
           border: "1.5px solid #f9a8d4",
@@ -818,7 +849,7 @@ function Modal({ title, children, onClose }) {
           <h2 className="text-xl font-bold" style={{ color: "#ec4899" }}>{title}</h2>
           <button
             onClick={onClose}
-            className="rounded-2xl px-4 py-2 text-sm font-semibold"
+            className="rounded-2xl px-4 py-2 text-base font-semibold"
             style={{ background: "#fdf2f8", color: "#ec4899" }}
           >
             Tutup
@@ -861,7 +892,7 @@ function CardTitle({ children, className = "", style = {} }) {
 
 function CardDescription({ children, className = "", style = {} }) {
   return (
-    <div className={`text-xs ${className}`} style={{ color: "#94a3b8", ...style }}>
+    <div className={`text-sm ${className}`} style={{ color: "#64748b", ...style }}>
       {children}
     </div>
   );
@@ -883,6 +914,23 @@ function CardFooter({ children, className = "", style = {} }) {
   );
 }
 
+
+
+function GlobalReadableStyle() {
+  return (
+    <style>{`
+      html { -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; }
+      body { color: #0f172a; }
+      button, input, select, textarea { font-size: 16px; }
+      input::placeholder, textarea::placeholder { color: #64748b; opacity: 1; }
+      .text-\[10px\] { font-size: 12px !important; line-height: 1.35 !important; }
+      .text-\[11px\] { font-size: 12.5px !important; line-height: 1.4 !important; }
+      .text-xs { font-size: 13px !important; line-height: 1.45 !important; }
+      .text-sm { font-size: 15px !important; line-height: 1.5 !important; }
+      .shadow-sm { box-shadow: 0 6px 18px rgba(148, 163, 184, 0.14) !important; }
+    `}</style>
+  );
+}
 
 function StatusBadge({ status }) {
   const s = PROD_COLORS[status] || { bg: "#f1f5f9", text: "#64748b", icon: "❓" };
@@ -1154,7 +1202,7 @@ export default function App() {
     };
   }, [user]);
 
-  // Auto sinkron data lama yang aman: order lama yang sudah selesai/dikirim/lunas
+  // Auto sinkron data lama yang aman: hanya order lama yang benar-benar sudah dikirim/terkirim
   // tetapi belum punya deliveries/shippedItems akan dianggap terkirim penuh.
   // Ini mencegah pesanan lama muncul lagi sebagai belum dikirim / belum produksi.
   useEffect(() => {
@@ -1372,7 +1420,7 @@ export default function App() {
       // supaya order baru yang belum produksi tidak langsung mengurangi sisa kain.
       const isProductionRelated =
         produksiByOrderId.has(order.id) ||
-        isDoneStatus(order.status) ||
+        hasDeliveryDetail(order) ||
         isSentStatus(order.status);
 
       if (!isProductionRelated) return;
@@ -1414,15 +1462,20 @@ export default function App() {
 
   const filteredShipments = useMemo(() => {
     const rows = [];
-    const orderById = new Map(orders.map((o) => [o.id, o]));
+    const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
+    const orderByInvoice = new Map();
+    orders.forEach((o) => {
+      const inv = String(o.invoice || "").trim();
+      if (inv) orderByInvoice.set(inv, o);
+    });
     const orderIdsWithShipment = new Set();
 
     shipments.forEach((shipment) => {
-      const matchedOrder = orders.find((o) =>
-        sameText(shipment.pesananId, o.id) ||
-        sameText(shipment.orderId, o.id) ||
-        sameText(shipment.invoice, o.invoice)
-      );
+      const matchedOrder =
+        orderById.get(String(shipment.pesananId || "").trim()) ||
+        orderById.get(String(shipment.orderId || "").trim()) ||
+        orderByInvoice.get(String(shipment.invoice || "").trim()) ||
+        null;
       if (matchedOrder?.id) orderIdsWithShipment.add(matchedOrder.id);
       rows.push({
         ...shipment,
@@ -1838,38 +1891,39 @@ function findRate(productType, model, process) {
     if (!order) return alert("Pesanan tidak ditemukan");
     if (produksiByOrderId.has(order.id)) return alert("Pesanan ini sudah masuk produksi");
 
-    // Ambil items per model dari safeOrder (sudah di-parse dengan benar)
-    // order.items sudah berisi breakdown per model yang benar dari Gallery Kerudung
     const orderItems = (order.items || []).length > 0
       ? order.items.map((it) => ({ name: it.name || it.item || "Pesanan", qty: Number(it.qty || 0), price: Number(it.price || 0) }))
       : [{ name: order.item || "Pesanan", qty: Number(order.qty || 0), price: 0 }];
 
+    const prodRef = doc(db, C.PRODUKSI, `prod_${safeDocId(order.id, "order")}`);
+    const orderRef = doc(db, C.ORDERS, order.id);
+
     setIsSaving(true);
     try {
-      await addDoc(collection(db, C.PRODUKSI), {
-        orderId: order.id,
-        invoice: order.invoice,
-        customer: order.customer,
-        item: order.item,
-        qty: order.qty,
-        items: orderItems, // per model
-        warna: order.warna || "",
-        ukuran: order.ukuran || "",
-        status: "Antri",
-        workers: [],
-        tanggalMulai: prodForm.tanggalMulai,
-        catatan: prodForm.catatan || "",
-        source: "gallery-produksi",
-        createdAt: todayStr(),
-        updatedAt: todayStr(),
-        history: [{ tanggal: todayStr(), status: "Antri", catatan: "Masuk produksi" }],
-      });
+      await runTransaction(db, async (transaction) => {
+        const prodSnap = await transaction.get(prodRef);
+        if (prodSnap.exists()) throw new Error("Pesanan ini sudah masuk produksi.");
 
-      // Sinkron ke Gallery Kerudung: order langsung tahu sudah masuk alur produksi.
-      // Field statusProduksi dibaca sebagai penanda produksi, sementara status tetap aman sebagai Proses
-      // agar pesanan tidak hilang dari alur tagihan/pengiriman Gallery Kerudung.
-      try {
-        await updateDoc(doc(db, C.ORDERS, order.id), {
+        transaction.set(prodRef, {
+          orderId: order.id,
+          invoice: order.invoice,
+          customer: order.customer,
+          item: order.item,
+          qty: order.qty,
+          items: orderItems,
+          warna: order.warna || "",
+          ukuran: order.ukuran || "",
+          status: "Antri",
+          workers: [],
+          tanggalMulai: prodForm.tanggalMulai,
+          catatan: prodForm.catatan || "",
+          source: "gallery-produksi",
+          createdAt: todayStr(),
+          updatedAt: todayStr(),
+          history: [{ tanggal: todayStr(), status: "Antri", catatan: "Masuk produksi" }],
+        });
+
+        transaction.update(orderRef, {
           statusProduksi: "Antri",
           produksiStatus: "Antri",
           produksiSource: "gallery-produksi",
@@ -1877,9 +1931,7 @@ function findRate(productType, model, process) {
           status: isSentStatus(order.status) || lower(order.status) === "lunas" ? order.status : "Proses",
           updatedAt: todayStr(),
         });
-      } catch (syncError) {
-        console.warn("Order Gallery Kerudung tidak bisa disinkronkan saat mulai produksi:", syncError);
-      }
+      });
 
       setProdForm({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
       setModal(null);
@@ -2064,10 +2116,6 @@ function findRate(productType, model, process) {
     if (!entryForm.employeeName.trim()) return alert("Nama pekerja wajib diisi");
     if (!entryForm.qty || Number(entryForm.qty) <= 0) return alert("Qty wajib diisi");
     if (entryForm.process !== "QC Packing" && !entryForm.model.trim()) return alert("Model wajib diisi");
-    // Jahit dan Potong wajib dikaitkan ke pesanan agar:
-    // - validasi batas qty berjalan
-    // - auto-update status produksi benar
-    // - rekap borongan terhubung ke pesanan
     if (PROCESSES_WITH_MODEL.includes(entryForm.process) && !entryForm.orderId) {
       return alert(`Proses ${entryForm.process} wajib dikaitkan ke pesanan.\nPilih pesanan di dropdown "Pesanan terkait".`);
     }
@@ -2110,6 +2158,10 @@ function findRate(productType, model, process) {
       }
     }
 
+    const entryId = `entry_${safeDocId(cleanEmployeeName, "worker")}_${safeDocId(entryForm.orderId || "umum", "order")}_${safeDocId(entryForm.process, "process")}_${safeDocId(cleanModel || "all", "model")}_${safeDocId(entryForm.tanggal, "date")}`;
+    const entryRef = doc(db, C.PRODUCTION_ENTRIES, entryId);
+    const prodRef = prod?.id ? doc(db, C.PRODUKSI, prod.id) : null;
+
     setIsSaving(true);
     try {
       const entryPayload = {
@@ -2131,26 +2183,35 @@ function findRate(productType, model, process) {
         createdAt: todayStr(),
       };
 
-      await addDoc(collection(db, C.PRODUCTION_ENTRIES), entryPayload);
+      await runTransaction(db, async (transaction) => {
+        const entrySnap = await transaction.get(entryRef);
+        if (entrySnap.exists()) throw new Error("Data borongan ini sudah pernah diinput untuk pekerja, proses, tanggal, dan pesanan yang sama.");
 
-      if (prod) {
-        await updateDoc(doc(db, C.PRODUKSI, prod.id), {
-          workers: [
-            ...(prod.workers || []),
-            {
-              employeeName: entryPayload.employeeName,
-              process: entryPayload.process,
-              productType: entryPayload.productType,
-              model: entryPayload.model,
-              qty: entryPayload.qty,
-              tanggal: entryPayload.tanggal,
-            },
-          ],
-          updatedAt: todayStr(),
-        });
-      }
+        let liveWorkers = [];
+        if (prodRef) {
+          const prodSnap = await transaction.get(prodRef);
+          if (prodSnap.exists()) liveWorkers = Array.isArray(prodSnap.data().workers) ? prodSnap.data().workers : [];
+        }
 
-      // Payroll TIDAK dibuat di sini — dibuat saat pekerja setor hasil
+        transaction.set(entryRef, entryPayload);
+        if (prodRef) {
+          transaction.update(prodRef, {
+            workers: [
+              ...liveWorkers,
+              {
+                employeeName: entryPayload.employeeName,
+                process: entryPayload.process,
+                productType: entryPayload.productType,
+                model: entryPayload.model,
+                qty: entryPayload.qty,
+                tanggal: entryPayload.tanggal,
+                entryId,
+              },
+            ],
+            updatedAt: todayStr(),
+          });
+        }
+      });
 
       setEntryForm({
         employeeName: "",
@@ -2173,85 +2234,94 @@ function findRate(productType, model, process) {
   async function simpanSetor() {
     if (!setorModal) return;
 
-    const existingTotals = setorTotals(setorModal);
-    const sisaSebelum = Number(existingTotals.sisaSetor || 0);
-    if (sisaSebelum <= 0) return alert("Entry ini sudah selesai disetor.");
-
     const qtySetor = Number(setorForm.qtySetor || 0);
     const qtyReject = Number(setorForm.qtyReject || 0);
     if (qtySetor < 0 || qtyReject < 0) return alert("Qty setor/reject tidak boleh minus.");
     if (qtySetor + qtyReject <= 0) return alert("Isi qty setor atau qty reject terlebih dahulu.");
-    if (qtySetor + qtyReject > sisaSebelum) {
-      return alert(
-        `Total setor + reject (${qtySetor + qtyReject} pcs) melebihi sisa belum setor (${sisaSebelum} pcs).`
-      );
-    }
 
-    const rate = Number(setorModal.rate || 0);
-    const totalWageSetor = qtySetor * rate;
     const tanggalSetor = setorForm.tanggalSetor || todayStr();
     const setorBatchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const newHistoryItem = {
-      id: setorBatchId,
-      tanggalSetor,
-      qtySetor,
-      qtyReject,
-      rate,
-      totalWageSetor,
-      catatan: setorForm.catatan || "",
-      createdAt: new Date().toISOString(),
-    };
-    const nextHistory = [...normalizeSetorHistory(setorModal), newHistoryItem];
-    const nextQtySetor = nextHistory.reduce((sum, h) => sum + Number(h.qtySetor || 0), 0);
-    const nextQtyReject = nextHistory.reduce((sum, h) => sum + Number(h.qtyReject || 0), 0);
-    const nextTotalWageSetor = nextHistory.reduce((sum, h) => sum + Number(h.totalWageSetor || 0), 0);
-    const nextSisa = Math.max(0, Number(setorModal.qty || 0) - nextQtySetor - nextQtyReject);
-    const nextStatusSetor = nextSisa <= 0 ? "sudah_setor" : "setor_sebagian";
+    const entryRef = doc(db, C.PRODUCTION_ENTRIES, setorModal.id);
+    const payrollRef = doc(db, C.PAYROLL_EXPENSES, `payroll_setor_${safeDocId(setorModal.id, "entry")}_${safeDocId(setorBatchId, "batch")}`);
+
+    let nextHistoryForStatus = [];
+    let nextSisaForToast = 0;
 
     setIsSaving(true);
     try {
-      // Setor bertahap: setiap transaksi ditambahkan ke setorHistory, bukan menimpa setor lama.
-      await updateDoc(doc(db, C.PRODUCTION_ENTRIES, setorModal.id), {
-        setorHistory: nextHistory,
-        qtySetor: nextQtySetor,
-        qtyReject: nextQtyReject,
-        totalWageSetor: nextTotalWageSetor,
-        sisaSetor: nextSisa,
-        statusSetor: nextStatusSetor,
-        tanggalSetor,
-        catatanSetor: setorForm.catatan || "",
-        updatedAt: todayStr(),
+      await runTransaction(db, async (transaction) => {
+        const entrySnap = await transaction.get(entryRef);
+        if (!entrySnap.exists()) throw new Error("Entry borongan tidak ditemukan.");
+        const liveEntry = { id: setorModal.id, ...entrySnap.data() };
+        const existingTotals = setorTotals(liveEntry);
+        const sisaSebelum = Number(existingTotals.sisaSetor || 0);
+        if (sisaSebelum <= 0) throw new Error("Entry ini sudah selesai disetor.");
+        if (qtySetor + qtyReject > sisaSebelum) {
+          throw new Error(`Total setor + reject (${qtySetor + qtyReject} pcs) melebihi sisa belum setor (${sisaSebelum} pcs).`);
+        }
+
+        const rate = Number(liveEntry.rate || 0);
+        const totalWageSetor = qtySetor * rate;
+        const newHistoryItem = {
+          id: setorBatchId,
+          tanggalSetor,
+          qtySetor,
+          qtyReject,
+          rate,
+          totalWageSetor,
+          catatan: setorForm.catatan || "",
+          createdAt: new Date().toISOString(),
+        };
+        const nextHistory = [...normalizeSetorHistory(liveEntry), newHistoryItem];
+        const nextQtySetor = nextHistory.reduce((sum, h) => sum + Number(h.qtySetor || 0), 0);
+        const nextQtyReject = nextHistory.reduce((sum, h) => sum + Number(h.qtyReject || 0), 0);
+        const nextTotalWageSetor = nextHistory.reduce((sum, h) => sum + Number(h.totalWageSetor || 0), 0);
+        const nextSisa = Math.max(0, Number(liveEntry.qty || 0) - nextQtySetor - nextQtyReject);
+        const nextStatusSetor = nextSisa <= 0 ? "sudah_setor" : "setor_sebagian";
+
+        transaction.update(entryRef, {
+          setorHistory: nextHistory,
+          qtySetor: nextQtySetor,
+          qtyReject: nextQtyReject,
+          totalWageSetor: nextTotalWageSetor,
+          sisaSetor: nextSisa,
+          statusSetor: nextStatusSetor,
+          tanggalSetor,
+          catatanSetor: setorForm.catatan || "",
+          updatedAt: todayStr(),
+        });
+
+        if (totalWageSetor > 0) {
+          transaction.set(payrollRef, {
+            source: "gallery-produksi",
+            type: "gaji_borongan",
+            employeeName: displayWorkerName(liveEntry.employeeName),
+            orderId: liveEntry.orderId || "",
+            invoice: liveEntry.invoice || "",
+            productType: liveEntry.productType,
+            model: liveEntry.model || "",
+            process: liveEntry.process,
+            totalPcs: qtySetor,
+            totalAmount: totalWageSetor,
+            status: "belum_dibayar",
+            tanggal: tanggalSetor,
+            createdAt: todayStr(),
+            entryId: setorModal.id,
+            setorBatchId,
+            qtyAwal: liveEntry.qty,
+            qtyReject,
+            sisaSetor: nextSisa,
+          });
+        }
+
+        nextHistoryForStatus = nextHistory;
+        nextSisaForToast = nextSisa;
       });
 
-      // Buat payroll per transaksi setor. Reject tidak dihitung gaji.
-      if (totalWageSetor > 0) {
-        await addDoc(collection(db, C.PAYROLL_EXPENSES), {
-          source: "gallery-produksi",
-          type: "gaji_borongan",
-          employeeName: displayWorkerName(setorModal.employeeName),
-          orderId: setorModal.orderId || "",
-          invoice: setorModal.invoice || "",
-          productType: setorModal.productType,
-          model: setorModal.model || "",
-          process: setorModal.process,
-          totalPcs: qtySetor,
-          totalAmount: totalWageSetor,
-          status: "belum_dibayar",
-          tanggal: tanggalSetor,
-          createdAt: todayStr(),
-          entryId: setorModal.id,
-          setorBatchId,
-          qtyAwal: setorModal.qty,
-          qtyReject,
-          sisaSetor: nextSisa,
-        });
-      }
-
-      setToast(nextSisa > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisa} pcs.` : "✅ Setor selesai tersimpan.");
+      setToast(nextSisaForToast > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "✅ Setor selesai tersimpan.");
       setTimeout(() => setToast(""), 3500);
 
-      // Auto-update status produksi berdasarkan progress setor
-      await autoUpdateProduksiStatus(setorModal, nextHistory);
+      await autoUpdateProduksiStatus(setorModal, nextHistoryForStatus);
 
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
@@ -2293,8 +2363,6 @@ function findRate(productType, model, process) {
     });
 
     const items = kirimForm.items.map((i, idx) => {
-      // Pengiriman harus mengikuti urutan item pesanan.
-      // Jangan jadikan nama sebagai kunci utama karena dua baris bisa punya nama/model mirip atau sama.
       const preferredIndex = Number.isInteger(Number(i.itemIndex)) ? Number(i.itemIndex) : idx;
       const baseIndex = baseItems[preferredIndex] ? preferredIndex : idx;
       const base = baseItems[baseIndex] || baseItems[0] || {};
@@ -2339,7 +2407,6 @@ function findRate(productType, model, process) {
         unit: i.unit || "yard",
       }));
 
-    const existingDeliveries = Array.isArray(order?.raw?.deliveries) ? order.raw.deliveries : [];
     const newDelivery = {
       date: kirimForm.tanggalKirim || todayStr(),
       createdAt: new Date().toISOString(),
@@ -2355,14 +2422,9 @@ function findRate(productType, model, process) {
       items: cleanDeliveryItems,
       total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
     };
-    // Gunakan existingDeliveries dari snapshot lokal untuk kalkulasi shippedItems.
-    // Write sesungguhnya pakai transaction agar tidak overwrite delivery dari operator lain.
-    const nextDeliveriesForCalc = [...existingDeliveries, newDelivery];
 
     const totalDeliveredForItem = (base, idx, delArray) => delArray.reduce((sum, delivery) => {
       const found = (delivery.items || []).filter((it) => {
-        // Data baru wajib cocok berdasarkan itemIndex.
-        // Fallback ke nama hanya untuk data lama yang belum punya itemIndex.
         const hasItemIndex = it.itemIndex !== undefined && it.itemIndex !== null && it.itemIndex !== "";
         if (hasItemIndex) return Number(it.itemIndex) === idx;
         return normalizeModelKey(it.name || it.nama) === normalizeModelKey(base.name);
@@ -2390,138 +2452,139 @@ function findRate(productType, model, process) {
       });
     }
 
-    // Hitung shippedItems berdasarkan snapshot lokal untuk validasi UI
-    const shippedItemsCalc = buildShippedItems(nextDeliveriesForCalc);
-    const totalOrdered = shippedItemsCalc.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
-    const totalShipped = shippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
-    const deliveredTotal = shippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
-    const deliveredHppTotal = shippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
-    const hasOverDelivery = shippedItemsCalc.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
-    const isShortShipment = totalOrdered > 0 && totalShipped > 0 && totalShipped < totalOrdered;
-    const isShortFinal = isShortShipment && kirimForm.shortShipmentMode === "final";
+    const existingDeliveries = getDeliveryArray(order);
+    const localShippedItemsCalc = buildShippedItems([...existingDeliveries, newDelivery]);
+    const localHasOverDelivery = localShippedItemsCalc.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
+    let overDeliveryConfirmed = false;
+    if (localHasOverDelivery) {
+      overDeliveryConfirmed = window.confirm("Kelebihan kirim akan menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim. Lanjut simpan?");
+      if (!overDeliveryConfirmed) return;
+    }
+
+    const localTotalOrdered = localShippedItemsCalc.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
+    const localTotalShipped = localShippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
+    const localIsShortShipment = localTotalOrdered > 0 && localTotalShipped > 0 && localTotalShipped < localTotalOrdered;
+    const isShortFinal = localIsShortShipment && kirimForm.shortShipmentMode === "final";
     const shortShipmentReason = isShortFinal ? String(kirimForm.shortShipmentReason || "").trim() : "";
     const shortShipmentNote = isShortFinal ? String(kirimForm.shortShipmentNote || "").trim() : "";
+    if (isShortFinal && !shortShipmentReason) return alert("Pilih alasan kurang kirim final terlebih dahulu.");
 
-    if (hasOverDelivery) {
-      const ok = window.confirm("Kelebihan kirim akan menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim. Lanjut simpan?");
-      if (!ok) return;
-    }
-
-    if (isShortFinal && !shortShipmentReason) {
-      return alert("Pilih alasan kurang kirim final terlebih dahulu.");
-    }
-
-    const deliveryStatusRaw = totalShipped <= 0
-      ? "Belum Dikirim"
-      : hasOverDelivery
-        ? "Kelebihan Kirim"
-        : totalShipped < totalOrdered
-          ? "Dikirim Sebagian"
-          : "Selesai";
-    const deliveryStatus = isShortFinal ? "Ditutup Kurang Kirim" : deliveryStatusRaw;
-    const orderStatus = deliveryStatus === "Selesai"
-      ? "Dikirim"
-      : deliveryStatus === "Kelebihan Kirim"
-        ? "Kelebihan Kirim"
-        : isShortFinal
-          ? "Ditutup Kurang Kirim"
-          : "Dikirim Sebagian";
-    const shippingStatus = isShortFinal ? "Kurang Kirim Final" : orderStatus;
-    const shortShipmentRemaining = Math.max(0, totalOrdered - totalShipped);
-    const productionDoneByDelivery = isShortFinal || (totalOrdered > 0 && totalShipped >= totalOrdered);
-    const nextProduksiStatus = productionDoneByDelivery
-      ? "Selesai"
-      : (order?.raw?.statusProduksi || order?.raw?.produksiStatus || "Proses");
+    const orderRef = doc(db, C.ORDERS, order.id);
+    const shipmentRef = doc(collection(db, C.SHIPMENTS));
+    const prod = produksiByOrderId.get(order.id);
+    const prodRef = prod?.id ? doc(db, C.PRODUKSI, prod.id) : null;
 
     setIsSaving(true);
     try {
-      await addDoc(collection(db, C.SHIPMENTS), {
-        pesananId: order.id,
-        orderId: order.id,
-        customer: order.customer,
-        produk: order.item,
-        productName: order.item,
-        invoice: order.invoice,
-        tanggalKirim: kirimForm.tanggalKirim,
-        date: kirimForm.tanggalKirim,
-        penerima: kirimForm.penerima.trim(),
-        receiver: kirimForm.penerima.trim(),
-        ekspedisi: kirimForm.ekspedisi || "",
-        courier: kirimForm.ekspedisi || "",
-        items,
-        deliveryItems: cleanDeliveryItems,
-        qty: items.reduce((s, i) => s + i.qtyKirim, 0),
-        totalPesan: items.reduce((s, i) => s + i.qtyPesan, 0),
-        totalKirim: items.reduce((s, i) => s + i.qtyKirim, 0),
-        totalSelisih: items.reduce((s, i) => s + Number(i.selisih || 0), 0),
-        deliveryStatus,
-        shippingStatus,
-        shortShipmentClosed: isShortFinal,
-        shortShipmentMode: isShortFinal ? "final" : (isShortShipment ? "temporary" : ""),
-        shortShipmentReason,
-        shortShipmentNote,
-        shortShipmentRemaining,
-        deliveredTotal,
-        deliveredHppTotal,
-        catatan: kirimForm.catatan || "",
-        note: kirimForm.catatan || "",
-        source: "gallery-produksi",
-        createdAt: todayStr(),
-      });
+      await runTransaction(db, async (transaction) => {
+        const orderSnap = await transaction.get(orderRef);
+        if (!orderSnap.exists()) throw new Error("Order tidak ditemukan");
+        const currentData = orderSnap.data();
+        const currentDeliveries = Array.isArray(currentData.deliveries) ? currentData.deliveries : [];
+        const isDuplicate = currentDeliveries.some((d) => d.createdAt === newDelivery.createdAt);
+        const finalDeliveries = isDuplicate ? currentDeliveries : [...currentDeliveries, newDelivery];
+        const finalShippedItems = buildShippedItems(finalDeliveries);
+        const totalOrdered = finalShippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
+        const totalShipped = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
+        const deliveredTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
+        const deliveredHppTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
+        const hasOverDelivery = finalShippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
+        if (hasOverDelivery && !overDeliveryConfirmed) {
+          throw new Error("Data terbaru menunjukkan pengiriman akan melebihi qty pesanan. Muat ulang data lalu konfirmasi ulang.");
+        }
 
-      const prod = produksiByOrderId.get(order.id);
-      if (prod && productionDoneByDelivery && prod.status !== "Selesai") {
-        await updateDoc(doc(db, C.PRODUKSI, prod.id), {
-          status: "Selesai",
+        const isShortShipment = totalOrdered > 0 && totalShipped > 0 && totalShipped < totalOrdered;
+        const finalShort = isShortShipment && kirimForm.shortShipmentMode === "final";
+        const deliveryStatusRaw = totalShipped <= 0
+          ? "Belum Dikirim"
+          : hasOverDelivery
+            ? "Kelebihan Kirim"
+            : totalShipped < totalOrdered
+              ? "Dikirim Sebagian"
+              : "Selesai";
+        const deliveryStatus = finalShort ? "Ditutup Kurang Kirim" : deliveryStatusRaw;
+        const orderStatus = deliveryStatus === "Selesai"
+          ? "Dikirim"
+          : deliveryStatus === "Kelebihan Kirim"
+            ? "Kelebihan Kirim"
+            : finalShort
+              ? "Ditutup Kurang Kirim"
+              : "Dikirim Sebagian";
+        const shippingStatus = finalShort ? "Kurang Kirim Final" : orderStatus;
+        const shortShipmentRemaining = Math.max(0, totalOrdered - totalShipped);
+        const productionDoneByDelivery = finalShort || (totalOrdered > 0 && totalShipped >= totalOrdered);
+        const nextProduksiStatus = productionDoneByDelivery
+          ? "Selesai"
+          : (currentData.statusProduksi || currentData.produksiStatus || order?.raw?.statusProduksi || order?.raw?.produksiStatus || "Proses");
+
+        transaction.set(shipmentRef, {
+          pesananId: order.id,
+          orderId: order.id,
+          customer: order.customer,
+          produk: order.item,
+          productName: order.item,
+          invoice: order.invoice,
+          tanggalKirim: kirimForm.tanggalKirim,
+          date: kirimForm.tanggalKirim,
+          penerima: kirimForm.penerima.trim(),
+          receiver: kirimForm.penerima.trim(),
+          ekspedisi: kirimForm.ekspedisi || "",
+          courier: kirimForm.ekspedisi || "",
+          items,
+          deliveryItems: cleanDeliveryItems,
+          qty: items.reduce((s, i) => s + i.qtyKirim, 0),
+          totalPesan: totalOrdered,
+          totalKirim: totalShipped,
+          totalSelisih: items.reduce((s, i) => s + Number(i.selisih || 0), 0),
+          deliveryStatus,
+          shippingStatus,
+          shortShipmentClosed: finalShort,
+          shortShipmentMode: finalShort ? "final" : (isShortShipment ? "temporary" : ""),
+          shortShipmentReason: finalShort ? shortShipmentReason : "",
+          shortShipmentNote: finalShort ? shortShipmentNote : "",
+          shortShipmentRemaining,
+          deliveredTotal,
+          deliveredHppTotal,
+          catatan: kirimForm.catatan || "",
+          note: kirimForm.catatan || "",
+          source: "gallery-produksi",
+          createdAt: todayStr(),
+        });
+
+        transaction.update(orderRef, {
+          status: orderStatus,
+          shippingStatus,
+          deliveryStatus,
+          shortShipmentClosed: finalShort,
+          shortShipmentMode: finalShort ? "final" : (isShortShipment ? "temporary" : ""),
+          shortShipmentReason: finalShort ? shortShipmentReason : "",
+          shortShipmentNote: finalShort ? shortShipmentNote : "",
+          shortShipmentRemaining,
+          tanggalKirim: kirimForm.tanggalKirim || todayStr(),
+          deliveries: finalDeliveries,
+          shippedItems: finalShippedItems,
+          deliveredTotal,
+          deliveredHppTotal,
+          totalKirim: totalShipped,
+          totalPesan: totalOrdered,
+          statusProduksi: nextProduksiStatus,
+          produksiStatus: nextProduksiStatus,
+          produksiSource: "gallery-produksi",
+          produksiUpdatedAt: todayStr(),
           updatedAt: todayStr(),
-          history: [
-            ...(prod.history || []),
-            { tanggal: todayStr(), status: "Selesai", catatan: "Otomatis selesai karena pengiriman sudah memenuhi pesanan" },
-          ],
         });
-      }
 
-      // Gunakan Firestore transaction untuk update deliveries di order
-      // sehingga tidak ada delivery yang teroverwrite jika dua operator kirim bersamaan.
-      try {
-        const orderRef = doc(db, C.ORDERS, order.id);
-        await runTransaction(db, async (transaction) => {
-          const snap = await transaction.get(orderRef);
-          if (!snap.exists()) throw new Error("Order tidak ditemukan");
-
-          const currentData = snap.data();
-          const currentDeliveries = Array.isArray(currentData.deliveries) ? currentData.deliveries : existingDeliveries;
-          // Cegah duplicate: kalau delivery ini sudah ada (by createdAt), skip
-          const isDuplicate = currentDeliveries.some((d) => d.createdAt === newDelivery.createdAt);
-          const finalDeliveries = isDuplicate ? currentDeliveries : [...currentDeliveries, newDelivery];
-          const finalShippedItems = buildShippedItems(finalDeliveries);
-
-          transaction.update(orderRef, {
-            status: orderStatus,
-            shippingStatus,
-            deliveryStatus,
-            shortShipmentClosed: isShortFinal,
-            shortShipmentMode: isShortFinal ? "final" : (isShortShipment ? "temporary" : ""),
-            shortShipmentReason,
-            shortShipmentNote,
-            shortShipmentRemaining,
-            tanggalKirim: kirimForm.tanggalKirim || todayStr(),
-            deliveries: finalDeliveries,
-            shippedItems: finalShippedItems,
-            deliveredTotal,
-            deliveredHppTotal,
-            totalKirim: totalShipped,
-            totalPesan: totalOrdered,
-            statusProduksi: nextProduksiStatus,
-            produksiStatus: nextProduksiStatus,
-            produksiSource: "gallery-produksi",
-            produksiUpdatedAt: todayStr(),
+        if (prodRef && productionDoneByDelivery && prod?.status !== "Selesai") {
+          transaction.update(prodRef, {
+            status: "Selesai",
             updatedAt: todayStr(),
+            history: [
+              ...(prod.history || []),
+              { tanggal: todayStr(), status: "Selesai", catatan: "Otomatis selesai karena pengiriman sudah memenuhi pesanan" },
+            ],
           });
-        });
-      } catch (e) {
-        console.warn("Order status/pengiriman Gallery Kerudung tidak bisa diupdate:", e);
-      }
+        }
+      });
 
       setKirimForm({
         pesananId: "",
@@ -2563,10 +2626,11 @@ function findRate(productType, model, process) {
     try {
       if (type === "rate") await deleteDoc(doc(db, C.WORK_RATES, id));
       if (type === "entry") {
-        await deleteDoc(doc(db, C.PRODUCTION_ENTRIES, id));
-        // Jika sudah ada payroll terkait, hapus juga
         const payrollSnap = await getDocs(query(collection(db, C.PAYROLL_EXPENSES), where("entryId", "==", id)));
-        for (const d of payrollSnap.docs) await deleteDoc(d.ref);
+        const batch = writeBatch(db);
+        batch.delete(doc(db, C.PRODUCTION_ENTRIES, id));
+        payrollSnap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
       }
       setToast("🗑️ Data berhasil dihapus");
       setTimeout(() => setToast(""), 3000);
@@ -2752,26 +2816,35 @@ function findRate(productType, model, process) {
     const jumlah = Number(r?.gaji || 0);
     if (jumlah <= 0) return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
 
-    // Cek kasbon aktif pekerja ini
     const kasbonAktif = kasbonAktifUntukPekerja(nama);
     const totalKasbon = kasbonAktif.reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
-    const potonganKasbon = Math.min(totalKasbon, jumlah);
-    const gajiDiterima = jumlah - potonganKasbon;
+    const potonganKasbonEstimasi = Math.min(totalKasbon, jumlah);
+    const gajiDiterimaEstimasi = jumlah - potonganKasbonEstimasi;
 
     let konfirmasiMsg = `Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nGaji kotor: ${money(jumlah)}`;
     if (totalKasbon > 0) {
-      konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbon)}\nGaji diterima: ${money(gajiDiterima)}`;
+      konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
     }
     const ok = window.confirm(konfirmasiMsg);
     if (!ok) return;
+
+    const employeeDisplay = displayWorkerName(nama);
+    const workerKey = normalizeWorkerNameKey(nama);
+    const periodeKey = `${dateKey(dari)}_${dateKey(sampai)}`;
+    const markerRef = doc(db, C.PAYROLL_EXPENSES, `gaji_marker_${safeDocId(workerKey, "worker")}_${safeDocId(periodeKey, "periode")}`);
+    const historyRef = doc(db, C.GAJIAN_HISTORY, `gajian_${safeDocId(workerKey, "worker")}_${safeDocId(periodeKey, "periode")}`);
+    const kasbonRefs = kasbonAktif.map((k) => ({ local: k, ref: doc(db, C.KASBON, k.id) }));
+
+    let actualPotonganKasbon = 0;
+    let actualGajiDiterima = jumlah;
+
     setIsSaving(true);
     try {
-      // Cek duplikat langsung dari Firestore sebelum addDoc
       const existingSnap = await getDocs(
         query(
           collection(db, C.PAYROLL_EXPENSES),
           where("source", "==", "gallery-produksi-gaji-marker"),
-          where("employeeName", "==", displayWorkerName(nama)),
+          where("employeeName", "==", employeeDisplay),
           where("periodeGajiDari", "==", dari),
           where("periodeGajiSampai", "==", sampai)
         )
@@ -2782,94 +2855,87 @@ function findRate(productType, model, process) {
         return;
       }
 
-      // Simpan marker ke payroll_expenses
-      await addDoc(collection(db, C.PAYROLL_EXPENSES), {
-        source: "gallery-produksi-gaji-marker",
-        type: "status_gajian_periode",
-        employeeName: displayWorkerName(nama),
-        periodeGajiDari: dari,
-        periodeGajiSampai: sampai,
-        tanggal: todayStr(),
-        tanggalBayar: todayStr(),
-        status: "sudah_dibayar",
-        totalAmount: 0,
-        gajiAmount: jumlah,
-        potonganKasbon: potonganKasbon,
-        gajiDiterima: gajiDiterima,
-        totalPcs: Number(r?.pcsSetor || 0),
-        totalReject: Number(r?.pcsReject || 0),
-        detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
-        createdAt: todayStr(),
-      });
+      await runTransaction(db, async (transaction) => {
+        const markerSnap = await transaction.get(markerRef);
+        if (markerSnap.exists()) throw new Error("Status gajian periode ini sudah tercatat.");
 
-      // Potong kasbon otomatis (FIFO — kasbon terlama dulu).
-      // Setiap kasbon dibungkus dalam runTransaction() agar atomic — jika dua
-      // operator klik "Gajian" bersamaan, potongan tidak bisa terjadi dua kali
-      // karena transaction membaca sisaKasbon langsung dari Firestore (bukan state lokal).
-      if (potonganKasbon > 0) {
-        let sisaPotong = potonganKasbon;
-        for (const kasbon of kasbonAktif) {
-          if (sisaPotong <= 0) break;
-          const kasbonRef = doc(db, C.KASBON, kasbon.id);
-          // Capture sisaPotong saat ini untuk closure di dalam transaction
-          const potongDiIterasiIni = sisaPotong;
-          let actualPotong = 0;
-          try {
-            await runTransaction(db, async (transaction) => {
-              const snap = await transaction.get(kasbonRef);
-              if (!snap.exists()) return;
-              const dataLive = snap.data();
-              const sisaLive = Math.max(0, Number(dataLive.sisaKasbon || 0));
-              if (sisaLive <= 0) return; // sudah lunas oleh proses lain
-              actualPotong = Math.min(potongDiIterasiIni, sisaLive);
-              const newCicilan = {
-                id: (typeof crypto !== "undefined" && crypto.randomUUID)
-                  ? crypto.randomUUID()
-                  : `gaji-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-                tanggal: todayStr(),
-                jumlah: actualPotong,
-                sumber: "rekap_gaji",
-                periodeGajiDari: dari,
-                periodeGajiSampai: sampai,
-              };
-              const existingCicilan = Array.isArray(dataLive.cicilan) ? dataLive.cicilan : [];
-              const updatedCicilan = [...existingCicilan, newCicilan];
-              const totalCicilan = updatedCicilan.reduce((s, c) => s + Number(c.jumlah || 0), 0);
-              const sisaBaru = Math.max(0, Number(dataLive.jumlah || 0) - totalCicilan);
-              transaction.update(kasbonRef, {
-                cicilan: updatedCicilan,
-                sisaKasbon: sisaBaru,
-                status: sisaBaru <= 0 ? "lunas" : "aktif",
-                updatedAt: new Date().toISOString(),
-              });
-            });
-          } catch (txErr) {
-            console.warn("Gagal potong kasbon (transaction):", kasbon.id, txErr);
-            // Lanjut ke kasbon berikutnya agar tidak stuck, tapi kurangi sisaPotong
-            // berdasarkan estimasi lokal supaya tidak over-potong di iterasi selanjutnya
-            actualPotong = Math.min(potongDiIterasiIni, Number(kasbon.sisaKasbon || 0));
+        const liveKasbon = [];
+        for (const item of kasbonRefs) {
+          const snap = await transaction.get(item.ref);
+          if (!snap.exists()) continue;
+          const data = snap.data();
+          const sisaLive = Math.max(0, Number(data.sisaKasbon || 0));
+          if (sisaLive > 0 && data.status === "aktif") {
+            liveKasbon.push({ ref: item.ref, data, sisaLive, id: item.local.id });
           }
+        }
+
+        let sisaPotong = Math.min(jumlah, liveKasbon.reduce((s, k) => s + k.sisaLive, 0));
+        actualPotonganKasbon = sisaPotong;
+        actualGajiDiterima = jumlah - actualPotonganKasbon;
+
+        for (const kasbon of liveKasbon) {
+          if (sisaPotong <= 0) break;
+          const actualPotong = Math.min(sisaPotong, kasbon.sisaLive);
+          const newCicilan = {
+            id: (typeof crypto !== "undefined" && crypto.randomUUID)
+              ? crypto.randomUUID()
+              : `gaji-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            tanggal: todayStr(),
+            jumlah: actualPotong,
+            sumber: "rekap_gaji",
+            periodeGajiDari: dari,
+            periodeGajiSampai: sampai,
+          };
+          const existingCicilan = Array.isArray(kasbon.data.cicilan) ? kasbon.data.cicilan : [];
+          const updatedCicilan = [...existingCicilan, newCicilan];
+          const totalCicilan = updatedCicilan.reduce((s, c) => s + Number(c.jumlah || 0), 0);
+          const sisaBaru = Math.max(0, Number(kasbon.data.jumlah || 0) - totalCicilan);
+          transaction.update(kasbon.ref, {
+            cicilan: updatedCicilan,
+            sisaKasbon: sisaBaru,
+            status: sisaBaru <= 0 ? "lunas" : "aktif",
+            updatedAt: new Date().toISOString(),
+          });
           sisaPotong -= actualPotong;
         }
-      }
 
-      // Simpan ke gajian_history untuk riwayat
-      await addDoc(collection(db, C.GAJIAN_HISTORY), {
-        employeeName: displayWorkerName(nama),
-        tanggalGaji: todayStr(),
-        periodeGajiDari: dari,
-        periodeGajiSampai: sampai,
-        jumlah,
-        potonganKasbon,
-        gajiDiterima,
-        totalPcs: Number(r?.pcsSetor || 0),
-        totalReject: Number(r?.pcsReject || 0),
-        source: "tandai_sudah_gajian",
-        createdAt: todayStr(),
+        transaction.set(markerRef, {
+          source: "gallery-produksi-gaji-marker",
+          type: "status_gajian_periode",
+          employeeName: employeeDisplay,
+          periodeGajiDari: dari,
+          periodeGajiSampai: sampai,
+          tanggal: todayStr(),
+          tanggalBayar: todayStr(),
+          status: "sudah_dibayar",
+          totalAmount: 0,
+          gajiAmount: jumlah,
+          potonganKasbon: actualPotonganKasbon,
+          gajiDiterima: actualGajiDiterima,
+          totalPcs: Number(r?.pcsSetor || 0),
+          totalReject: Number(r?.pcsReject || 0),
+          detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
+          createdAt: todayStr(),
+        });
+
+        transaction.set(historyRef, {
+          employeeName: employeeDisplay,
+          tanggalGaji: todayStr(),
+          periodeGajiDari: dari,
+          periodeGajiSampai: sampai,
+          jumlah,
+          potonganKasbon: actualPotonganKasbon,
+          gajiDiterima: actualGajiDiterima,
+          totalPcs: Number(r?.pcsSetor || 0),
+          totalReject: Number(r?.pcsReject || 0),
+          source: "tandai_sudah_gajian",
+          createdAt: todayStr(),
+        });
       });
 
-      const toastMsg = potonganKasbon > 0
-        ? `✅ Gajian tersimpan · Kasbon dipotong ${money(potonganKasbon)}`
+      const toastMsg = actualPotonganKasbon > 0
+        ? `✅ Gajian tersimpan · Kasbon dipotong ${money(actualPotonganKasbon)}`
         : "✅ Status berubah menjadi Sudah gajian";
       setToast(toastMsg);
       setTimeout(() => setToast(""), 3500);
@@ -3341,6 +3407,7 @@ function findRate(productType, model, process) {
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center" style={{ background: "#fdf2f8" }}>
+        <GlobalReadableStyle />
         <div style={{ color: "#ec4899" }} className="text-lg font-semibold">Memuat...</div>
       </div>
     );
@@ -3352,6 +3419,7 @@ function findRate(productType, model, process) {
         className="flex min-h-screen flex-col items-center justify-center p-6"
         style={{ background: "linear-gradient(135deg,#fdf2f8 0%,#fce7f3 50%,#ede9fe 100%)" }}
       >
+        <GlobalReadableStyle />
         <div className="w-full max-w-sm rounded-3xl bg-white/80 p-8 shadow-xl text-center" style={{ border: "1.5px solid #f9a8d4" }}>
           <div className="mb-2 text-4xl">🏭✨</div>
           <div
@@ -3385,6 +3453,7 @@ function findRate(productType, model, process) {
 
   return (
     <div className="mx-auto min-h-screen max-w-md" style={{ background: "#fdf2f8" }}>
+      <GlobalReadableStyle />
       {toast && (
         <div className="fixed left-4 right-4 top-4 z-[60] rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-xl"
           style={{ color: "#7c3aed", border: "1.5px solid #e9d5ff" }}>
@@ -5402,7 +5471,7 @@ function findRate(productType, model, process) {
               onChange={(v) => {
                 const p = orders.find((o) => o.id === v);
                 // Hitung qty yang sudah terkirim dari riwayat deliveries
-                const existingDeliveries = Array.isArray(p?.deliveries) ? p.deliveries : [];
+                const existingDeliveries = getDeliveryArray(p);
                 const rawItems = Array.isArray(p?.items) && p.items.length > 0
                   ? p.items.map((it, idx) => {
                       const qtyPesan = Number(it.qty || 0);
@@ -5448,7 +5517,7 @@ function findRate(productType, model, process) {
               {orders
                 .filter((p) => {
                   const status = String(p.status || "").toLowerCase();
-                  return !status.includes("lunas") && !status.includes("selesai") && !status.includes("done") && !status.includes("complete");
+                  return !isOrderStatusClosedForShipment(status);
                 })
                 .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
                 .map((p) => <option key={p.id} value={p.id}>{p.customer} · {p.item} · {p.qty} pcs</option>)}
@@ -5903,7 +5972,7 @@ function findRate(productType, model, process) {
               </div>
               <button
                 onClick={() => setTugasDetailModal(false)}
-                className="rounded-2xl px-4 py-2 text-sm font-semibold"
+                className="rounded-2xl px-4 py-2 text-base font-semibold"
                 style={{ background: "#fdf2f8", color: "#ec4899" }}
               >
                 Tutup
@@ -6070,7 +6139,7 @@ function findRate(productType, model, process) {
               </div>
               <button
                 onClick={() => setAlertDetailModal(false)}
-                className="rounded-2xl px-4 py-2 text-sm font-semibold"
+                className="rounded-2xl px-4 py-2 text-base font-semibold"
                 style={{ background: "#fdf2f8", color: "#ec4899" }}
               >
                 Tutup
