@@ -388,7 +388,7 @@ function normalizeSetorHistory(entry) {
         qtySetor,
         qtyReject,
         rate,
-        totalWageSetor: Number(h?.totalWageSetor ?? (qtySetor * rate) ?? 0),
+        totalWageSetor: Math.max(0, Number(h?.totalWageSetor ?? (qtySetor * rate) ?? 0)),
         catatan: h?.catatan || h?.catatanSetor || "",
         createdAt: h?.createdAt || "",
       };
@@ -406,7 +406,7 @@ function normalizeSetorHistory(entry) {
       qtySetor,
       qtyReject,
       rate,
-      totalWageSetor: Number(entry?.totalWageSetor ?? (qtySetor * rate) ?? 0),
+      totalWageSetor: Math.max(0, Number(entry?.totalWageSetor ?? (qtySetor * rate) ?? 0)),
       catatan: entry?.catatanSetor || "",
       createdAt: entry?.updatedAt || entry?.createdAt || "",
     });
@@ -437,7 +437,7 @@ function setorTotalsFromHistory(history) {
   return {
     qtySetor: (history || []).reduce((s, h) => s + Number(h.qtySetor || 0), 0),
     qtyReject: (history || []).reduce((s, h) => s + Number(h.qtyReject || 0), 0),
-    totalWageSetor: (history || []).reduce((s, h) => s + Number(h.totalWageSetor || 0), 0),
+    totalWageSetor: (history || []).reduce((s, h) => s + Math.max(0, Number(h.totalWageSetor || 0)), 0),
   };
 }
 
@@ -1868,20 +1868,42 @@ export default function App() {
     );
   }
 
-function findRate(productType, model, process) {
-    return workRates.find((r) => {
+function rateDocId(productType, model, process) {
+    const typeKey = safeDocId(normalizeProductTypeKey(productType || "kerudung"), "type");
+    const processKey = safeDocId(lower(process || "proses"), "process");
+    const modelKey = lower(process) === "qc packing" ? "all" : safeDocId(normalizeModelKey(model || "all"), "model");
+    return `rate_${typeKey}_${processKey}_${modelKey}`;
+  }
+
+  function effectiveRateValue(rawRate, employeeName) {
+    const base = Number(rawRate || 0);
+    if (!Number.isFinite(base) || base <= 0) return 0;
+    const isKonveksi = normalizeWorkerNameKey(employeeName).includes("konveksi");
+    const effective = isKonveksi ? base - 500 : base;
+    return Number.isFinite(effective) ? Math.max(0, effective) : 0;
+  }
+
+  function findRate(productType, model, process) {
+    const expectedId = rateDocId(productType, model, process);
+    const matches = workRates.filter((r) => {
       const sameType = normalizeProductTypeKey(r.productType) === normalizeProductTypeKey(productType);
       const sameProcess = lower(r.process) === lower(process);
       if (process === "QC Packing") return sameType && sameProcess;
       return sameType && sameProcess && normalizeModelKey(r.model) === normalizeModelKey(model);
     });
+    return matches.sort((a, b) => {
+      if (a.id === expectedId && b.id !== expectedId) return -1;
+      if (b.id === expectedId && a.id !== expectedId) return 1;
+      return String(b.updatedAt || b.createdAt || b.id || "").localeCompare(String(a.updatedAt || a.createdAt || a.id || ""));
+    })[0] || null;
   }
 
   function getRateForEmployee(productType, model, process, employeeName) {
     const rate = findRate(productType, model, process);
     if (!rate) return null;
-    const isKonveksi = normalizeWorkerNameKey(employeeName).includes("konveksi");
-    return { ...rate, rate: isKonveksi ? Number(rate.rate) - 500 : Number(rate.rate) };
+    const effectiveRate = effectiveRateValue(rate.rate, employeeName);
+    if (effectiveRate <= 0) return null;
+    return { ...rate, baseRate: Number(rate.rate || 0), rate: effectiveRate };
   }
 
   async function addProduksi() {
@@ -2107,24 +2129,38 @@ function findRate(productType, model, process) {
   }
 
   async function addWorkRate() {
-    if (!rateForm.productType) return alert("Jenis produk wajib diisi");
-    if (rateForm.process !== "QC Packing" && !rateForm.model.trim()) return alert("Model wajib diisi");
-    if (!rateForm.rate || Number(rateForm.rate) <= 0) return alert("Tarif wajib diisi");
+    const cleanProductType = displayProductTypeName(rateForm.productType);
+    const cleanProcess = rateForm.process;
+    const cleanModel = cleanProcess === "QC Packing" ? "" : canonicalByExisting(rateForm.model, modelNameOptions, "model");
+    const cleanRate = Number(rateForm.rate || 0);
+
+    if (!cleanProductType.trim()) return alert("Jenis produk wajib diisi");
+    if (cleanProcess !== "QC Packing" && !cleanModel.trim()) return alert("Model wajib diisi");
+    if (!Number.isFinite(cleanRate) || cleanRate <= 0) return alert("Tarif wajib diisi dan harus lebih dari 0");
+    if (cleanRate > 1000000) return alert("Tarif terlalu besar. Periksa kembali nominal tarif.");
+
+    const rateRef = doc(db, C.WORK_RATES, rateDocId(cleanProductType, cleanModel, cleanProcess));
 
     setIsSaving(true);
     try {
-      await addDoc(collection(db, C.WORK_RATES), {
-        productType: displayProductTypeName(rateForm.productType),
-        model: rateForm.process === "QC Packing" ? "" : canonicalByExisting(rateForm.model, modelNameOptions, "model"),
-        process: rateForm.process,
-        rate: Number(rateForm.rate),
-        source: "gallery-produksi",
-        createdAt: todayStr(),
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(rateRef);
+        transaction.set(rateRef, {
+          productType: cleanProductType,
+          model: cleanModel,
+          process: cleanProcess,
+          rate: cleanRate,
+          source: "gallery-produksi",
+          createdAt: snap.exists() ? (snap.data().createdAt || todayStr()) : todayStr(),
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
       });
       setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
       setModal(null);
+      setToast("✅ Tarif berhasil disimpan");
+      setTimeout(() => setToast(""), 2500);
     } catch (e) {
-      alert("Gagal simpan tarif: " + e.message);
+      alert("Gagal simpan tarif: " + (e?.message || e));
     } finally {
       setIsSaving(false);
     }
@@ -2146,7 +2182,9 @@ function findRate(productType, model, process) {
 
     const order = orders.find((o) => o.id === entryForm.orderId);
     const prod = order ? produksiByOrderId.get(order.id) : null;
-    const totalWage = Number(entryForm.qty) * Number(rate.rate || 0);
+    const effectiveRate = Number(rate.rate || 0);
+    if (!Number.isFinite(effectiveRate) || effectiveRate <= 0) return alert("Tarif efektif tidak valid. Periksa tarif dasar dan aturan potongan konveksi.");
+    const totalWage = Number(entryForm.qty) * effectiveRate;
 
     const draftPayloadForCheck = {
       employeeName: cleanEmployeeName,
@@ -2206,9 +2244,29 @@ function findRate(productType, model, process) {
         if (entrySnap.exists()) throw new Error("Data borongan ini sudah pernah diinput untuk pekerja, proses, tanggal, dan pesanan yang sama.");
 
         let liveWorkers = [];
+        let liveProdData = null;
         if (prodRef) {
           const prodSnap = await transaction.get(prodRef);
-          if (prodSnap.exists()) liveWorkers = Array.isArray(prodSnap.data().workers) ? prodSnap.data().workers : [];
+          if (prodSnap.exists()) {
+            liveProdData = prodSnap.data();
+            liveWorkers = Array.isArray(liveProdData.workers) ? liveProdData.workers : [];
+          }
+        }
+
+        if (liveProdData) {
+          const processKey = lower(entryPayload.process);
+          const modelKey = normalizeModelKey(entryPayload.model || "");
+          const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
+          const limit = processKey === "qc packing"
+            ? Number(liveProdData.qty || 0)
+            : Number((liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey) || {}).qty || 0);
+          const alreadyInWorkers = liveWorkers
+            .filter((w) => lower(w.process) === processKey)
+            .filter((w) => processKey === "qc packing" || normalizeModelKey(w.model || "") === modelKey)
+            .reduce((sum, w) => sum + Number(w.qty || 0), 0);
+          if (limit > 0 && alreadyInWorkers + Number(entryPayload.qty || 0) > limit) {
+            throw new Error(`Qty ${entryPayload.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${entryPayload.qty} pcs.`);
+          }
         }
 
         transaction.set(entryRef, entryPayload);
@@ -2279,6 +2337,7 @@ function findRate(productType, model, process) {
         }
 
         const rate = Number(liveEntry.rate || 0);
+        if (!Number.isFinite(rate) || rate <= 0) throw new Error("Tarif entry tidak valid. Perbaiki tarif/entry sebelum menyetor.");
         const totalWageSetor = qtySetor * rate;
         const newHistoryItem = {
           id: setorBatchId,
@@ -2734,12 +2793,27 @@ function findRate(productType, model, process) {
         };
         if (liveEntry.process !== "QC Packing") updates.model = nextModel;
 
-        transaction.update(entryRef, updates);
-
         if (prodRef) {
           const prodSnap = await transaction.get(prodRef);
           if (prodSnap.exists()) {
-            const liveWorkers = Array.isArray(prodSnap.data().workers) ? prodSnap.data().workers : [];
+            const liveProdData = prodSnap.data();
+            const liveWorkers = Array.isArray(liveProdData.workers) ? liveProdData.workers : [];
+            if (!hasSetor) {
+              const processKey = lower(liveEntry.process || "");
+              const modelKey = normalizeModelKey(liveEntry.process === "QC Packing" ? "" : nextModel);
+              const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
+              const limit = processKey === "qc packing"
+                ? Number(liveProdData.qty || 0)
+                : Number((liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey) || {}).qty || 0);
+              const alreadyInWorkers = liveWorkers
+                .filter((w) => w.entryId !== liveEntry.id)
+                .filter((w) => lower(w.process) === processKey)
+                .filter((w) => processKey === "qc packing" || normalizeModelKey(w.model || "") === modelKey)
+                .reduce((sum, w) => sum + Number(w.qty || 0), 0);
+              if (limit > 0 && alreadyInWorkers + Number(updates.qty || 0) > limit) {
+                throw new Error(`Qty ${liveEntry.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${updates.qty} pcs.`);
+              }
+            }
             const nextWorkers = liveWorkers.map((w) => {
               if (w.entryId !== liveEntry.id) return w;
               return {
@@ -2757,6 +2831,8 @@ function findRate(productType, model, process) {
             });
           }
         }
+
+        transaction.update(entryRef, updates);
       });
 
       setEditEntryModal(null);
@@ -2854,6 +2930,7 @@ function findRate(productType, model, process) {
         }
 
         const kasbonRefs = relatedKasbon.map((k) => doc(db, C.KASBON, k.id));
+        const kasbonRollbackUpdates = [];
         for (const ref of kasbonRefs) {
           const snap = await transaction.get(ref);
           if (!snap.exists()) continue;
@@ -2867,14 +2944,18 @@ function findRate(productType, model, process) {
           if (filteredCicilan.length === cicilan.length) continue;
           const totalCicilanBaru = filteredCicilan.reduce((sum, c) => sum + Number(c.jumlah || 0), 0);
           const sisaKasbonBaru = Math.max(0, Number(data.jumlah || 0) - totalCicilanBaru);
-          transaction.update(ref, {
-            cicilan: filteredCicilan,
-            sisaKasbon: sisaKasbonBaru,
-            status: sisaKasbonBaru <= 0 ? "lunas" : "aktif",
-            updatedAt: new Date().toISOString(),
+          kasbonRollbackUpdates.push({
+            ref,
+            payload: {
+              cicilan: filteredCicilan,
+              sisaKasbon: sisaKasbonBaru,
+              status: sisaKasbonBaru <= 0 ? "lunas" : "aktif",
+              updatedAt: new Date().toISOString(),
+            },
           });
         }
 
+        kasbonRollbackUpdates.forEach(({ ref, payload }) => transaction.update(ref, payload));
         transaction.delete(markerRef);
         transaction.delete(historyRef);
       });
