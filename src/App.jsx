@@ -2046,7 +2046,6 @@ function findRate(productType, model, process) {
     const item = produksi.find((p) => p.id === id);
     if (!item || item.status === newStatus) return;
 
-    // Mapping status produksi → status pesanan di Gallery Kerudung
     const statusOrderMap = {
       "Antri": "Proses",
       "Potong": "Proses",
@@ -2055,34 +2054,53 @@ function findRate(productType, model, process) {
       "Selesai": "Selesai Produksi",
     };
 
+    const prodRef = doc(db, C.PRODUKSI, id);
+    const orderRef = item.orderId ? doc(db, C.ORDERS, item.orderId) : null;
+    const orderStatusBaru = statusOrderMap[newStatus];
+
     setIsSaving(true);
     try {
-      await updateDoc(doc(db, C.PRODUKSI, id), {
-        status: newStatus,
-        updatedAt: todayStr(),
-        history: [...(item.history || []), { tanggal: todayStr(), status: newStatus, catatan: "" }],
-      });
+      await runTransaction(db, async (transaction) => {
+        const prodSnap = await transaction.get(prodRef);
+        if (!prodSnap.exists()) throw new Error("Data produksi tidak ditemukan.");
+        const liveProd = prodSnap.data();
 
-      // Sync ke Gallery Kerudung — update status di collection orders
-      if (item.orderId) {
-        const orderStatusBaru = statusOrderMap[newStatus];
-        if (orderStatusBaru) {
-          try {
-            await updateDoc(doc(db, C.ORDERS, item.orderId), {
-              statusProduksi: newStatus,
-              produksiStatus: newStatus,
-              produksiSource: "gallery-produksi",
-              produksiUpdatedAt: todayStr(),
-              ...(newStatus === "Selesai" ? { status: "Selesai Produksi" } : { status: orderStatusBaru }),
-              updatedAt: todayStr(),
-            });
-          } catch (_) {
-            // Jika order tidak ditemukan, abaikan (mungkin sudah dihapus)
+        let liveOrder = null;
+        if (orderRef && orderStatusBaru) {
+          const orderSnap = await transaction.get(orderRef);
+          if (!orderSnap.exists()) {
+            throw new Error("Pesanan terkait tidak ditemukan. Status produksi tidak diubah agar data tetap sinkron.");
           }
+          liveOrder = orderSnap.data();
         }
-      }
+
+        transaction.update(prodRef, {
+          status: newStatus,
+          updatedAt: todayStr(),
+          history: [
+            ...(Array.isArray(liveProd.history) ? liveProd.history : []),
+            { tanggal: todayStr(), status: newStatus, catatan: "Update status manual" },
+          ],
+        });
+
+        if (orderRef && orderStatusBaru) {
+          const currentOrderStatus = String(liveOrder?.status || "");
+          transaction.update(orderRef, {
+            statusProduksi: newStatus,
+            produksiStatus: newStatus,
+            produksiSource: "gallery-produksi",
+            produksiUpdatedAt: todayStr(),
+            ...(isSentStatus(currentOrderStatus) || lower(currentOrderStatus) === "lunas"
+              ? {}
+              : { status: newStatus === "Selesai" ? "Selesai Produksi" : orderStatusBaru }),
+            updatedAt: todayStr(),
+          });
+        }
+      });
+      setToast("✅ Status produksi diperbarui");
+      setTimeout(() => setToast(""), 2500);
     } catch (e) {
-      alert("Gagal update status: " + e.message);
+      alert("Gagal update status: " + (e?.message || e));
     } finally {
       setIsSaving(false);
     }
@@ -2651,7 +2669,8 @@ function findRate(productType, model, process) {
 
   async function saveEditEntry() {
     if (!editEntryModal) return;
-    if (!editEntryForm.qty || Number(editEntryForm.qty) <= 0) return alert("Qty wajib diisi");
+    const nextQty = Number(editEntryForm.qty || 0);
+    if (!Number.isFinite(nextQty) || nextQty <= 0) return alert("Qty wajib diisi dan harus lebih dari 0.");
 
     const nextModel = editEntryModal.process === "QC Packing"
       ? ""
@@ -2665,8 +2684,8 @@ function findRate(productType, model, process) {
             .filter((e) => e.id !== editEntryModal.id && e.orderId === editOrder.id && e.process === editEntryModal.process)
             .reduce((sum, e) => sum + Number(e.qty || 0), 0)
         : processQtyForOrderModel(editOrder.id, editEntryModal.process, nextModel, editEntryModal.id);
-      const nextQty = alreadyQty + Number(editEntryForm.qty || 0);
-      if (limit > 0 && nextQty > limit) {
+      const combinedQty = alreadyQty + nextQty;
+      if (limit > 0 && combinedQty > limit) {
         return alert(
           `Qty ${editEntryModal.process} melebihi qty ${label}.\n` +
           `Batas: ${limit} pcs\n` +
@@ -2676,23 +2695,75 @@ function findRate(productType, model, process) {
       }
     }
 
+    const entryRef = doc(db, C.PRODUCTION_ENTRIES, editEntryModal.id);
+    const prodRef = editEntryModal.produksiId
+      ? doc(db, C.PRODUKSI, editEntryModal.produksiId)
+      : null;
+
     setIsSaving(true);
     try {
-      const updates = {
-        qty: Number(editEntryForm.qty),
-        tanggal: editEntryForm.tanggal,
-        catatan: editEntryForm.catatan || "",
-        updatedAt: todayStr(),
-      };
-      if (editEntryModal.process !== "QC Packing") {
-        updates.model = nextModel;
-      }
-      await updateDoc(doc(db, C.PRODUCTION_ENTRIES, editEntryModal.id), updates);
+      await runTransaction(db, async (transaction) => {
+        const entrySnap = await transaction.get(entryRef);
+        if (!entrySnap.exists()) throw new Error("Entry borongan tidak ditemukan.");
+        const liveEntry = { id: editEntryModal.id, ...entrySnap.data() };
+        const liveTotals = setorTotals(liveEntry);
+        const hasSetor = Number(liveTotals.qtySetor || 0) > 0 || Number(liveTotals.qtyReject || 0) > 0;
+
+        const modelChanged = normalizeModelKey(nextModel) !== normalizeModelKey(liveEntry.model || "");
+        const qtyChanged = Number(liveEntry.qty || 0) !== nextQty;
+        const tanggalChanged = String(liveEntry.tanggal || "") !== String(editEntryForm.tanggal || "");
+
+        if (hasSetor && (modelChanged || qtyChanged || tanggalChanged)) {
+          throw new Error("Entry yang sudah disetor tidak bisa diubah qty/model/tanggal karena sudah terkait payroll. Hapus setor/payroll terkait atau buat koreksi baru.");
+        }
+
+        let newRate = Number(liveEntry.rate || 0);
+        if (!hasSetor) {
+          const rateInfo = getRateForEmployee(liveEntry.productType || editEntryModal.productType || "Kerudung", nextModel, liveEntry.process, liveEntry.employeeName);
+          if (!rateInfo) throw new Error("Tarif untuk model/proses ini belum tersedia.");
+          newRate = Number(rateInfo.rate || 0);
+        }
+
+        const updates = {
+          qty: hasSetor ? Number(liveEntry.qty || 0) : nextQty,
+          tanggal: hasSetor ? (liveEntry.tanggal || editEntryForm.tanggal) : editEntryForm.tanggal,
+          catatan: editEntryForm.catatan || "",
+          rate: newRate,
+          totalWage: (hasSetor ? Number(liveEntry.qty || 0) : nextQty) * newRate,
+          updatedAt: todayStr(),
+        };
+        if (liveEntry.process !== "QC Packing") updates.model = nextModel;
+
+        transaction.update(entryRef, updates);
+
+        if (prodRef) {
+          const prodSnap = await transaction.get(prodRef);
+          if (prodSnap.exists()) {
+            const liveWorkers = Array.isArray(prodSnap.data().workers) ? prodSnap.data().workers : [];
+            const nextWorkers = liveWorkers.map((w) => {
+              if (w.entryId !== liveEntry.id) return w;
+              return {
+                ...w,
+                model: liveEntry.process === "QC Packing" ? "" : nextModel,
+                qty: updates.qty,
+                tanggal: updates.tanggal,
+                productType: liveEntry.productType || w.productType,
+                process: liveEntry.process || w.process,
+              };
+            });
+            transaction.update(prodRef, {
+              workers: nextWorkers,
+              updatedAt: todayStr(),
+            });
+          }
+        }
+      });
+
       setEditEntryModal(null);
       setToast("✅ Entry berhasil diupdate");
       setTimeout(() => setToast(""), 3000);
     } catch (e) {
-      alert("Gagal update: " + e.message);
+      alert("Gagal update: " + (e?.message || e));
     } finally {
       setIsSaving(false);
     }
@@ -2749,20 +2820,73 @@ function findRate(productType, model, process) {
     if (marker.source !== "gallery-produksi-gaji-marker" && marker.type !== "status_gajian_periode") {
       return alert("Status ini berasal dari data payroll lama, tidak bisa dibatalkan otomatis dari tombol ini.");
     }
-    const ok = window.confirm(`Batalkan status sudah gajian untuk ${nama}?`);
+
+    const employeeDisplay = displayWorkerName(nama);
+    const workerKey = normalizeWorkerNameKey(nama);
+    const periodeKey = `${dateKey(dari)}_${dateKey(sampai)}`;
+    const historyRef = doc(db, C.GAJIAN_HISTORY, `gajian_${safeDocId(workerKey, "worker")}_${safeDocId(periodeKey, "periode")}`);
+
+    const relatedKasbon = kasbonList.filter((k) => {
+      if (normalizeWorkerNameKey(k.employeeName || "") !== workerKey) return false;
+      return (Array.isArray(k.cicilan) ? k.cicilan : []).some((c) =>
+        c?.sumber === "rekap_gaji" &&
+        dateKey(c?.periodeGajiDari) === dateKey(dari) &&
+        dateKey(c?.periodeGajiSampai) === dateKey(sampai)
+      );
+    });
+
+    let pesan = `Batalkan status sudah gajian untuk ${employeeDisplay}?`;
+    if (Number(marker.potonganKasbon || 0) > 0 || relatedKasbon.length > 0) {
+      pesan += `\n\nPotongan kasbon periode ini juga akan dikembalikan dan riwayat gajian otomatis akan dihapus.`;
+    }
+    const ok = window.confirm(pesan);
     if (!ok) return;
 
     setIsSaving(true);
     try {
-      await deleteDoc(doc(db, C.PAYROLL_EXPENSES, marker.id));
-      setToast("↩️ Status gajian dibatalkan");
-      setTimeout(() => setToast(""), 3000);
+      await runTransaction(db, async (transaction) => {
+        const markerRef = doc(db, C.PAYROLL_EXPENSES, marker.id);
+        const markerSnap = await transaction.get(markerRef);
+        if (!markerSnap.exists()) throw new Error("Marker gajian sudah tidak ditemukan.");
+        const liveMarker = markerSnap.data();
+        if (liveMarker.source !== "gallery-produksi-gaji-marker" && liveMarker.type !== "status_gajian_periode") {
+          throw new Error("Marker gajian ini bukan marker otomatis Gallery Produksi.");
+        }
+
+        const kasbonRefs = relatedKasbon.map((k) => doc(db, C.KASBON, k.id));
+        for (const ref of kasbonRefs) {
+          const snap = await transaction.get(ref);
+          if (!snap.exists()) continue;
+          const data = snap.data();
+          const cicilan = Array.isArray(data.cicilan) ? data.cicilan : [];
+          const filteredCicilan = cicilan.filter((c) => !(
+            c?.sumber === "rekap_gaji" &&
+            dateKey(c?.periodeGajiDari) === dateKey(dari) &&
+            dateKey(c?.periodeGajiSampai) === dateKey(sampai)
+          ));
+          if (filteredCicilan.length === cicilan.length) continue;
+          const totalCicilanBaru = filteredCicilan.reduce((sum, c) => sum + Number(c.jumlah || 0), 0);
+          const sisaKasbonBaru = Math.max(0, Number(data.jumlah || 0) - totalCicilanBaru);
+          transaction.update(ref, {
+            cicilan: filteredCicilan,
+            sisaKasbon: sisaKasbonBaru,
+            status: sisaKasbonBaru <= 0 ? "lunas" : "aktif",
+            updatedAt: new Date().toISOString(),
+          });
+        }
+
+        transaction.delete(markerRef);
+        transaction.delete(historyRef);
+      });
+      setToast("↩️ Status gajian dibatalkan dan kasbon dikembalikan");
+      setTimeout(() => setToast(""), 3500);
     } catch (e) {
       alert("Gagal membatalkan status gajian: " + (e?.message || e));
     } finally {
       setIsSaving(false);
     }
   }
+
 
 
   async function simpanGajianLama(form) {
@@ -3558,32 +3682,35 @@ function findRate(productType, model, process) {
         </div>
       )}
 
-      <div className="sticky top-0 z-40 flex bg-white shadow-sm" style={{ borderBottom: "2px solid #fce7f3" }}>
+      <div className="sticky top-0 z-40 flex overflow-x-auto bg-white shadow-sm no-scrollbar" style={{ borderBottom: "2px solid #fce7f3" }}>
         {[
           { id: "dashboard", label: "Dashboard", icon: "🏠" },
           { id: "pesanan", label: "Pesanan", icon: "📋", badge: stats.belum },
           { id: "produksi", label: "Produksi", icon: "🧵" },
           { id: "borongan", label: "Borongan", icon: "💪" },
-          { id: "rekap", label: "Rekap", icon: "📊" },
-          { id: "kain", label: "Kain", icon: "🎨" },
           { id: "kirim", label: "Kirim", icon: "🚚" },
-          { id: "tarif", label: "Tarif", icon: "🏷️" },
-        ].map((t) => (
+          { id: "rekap", label: "Rekap", icon: "📊" },
+          { id: "master", label: "Master", icon: "🗂️" },
+        ].map((t) => {
+          const isMasterTab = t.id === "master" && (tab === "kain" || tab === "tarif");
+          const isActive = tab === t.id || isMasterTab;
+          return (
           <button
             key={t.id}
             onClick={() => {
-              if (t.id === "pesanan") setPesananOnlyNeedCheck(false);
-              if (t.id !== "borongan") setBoronganOnlyBelumSetor(false);
-              if (t.id !== "borongan") setBoronganOnlyOverSetor(false);
-              if (t.id !== "produksi") setProduksiOnlyBelumSelesai(false);
-              if (t.id !== "kirim") setKirimOnlyBelumLengkap(false);
-              setTab(t.id);
+              const nextTab = t.id === "master" ? ((tab === "kain" || tab === "tarif") ? tab : "kain") : t.id;
+              if (nextTab === "pesanan") setPesananOnlyNeedCheck(false);
+              if (nextTab !== "borongan") setBoronganOnlyBelumSetor(false);
+              if (nextTab !== "borongan") setBoronganOnlyOverSetor(false);
+              if (nextTab !== "produksi") setProduksiOnlyBelumSelesai(false);
+              if (nextTab !== "kirim") setKirimOnlyBelumLengkap(false);
+              setTab(nextTab);
             }}
-            className="flex-1 py-3 text-[10px] font-semibold flex flex-col items-center gap-1 relative"
+            className="flex-none min-w-[76px] px-2 py-3 text-[11px] font-bold flex flex-col items-center gap-1 relative"
             style={{
-              color: tab === t.id ? "#ec4899" : "#94a3b8",
-              borderBottom: tab === t.id ? "3px solid #ec4899" : "3px solid transparent",
-              background: tab === t.id ? "#fdf2f8" : "white",
+              color: isActive ? "#ec4899" : "#64748b",
+              borderBottom: isActive ? "3px solid #ec4899" : "3px solid transparent",
+              background: isActive ? "#fdf2f8" : "white",
             }}
           >
             <span className="text-base">{t.icon}</span>
@@ -3595,7 +3722,8 @@ function findRate(productType, model, process) {
               </span>
             )}
           </button>
-        ))}
+          );
+        })}
       </div>
 
       {tab === "dashboard" && (
@@ -3637,7 +3765,7 @@ function findRate(productType, model, process) {
               { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "📦", tab: "kirim" },
               { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "⚠️", tab: "kirim" },
               { label: "Kurang kirim final", value: dashboardSummary.kurangKirimFinal.toLocaleString(), color: dashboardSummary.kurangKirimFinal > 0 ? "#b45309" : "#94a3b8", icon: "📌", tab: "kirim" },
-              { label: "Data kain", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "🎨", tab: "kain" },
+              { label: "Master data", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "🗂️", tab: "kain" },
             ].map((card) => (
               <button key={card.label} onClick={() => card.detail ? setRekapDetailModal(card.detail) : setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
                 <div className="flex items-center justify-between gap-2">
@@ -5093,6 +5221,24 @@ function findRate(productType, model, process) {
 
       {tab === "kain" && (
         <div className="space-y-3 p-4">
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+            <button
+              type="button"
+              onClick={() => setTab("kain")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+              🎨 Kain
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("tarif")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+              🏷️ Tarif
+            </button>
+          </div>
           <InfoBox title="Data kain dari Gallery Kerudung" subtitle="Sumber data: collection materials. Gallery Produksi hanya melihat stok kain." icon="🎨" />
           {filteredMaterials.length === 0 && <Empty text="Tidak ada data kain/materials" />}
           {filteredMaterials.map((k) => (
@@ -5170,6 +5316,24 @@ function findRate(productType, model, process) {
 
       {tab === "tarif" && (
         <div className="space-y-3 p-4">
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+            <button
+              type="button"
+              onClick={() => setTab("kain")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+              🎨 Kain
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("tarif")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+              🏷️ Tarif
+            </button>
+          </div>
           <Button onClick={() => setModal("tarif")} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
             🏷️ + Tambah Tarif Borongan
           </Button>
@@ -6175,7 +6339,7 @@ function findRate(productType, model, process) {
                       className="mt-3 rounded-xl px-4 py-2 text-xs font-bold text-white"
                       style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
                     >
-                      Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Tarif" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
+                      Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
                     </button>
                   </div>
                 ))}
