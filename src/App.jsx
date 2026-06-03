@@ -4685,30 +4685,37 @@ function findRate(productType, model, process) {
 
             {/* Daftar Riwayat Gajian Tersimpan */}
             {gajianHistory.length > 0 && (
-              <div className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #a7f3d0" }}>
-                <div className="text-xs font-bold mb-2" style={{ color: "#065f46" }}>📋 Semua Riwayat Gajian ({gajianHistory.length})</div>
-                {[...gajianHistory]
-                  .sort((a, b) => String(b.tanggalGaji || "").localeCompare(String(a.tanggalGaji || "")))
-                  .map((g) => (
-                    <div key={g.id} className="flex items-center justify-between gap-2 rounded-xl p-2.5" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
-                        <div className="text-[10px]" style={{ color: "#64748b" }}>
-                          Digaji: {g.tanggalGaji} · Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+              <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #a7f3d0" }}>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-black" style={{ color: "#065f46" }}>📋 Semua Riwayat Gajian ({gajianHistory.length})</div>
+                    <div className="text-xs" style={{ color: "#64748b" }}>Daftar bisa discroll agar halaman tidak terlalu panjang.</div>
+                  </div>
+                </div>
+                <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1 overscroll-contain">
+                  {[...gajianHistory]
+                    .sort((a, b) => String(b.tanggalGaji || "").localeCompare(String(a.tanggalGaji || "")))
+                    .map((g) => (
+                      <div key={g.id} className="flex items-center justify-between gap-2 rounded-xl px-3 py-2" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
+                          <div className="text-xs leading-snug" style={{ color: "#64748b" }}>
+                            Digaji: {g.tanggalGaji} · Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                          </div>
+                          {g.source === "input_manual_lama" && (
+                            <div className="text-xs font-bold" style={{ color: "#a855f7" }}>input manual lama</div>
+                          )}
                         </div>
-                        {g.source === "input_manual_lama" && (
-                          <div className="text-[9px] font-bold" style={{ color: "#a855f7" }}>input manual lama</div>
-                        )}
+                        <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                          <div className="text-sm font-black" style={{ color: "#16a34a" }}>{money(g.jumlah)}</div>
+                          {g.source === "input_manual_lama" && (
+                            <button type="button" onClick={() => hapusGajianHistory(g.id)}
+                              className="text-xs font-bold" style={{ color: "#ef4444" }}>Hapus</button>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-right shrink-0 flex flex-col items-end gap-1">
-                        <div className="text-xs font-black" style={{ color: "#16a34a" }}>{money(g.jumlah)}</div>
-                        {g.source === "input_manual_lama" && (
-                          <button type="button" onClick={() => hapusGajianHistory(g.id)}
-                            className="text-[10px] font-bold" style={{ color: "#ef4444" }}>Hapus</button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                </div>
               </div>
             )}
 
