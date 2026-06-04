@@ -51,10 +51,20 @@ const C = {
 };
 
 const PROD_STATUS = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
-const PROCESSES_WITH_MODEL = ["Potong", "Jahit", "QC Packing"];
+const GENERAL_RATE_PROCESSES = ["Potong", "QC Packing"];
+const MODEL_SPECIFIC_PROCESSES = ["Jahit"];
+const PROCESSES_WITH_MODEL = [...GENERAL_RATE_PROCESSES, ...MODEL_SPECIFIC_PROCESSES];
 const PROCESSES_NO_MODEL = [];
 const ALL_PROCESSES = [...PROCESSES_WITH_MODEL, ...PROCESSES_NO_MODEL];
 const PRODUCT_TYPES = ["Kerudung", "Mukena", "Baju Anak", "Gamis", "Lainnya"];
+
+function isGeneralRateProcess(process) {
+  return GENERAL_RATE_PROCESSES.some((p) => lower(p) === lower(process));
+}
+
+function isModelSpecificProcess(process) {
+  return MODEL_SPECIFIC_PROCESSES.some((p) => lower(p) === lower(process));
+}
 
 const PROD_COLORS = {
   Antri: { bg: "#fef3c7", text: "#92400e", icon: "⏳" },
@@ -1933,7 +1943,7 @@ export default function App() {
 
   function getOrderProcessLimit(order, process, model) {
     if (!order) return { limit: 0, label: "pesanan" };
-    if (process !== "QC Packing" && model) {
+    if (isModelSpecificProcess(process) && model) {
       const item = (order.items || []).find((it) => normalizeModelKey(it.name || it.item || "") === normalizeModelKey(model));
       if (item) return { limit: Number(item.qty || 0), label: `model ${item.name || item.item}` };
     }
@@ -1994,7 +2004,26 @@ function rateDocId(productType, model, process) {
     return { ...rate, baseRate: Number(rate.rate || 0), rate: effectiveRate };
   }
 
-  function getRateModelOptions(productType, process) {
+  function getOrderItemModelOptions(order) {
+    const map = new Map();
+    (order?.items || []).forEach((it) => {
+      const raw = it?.name || it?.item || it?.model || "";
+      const key = normalizeModelKey(raw);
+      if (!key || key === "-") return;
+      if (!map.has(key)) map.set(key, displayModelName(raw));
+    });
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
+  }
+
+  function getRateModelOptions(productType, process, selectedOrder = null) {
+    // Potong dan QC/Packing memakai acuan model dari Master Tarif umum.
+    // Contoh: Kerudung · Potong · Kerudung.
+    // Proses model-spesifik seperti Jahit memakai model/item dari pesanan terkait,
+    // lalu tarifnya dicari otomatis di Master Tarif.
+    if (isModelSpecificProcess(process)) {
+      return getOrderItemModelOptions(selectedOrder);
+    }
+
     const typeKey = normalizeProductTypeKey(productType);
     const processKey = lower(process);
     const map = new Map();
@@ -2313,7 +2342,7 @@ function rateDocId(productType, model, process) {
 
     if (order) {
       const { limit, label } = getOrderProcessLimit(order, entryForm.process, cleanModel);
-      const alreadyQty = entryForm.process === "QC Packing"
+      const alreadyQty = isGeneralRateProcess(entryForm.process)
         ? processQtyForOrder(order.id, entryForm.process)
         : processQtyForOrderModel(order.id, entryForm.process, cleanModel);
       const nextQty = alreadyQty + Number(entryForm.qty || 0);
@@ -2371,12 +2400,13 @@ function rateDocId(productType, model, process) {
           const modelKey = normalizeModelKey(entryPayload.model || "");
           const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
           const matchedLiveItem = liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey);
-          const limit = processKey === "qc packing"
+          const generalProcess = GENERAL_RATE_PROCESSES.some((p) => lower(p) === processKey);
+          const limit = generalProcess
             ? Number(liveProdData.qty || 0)
             : Number(matchedLiveItem?.qty || liveProdData.qty || 0);
           const alreadyInWorkers = liveWorkers
             .filter((w) => lower(w.process) === processKey)
-            .filter((w) => normalizeModelKey(w.model || "") === modelKey)
+            .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
             .reduce((sum, w) => sum + Number(w.qty || 0), 0);
           if (limit > 0 && alreadyInWorkers + Number(entryPayload.qty || 0) > limit) {
             throw new Error(`Qty ${entryPayload.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${entryPayload.qty} pcs.`);
@@ -2891,13 +2921,15 @@ function rateDocId(productType, model, process) {
               const processKey = lower(liveEntry.process || "");
               const modelKey = normalizeModelKey(nextModel);
               const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
-              const limit = processKey === "qc packing"
+              const generalProcess = GENERAL_RATE_PROCESSES.some((p) => lower(p) === processKey);
+              const matchedLiveItem = liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey);
+              const limit = generalProcess
                 ? Number(liveProdData.qty || 0)
-                : Number((liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey) || {}).qty || 0);
+                : Number(matchedLiveItem?.qty || liveProdData.qty || 0);
               const alreadyInWorkers = liveWorkers
                 .filter((w) => w.entryId !== liveEntry.id)
                 .filter((w) => lower(w.process) === processKey)
-                .filter((w) => normalizeModelKey(w.model || "") === modelKey)
+                .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
                 .reduce((sum, w) => sum + Number(w.qty || 0), 0);
               if (limit > 0 && alreadyInWorkers + Number(updates.qty || 0) > limit) {
                 throw new Error(`Qty ${liveEntry.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${updates.qty} pcs.`);
@@ -5590,9 +5622,9 @@ function rateDocId(productType, model, process) {
             </Select>
 
             {(() => {
-              const rateModels = getRateModelOptions(entryForm.productType, entryForm.process);
-              const selectedPreview = getRatePreview(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName);
               const selectedOrder = orders.find((o) => o.id === entryForm.orderId);
+              const rateModels = getRateModelOptions(entryForm.productType, entryForm.process, selectedOrder);
+              const selectedPreview = getRatePreview(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName);
               const { limit, label } = selectedOrder && entryForm.model
                 ? getOrderProcessLimit(selectedOrder, entryForm.process, entryForm.model)
                 : { limit: 0, label: "pesanan" };
@@ -5607,12 +5639,19 @@ function rateDocId(productType, model, process) {
                     value={entryForm.model}
                     onChange={(v) => setEntryForm((f) => ({ ...f, model: v, qty: sisaQty > 0 ? String(sisaQty) : f.qty }))}
                   >
-                    <option value="">-- Pilih model sesuai Master Tarif --</option>
+                    <option value="">{isModelSpecificProcess(entryForm.process) ? "-- Pilih model dari pesanan terkait --" : "-- Pilih acuan tarif dari Master Tarif --"}</option>
                     {rateModels.map((name) => <option key={name} value={name}>{name}</option>)}
                   </Select>
-                  {rateModels.length === 0 && (
+                  {isModelSpecificProcess(entryForm.process) && !selectedOrder && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                      ⚠️ Belum ada model/tarif untuk {entryForm.productType} · {entryForm.process}. Silakan buat tarif baru di menu Master Tarif.
+                      ⚠️ Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
+                    </div>
+                  )}
+                  {rateModels.length === 0 && (!isModelSpecificProcess(entryForm.process) || selectedOrder) && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+                      ⚠️ {isModelSpecificProcess(entryForm.process)
+                        ? `Pesanan terkait belum memiliki item/model untuk proses ${entryForm.process}.`
+                        : `Tarif belum ada di Master Tarif untuk ${entryForm.productType} · ${entryForm.process}. Silakan buat tarif baru di menu Master Tarif.`}
                     </div>
                   )}
                   {selectedPreview.status === "found" && (
