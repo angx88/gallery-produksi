@@ -51,8 +51,8 @@ const C = {
 };
 
 const PROD_STATUS = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
-const PROCESSES_WITH_MODEL = ["Potong", "Jahit"];
-const PROCESSES_NO_MODEL = ["QC Packing"];
+const PROCESSES_WITH_MODEL = ["Potong", "Jahit", "QC Packing"];
+const PROCESSES_NO_MODEL = [];
 const ALL_PROCESSES = [...PROCESSES_WITH_MODEL, ...PROCESSES_NO_MODEL];
 const PRODUCT_TYPES = ["Kerudung", "Mukena", "Baju Anak", "Gamis", "Lainnya"];
 
@@ -641,6 +641,28 @@ function buildFullDeliveryPayload(order) {
   };
 }
 
+function shipmentDeliveredQtyForOrder(order, shipmentByOrderId) {
+  const rows = shipmentByOrderId?.get?.(order?.id) || [];
+  return rows.reduce((sum, shipment) => {
+    if (Array.isArray(shipment.items) && shipment.items.length > 0) {
+      return sum + shipment.items.reduce((itemSum, item) => itemSum + Number(item.qtyKirim ?? item.shippedQty ?? item.qty ?? 0), 0);
+    }
+    if (Array.isArray(shipment.deliveryItems) && shipment.deliveryItems.length > 0) {
+      return sum + shipment.deliveryItems.reduce((itemSum, item) => itemSum + Number(item.qtyKirim ?? item.shippedQty ?? item.qty ?? 0), 0);
+    }
+    return sum + Number(shipment.totalKirim ?? shipment.qty ?? shipment.raw?.qty ?? 0);
+  }, 0);
+}
+
+function isOrderFullyDelivered(order, shipmentByOrderId = null) {
+  const ordered = dashboardTotalOrderedQty(order);
+  let shipped = dashboardTotalShippedQty(order);
+  const shipmentQty = shipmentDeliveredQtyForOrder(order, shipmentByOrderId);
+  if (shipmentQty > shipped) shipped = shipmentQty;
+  if (!hasDeliveryDetail(order) && shipmentQty <= 0 && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) shipped = ordered;
+  return ordered > 0 && shipped >= ordered;
+}
+
 function orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) {
   const raw = order?.raw || order || {};
   const prod = produksiByOrderId?.get?.(order?.id);
@@ -649,12 +671,46 @@ function orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId
     raw.statusProduksi === "Selesai" ||
     raw.produksiStatus === "Selesai" ||
     isShortShipmentClosed(order) ||
-    hasDeliveryDetail(order) ||
-    shipmentByOrderId?.has?.(order?.id) ||
+    isOrderFullyDelivered(order, shipmentByOrderId) ||
     isSentStatus(raw.status) ||
     isDoneStatus(raw.status) ||
     isLegacyDoneOrSentOrder(order)
   );
+}
+
+function isOrderClosedForNewWork(order, shipmentByOrderId = null) {
+  const raw = order?.raw || order || {};
+  const status = lower(raw.status || order?.status || "");
+  if (status.includes("batal") || status.includes("cancel")) return true;
+  if (status.includes("ditutup") || status.includes("closed")) return true;
+  if (isShortShipmentClosed(order)) return true;
+  return isOrderFullyDelivered(order, shipmentByOrderId);
+}
+
+function orderBaseItems(order) {
+  const rawItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
+    ? order.raw.items
+    : Array.isArray(order?.items) && order.items.length > 0
+      ? order.items
+      : [{ name: order?.item || "Produk", qty: order?.qty || 0, price: order?.raw?.hargaPcs || order?.raw?.price || 0 }];
+
+  return rawItems.map((it, idx) => {
+    const name = it.name || it.nama || it.item || it.productName || it.model || order?.item || "Produk";
+    const qty = Number(it.qty ?? it.quantity ?? it.jumlah ?? order?.qty ?? 0);
+    const price = Number(it.price ?? it.harga ?? it.hargaPcs ?? order?.raw?.hargaPcs ?? 0);
+    return {
+      itemIndex: idx,
+      name,
+      orderedQty: qty,
+      qty,
+      price,
+      bahanCost: Number(it.bahanCost ?? it.materialCost ?? 0),
+      hppPerPcs: Number(it.hppPerPcs ?? 0),
+      mainMaterial: it.mainMaterial || it.materialName || it.kain || it.namaKain || "",
+      materialQtyPerPcs: Number(it.materialQtyPerPcs ?? it.kebutuhanKainPerPcs ?? it.kebutuhanKain ?? it.kainPerPcs ?? 0),
+      unit: it.unit || it.satuan || "yard",
+    };
+  });
 }
 
 function safeMaterial(d) {
@@ -1079,6 +1135,8 @@ export default function App() {
   });
   const [kirimForm, setKirimForm] = useState({
     pesananId: "",
+    orderIds: [],
+    customerKey: "",
     tanggalKirim: todayStr(),
     penerima: "",
     ekspedisi: "",
@@ -1361,11 +1419,35 @@ export default function App() {
 
   const ordersBelumProduksi = useMemo(() => {
     return orders.filter((o) => {
+      if (isOrderClosedForNewWork(o, shipmentByOrderId)) return false;
       const alreadyInProduction = produksiByOrderId.has(o.id);
       const finishedOrDelivered = orderHasCompletedProduction(o, produksiByOrderId, shipmentByOrderId);
       return !alreadyInProduction && !finishedOrDelivered;
     });
   }, [orders, produksiByOrderId, shipmentByOrderId]);
+
+  const ordersForBoronganLink = useMemo(() => {
+    return orders
+      .filter((o) => !isOrderClosedForNewWork(o, shipmentByOrderId))
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  }, [orders, shipmentByOrderId]);
+
+  const ordersForShipment = useMemo(() => {
+    return orders
+      .filter((o) => !isOrderClosedForNewWork(o, shipmentByOrderId) && !isOrderStatusClosedForShipment(o.status))
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  }, [orders, shipmentByOrderId]);
+
+  const shipmentCustomerOptions = useMemo(() => {
+    const map = new Map();
+    ordersForShipment.forEach((o) => {
+      const key = normalizeKey(o.customer || "");
+      if (!key) return;
+      if (!map.has(key)) map.set(key, { key, name: o.customer, count: 0 });
+      map.get(key).count += 1;
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [ordersForShipment]);
 
   const filteredProduksi = useMemo(() => {
     const statusPriority = (p) => {
@@ -1871,7 +1953,7 @@ export default function App() {
 function rateDocId(productType, model, process) {
     const typeKey = safeDocId(normalizeProductTypeKey(productType || "kerudung"), "type");
     const processKey = safeDocId(lower(process || "proses"), "process");
-    const modelKey = lower(process) === "qc packing" ? "all" : safeDocId(normalizeModelKey(model || "all"), "model");
+    const modelKey = safeDocId(normalizeModelKey(model || "all"), "model");
     return `rate_${typeKey}_${processKey}_${modelKey}`;
   }
 
@@ -1885,13 +1967,19 @@ function rateDocId(productType, model, process) {
 
   function findRate(productType, model, process) {
     const expectedId = rateDocId(productType, model, process);
-    const matches = workRates.filter((r) => {
-      const sameType = normalizeProductTypeKey(r.productType) === normalizeProductTypeKey(productType);
-      const sameProcess = lower(r.process) === lower(process);
-      if (process === "QC Packing") return sameType && sameProcess;
-      return sameType && sameProcess && normalizeModelKey(r.model) === normalizeModelKey(model);
+    const typeKey = normalizeProductTypeKey(productType);
+    const processKey = lower(process);
+    const modelKey = normalizeModelKey(model || "");
+    const matches = workRates.filter((r) =>
+      normalizeProductTypeKey(r.productType) === typeKey && lower(r.process) === processKey
+    );
+    const exact = matches.filter((r) => normalizeModelKey(r.model || "") === modelKey);
+    const fallback = matches.filter((r) => {
+      const rk = normalizeModelKey(r.model || "");
+      return !rk || rk === "all" || rk === "umum" || rk === typeKey;
     });
-    return matches.sort((a, b) => {
+    const pool = exact.length > 0 ? exact : fallback;
+    return pool.sort((a, b) => {
       if (a.id === expectedId && b.id !== expectedId) return -1;
       if (b.id === expectedId && a.id !== expectedId) return 1;
       return String(b.updatedAt || b.createdAt || b.id || "").localeCompare(String(a.updatedAt || a.createdAt || a.id || ""));
@@ -1904,6 +1992,31 @@ function rateDocId(productType, model, process) {
     const effectiveRate = effectiveRateValue(rate.rate, employeeName);
     if (effectiveRate <= 0) return null;
     return { ...rate, baseRate: Number(rate.rate || 0), rate: effectiveRate };
+  }
+
+  function getRateModelOptions(productType, process) {
+    const typeKey = normalizeProductTypeKey(productType);
+    const processKey = lower(process);
+    const map = new Map();
+    workRates
+      .filter((r) => normalizeProductTypeKey(r.productType) === typeKey && lower(r.process) === processKey)
+      .forEach((r) => {
+        const rawModel = normalizeModelKey(r.model || "") ? r.model : (productType || "Umum");
+        const key = normalizeModelKey(rawModel || "");
+        if (!key) return;
+        if (!map.has(key)) map.set(key, displayModelName(rawModel));
+      });
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
+  }
+
+  function getRatePreview(productType, model, process, employeeName) {
+    if (!productType || !process || !model) return { status: "incomplete" };
+    const rate = findRate(productType, model, process);
+    if (!rate) return { status: "missing" };
+    const baseRate = Number(rate.rate || 0);
+    const effectiveRate = effectiveRateValue(baseRate, employeeName);
+    if (!Number.isFinite(effectiveRate) || effectiveRate <= 0) return { status: "invalid", baseRate, effectiveRate };
+    return { status: "found", rate, baseRate, effectiveRate };
   }
 
   async function addProduksi() {
@@ -2011,8 +2124,8 @@ function rateDocId(productType, model, process) {
 
     const totalQcSetor = totalSetorProcess("qc packing");
     const jahitSelesai = allModelsCompleted("jahit");
-    const potongSelesai = allModelsCompleted("potong");
     const totalPotongSetor = totalSetorProcess("potong");
+    const potongSelesai = totalPotongSetor >= qtyPesanan;
     const totalJahitSetor = totalSetorProcess("jahit");
 
     let newStatus = prod.status;
@@ -2131,11 +2244,11 @@ function rateDocId(productType, model, process) {
   async function addWorkRate() {
     const cleanProductType = displayProductTypeName(rateForm.productType);
     const cleanProcess = rateForm.process;
-    const cleanModel = cleanProcess === "QC Packing" ? "" : canonicalByExisting(rateForm.model, modelNameOptions, "model");
+    const cleanModel = canonicalByExisting(rateForm.model, modelNameOptions, "model");
     const cleanRate = Number(rateForm.rate || 0);
 
     if (!cleanProductType.trim()) return alert("Jenis produk wajib diisi");
-    if (cleanProcess !== "QC Packing" && !cleanModel.trim()) return alert("Model wajib diisi");
+    if (!cleanModel.trim()) return alert("Model wajib diisi sesuai Master Tarif");
     if (!Number.isFinite(cleanRate) || cleanRate <= 0) return alert("Tarif wajib diisi dan harus lebih dari 0");
     if (cleanRate > 1000000) return alert("Tarif terlalu besar. Periksa kembali nominal tarif.");
 
@@ -2169,16 +2282,16 @@ function rateDocId(productType, model, process) {
   async function addProductionEntry() {
     if (!entryForm.employeeName.trim()) return alert("Nama pekerja wajib diisi");
     if (!entryForm.qty || Number(entryForm.qty) <= 0) return alert("Qty wajib diisi");
-    if (entryForm.process !== "QC Packing" && !entryForm.model.trim()) return alert("Model wajib diisi");
+    if (!entryForm.model.trim()) return alert("Model wajib diisi sesuai Master Tarif");
     if (PROCESSES_WITH_MODEL.includes(entryForm.process) && !entryForm.orderId) {
       return alert(`Proses ${entryForm.process} wajib dikaitkan ke pesanan.\nPilih pesanan di dropdown "Pesanan terkait".`);
     }
 
     const cleanEmployeeName = canonicalByExisting(entryForm.employeeName, workerNameOptions, "worker");
     const cleanProductType = displayProductTypeName(entryForm.productType);
-    const cleanModel = entryForm.process === "QC Packing" ? "" : canonicalByExisting(entryForm.model, modelNameOptions, "model");
+    const cleanModel = canonicalByExisting(entryForm.model, modelNameOptions, "model");
     const rate = getRateForEmployee(cleanProductType, cleanModel, entryForm.process, cleanEmployeeName);
-    if (!rate) return alert("Tarif belum ada. Tambahkan dulu di menu Tarif.");
+    if (!rate) return alert("Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.");
 
     const order = orders.find((o) => o.id === entryForm.orderId);
     const prod = order ? produksiByOrderId.get(order.id) : null;
@@ -2257,12 +2370,13 @@ function rateDocId(productType, model, process) {
           const processKey = lower(entryPayload.process);
           const modelKey = normalizeModelKey(entryPayload.model || "");
           const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
+          const matchedLiveItem = liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey);
           const limit = processKey === "qc packing"
             ? Number(liveProdData.qty || 0)
-            : Number((liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey) || {}).qty || 0);
+            : Number(matchedLiveItem?.qty || liveProdData.qty || 0);
           const alreadyInWorkers = liveWorkers
             .filter((w) => lower(w.process) === processKey)
-            .filter((w) => processKey === "qc packing" || normalizeModelKey(w.model || "") === modelKey)
+            .filter((w) => normalizeModelKey(w.model || "") === modelKey)
             .reduce((sum, w) => sum + Number(w.qty || 0), 0);
           if (limit > 0 && alreadyInWorkers + Number(entryPayload.qty || 0) > limit) {
             throw new Error(`Qty ${entryPayload.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${entryPayload.qty} pcs.`);
@@ -2410,95 +2524,21 @@ function rateDocId(productType, model, process) {
   }
 
   async function addPengiriman() {
-    if (!kirimForm.pesananId) return alert("Pilih pesanan dulu");
+    const selectedIds = Array.isArray(kirimForm.orderIds) && kirimForm.orderIds.length > 0
+      ? kirimForm.orderIds
+      : (kirimForm.pesananId ? [kirimForm.pesananId] : []);
+    if (selectedIds.length === 0) return alert("Pilih minimal satu pesanan dulu");
     if (!kirimForm.penerima.trim()) return alert("Penerima wajib diisi");
 
-    const order = orders.find((o) => o.id === kirimForm.pesananId);
-    if (!order) return alert("Pesanan tidak ditemukan");
+    const selectedOrders = selectedIds.map((id) => orders.find((o) => o.id === id)).filter(Boolean);
+    if (selectedOrders.length !== selectedIds.length) return alert("Ada pesanan yang tidak ditemukan");
 
-    const rawOrderItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
-      ? order.raw.items
-      : Array.isArray(order?.items) && order.items.length > 0
-        ? order.items
-        : [{ name: order.item || "Produk", qty: order.qty || 0, price: order.raw?.hargaPcs || order.raw?.price || 0 }];
+    const allItems = (kirimForm.items || []).map((it) => ({ ...it, orderId: it.orderId || kirimForm.pesananId || selectedIds[0] }));
+    if (allItems.some((i) => Number(i.qtyKirim || 0) < 0)) return alert("Qty kirim tidak boleh negatif.");
+    if (allItems.reduce((sum, item) => sum + Number(item.qtyKirim || 0), 0) <= 0) return alert("Minimal ada qty kirim lebih dari 0 pcs.");
 
-    const baseItems = rawOrderItems.map((it, idx) => {
-      const name = it.name || it.nama || it.item || it.productName || it.model || order.item || "Produk";
-      const qty = Number(it.qty ?? it.quantity ?? it.jumlah ?? order.qty ?? 0);
-      const price = Number(it.price ?? it.harga ?? it.hargaPcs ?? order.raw?.hargaPcs ?? 0);
-      return {
-        itemIndex: idx,
-        name,
-        orderedQty: qty,
-        price,
-        bahanCost: Number(it.bahanCost ?? it.materialCost ?? 0),
-        hppPerPcs: Number(it.hppPerPcs ?? 0),
-        mainMaterial: it.mainMaterial || it.materialName || it.kain || it.namaKain || "",
-        materialQtyPerPcs: Number(it.materialQtyPerPcs ?? it.kebutuhanKainPerPcs ?? it.kebutuhanKain ?? it.kainPerPcs ?? 0),
-        unit: it.unit || it.satuan || "yard",
-      };
-    });
-
-    const items = kirimForm.items.map((i, idx) => {
-      const preferredIndex = Number.isInteger(Number(i.itemIndex)) ? Number(i.itemIndex) : idx;
-      const baseIndex = baseItems[preferredIndex] ? preferredIndex : idx;
-      const base = baseItems[baseIndex] || baseItems[0] || {};
-      const name = i.nama || base.name || "Produk";
-      const qtyPesan = Number(i.qtyPesan || base.orderedQty || 0);
-      const qtyKirim = Number(i.qtyKirim || 0);
-      return {
-        nama: name,
-        name,
-        itemIndex: Number(base.itemIndex ?? baseIndex),
-        qtyPesan,
-        orderedQty: qtyPesan,
-        qtyKirim,
-        shippedQty: qtyKirim,
-        qty: qtyKirim,
-        selisih: qtyKirim - qtyPesan,
-        price: Number(base.price || 0),
-        bahanCost: Number(base.bahanCost || 0),
-        hppPerPcs: Number(base.hppPerPcs || 0),
-        mainMaterial: base.mainMaterial || "",
-        materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
-        unit: base.unit || "yard",
-      };
-    });
-
-    if (items.some((i) => Number(i.qtyKirim || 0) < 0)) return alert("Qty kirim tidak boleh negatif.");
-    if (items.reduce((s, i) => s + Number(i.qtyKirim || 0), 0) <= 0) return alert("Minimal ada qty kirim lebih dari 0 pcs.");
-
-    const cleanDeliveryItems = items
-      .filter((i) => Number(i.qtyKirim || 0) > 0)
-      .map((i) => ({
-        itemIndex: Number(i.itemIndex || 0),
-        name: i.name || i.nama || "Produk",
-        qty: Number(i.qtyKirim || 0),
-        shippedQty: Number(i.qtyKirim || 0),
-        orderedQty: Number(i.qtyPesan || i.orderedQty || 0),
-        price: Number(i.price || 0),
-        bahanCost: Number(i.bahanCost || 0),
-        hppPerPcs: Number(i.hppPerPcs || 0),
-        mainMaterial: i.mainMaterial || "",
-        materialQtyPerPcs: Number(i.materialQtyPerPcs || 0),
-        unit: i.unit || "yard",
-      }));
-
-    const newDelivery = {
-      date: kirimForm.tanggalKirim || todayStr(),
-      createdAt: new Date().toISOString(),
-      source: "gallery-produksi",
-      receiver: kirimForm.penerima.trim(),
-      penerima: kirimForm.penerima.trim(),
-      courier: kirimForm.ekspedisi || "",
-      ekspedisi: kirimForm.ekspedisi || "",
-      note: kirimForm.catatan || "",
-      shortShipmentMode: kirimForm.shortShipmentMode || "temporary",
-      shortShipmentReason: kirimForm.shortShipmentReason || "",
-      shortShipmentNote: kirimForm.shortShipmentNote || "",
-      items: cleanDeliveryItems,
-      total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
-    };
+    const groupId = `nota_${safeDocId(kirimForm.tanggalKirim || todayStr(), "tgl")}_${safeDocId(kirimForm.penerima, "customer")}_${Date.now()}`;
+    const deliveryCreatedAt = new Date().toISOString();
 
     const totalDeliveredForItem = (base, idx, delArray) => delArray.reduce((sum, delivery) => {
       const found = (delivery.items || []).filter((it) => {
@@ -2509,162 +2549,213 @@ function rateDocId(productType, model, process) {
       return sum + found.reduce((s, it) => s + Number(it.qty ?? it.shippedQty ?? it.qtyKirim ?? 0), 0);
     }, 0);
 
-    function buildShippedItems(deliveriesArr) {
-      return baseItems.map((base, idx) => {
-        const shippedQty = totalDeliveredForItem(base, idx, deliveriesArr);
-        const ordered = Number(base.orderedQty || 0);
-        const diff = shippedQty - ordered;
-        return {
-          name: base.name,
-          orderedQty: ordered,
-          shippedQty,
-          price: Number(base.price || 0),
-          bahanCost: Number(base.bahanCost || 0),
-          hppPerPcs: Number(base.hppPerPcs || 0),
-          mainMaterial: base.mainMaterial || "",
-          materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
-          unit: base.unit || "yard",
-          note: diff === 0 ? "Sesuai pesanan" : diff < 0 ? `Kekurangan pengiriman ${Math.abs(diff)} pcs` : `Kelebihan pengiriman ${diff} pcs`,
-        };
-      });
-    }
+    const buildShippedItems = (baseItems, deliveriesArr) => baseItems.map((base, idx) => {
+      const shippedQty = totalDeliveredForItem(base, idx, deliveriesArr);
+      const ordered = Number(base.orderedQty || 0);
+      const diff = shippedQty - ordered;
+      return {
+        name: base.name,
+        orderedQty: ordered,
+        shippedQty,
+        price: Number(base.price || 0),
+        bahanCost: Number(base.bahanCost || 0),
+        hppPerPcs: Number(base.hppPerPcs || 0),
+        mainMaterial: base.mainMaterial || "",
+        materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
+        unit: base.unit || "yard",
+        note: diff === 0 ? "Sesuai pesanan" : diff < 0 ? `Kekurangan pengiriman ${Math.abs(diff)} pcs` : `Kelebihan pengiriman ${diff} pcs`,
+      };
+    });
 
-    const existingDeliveries = getDeliveryArray(order);
-    const localShippedItemsCalc = buildShippedItems([...existingDeliveries, newDelivery]);
-    const localHasOverDelivery = localShippedItemsCalc.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
+    let localHasOverDelivery = false;
+    selectedOrders.forEach((order) => {
+      const baseItems = orderBaseItems(order);
+      const itemsForOrder = allItems.filter((it) => it.orderId === order.id && Number(it.qtyKirim || 0) > 0);
+      if (itemsForOrder.length === 0) return;
+      const deliveryItems = itemsForOrder.map((i, idx) => {
+        const preferredIndex = Number.isInteger(Number(i.itemIndex)) ? Number(i.itemIndex) : idx;
+        const base = baseItems[preferredIndex] || baseItems[idx] || baseItems[0] || {};
+        return { itemIndex: Number(base.itemIndex ?? preferredIndex), name: i.nama || base.name || "Produk", qty: Number(i.qtyKirim || 0), shippedQty: Number(i.qtyKirim || 0) };
+      });
+      const draftDelivery = { createdAt: deliveryCreatedAt, items: deliveryItems };
+      const calc = buildShippedItems(baseItems, [...getDeliveryArray(order), draftDelivery]);
+      if (calc.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0))) localHasOverDelivery = true;
+    });
+
     let overDeliveryConfirmed = false;
     if (localHasOverDelivery) {
-      overDeliveryConfirmed = window.confirm("Kelebihan kirim akan menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim. Lanjut simpan?");
+      overDeliveryConfirmed = window.confirm("Ada pesanan yang akan lebih kirim. Kelebihan ini akan menambah tagihan customer di Gallery Kerudung. Lanjut simpan?");
       if (!overDeliveryConfirmed) return;
     }
 
-    const localTotalOrdered = localShippedItemsCalc.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
-    const localTotalShipped = localShippedItemsCalc.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
-    const localIsShortShipment = localTotalOrdered > 0 && localTotalShipped > 0 && localTotalShipped < localTotalOrdered;
+    const totalOrderedLocal = selectedOrders.reduce((sum, order) => sum + dashboardTotalOrderedQty(order), 0);
+    const totalKirimLocal = allItems.reduce((sum, item) => sum + Number(item.qtyKirim || 0), 0);
+    const localIsShortShipment = totalOrderedLocal > 0 && totalKirimLocal > 0 && totalKirimLocal < totalOrderedLocal;
     const isShortFinal = localIsShortShipment && kirimForm.shortShipmentMode === "final";
     const shortShipmentReason = isShortFinal ? String(kirimForm.shortShipmentReason || "").trim() : "";
     const shortShipmentNote = isShortFinal ? String(kirimForm.shortShipmentNote || "").trim() : "";
     if (isShortFinal && !shortShipmentReason) return alert("Pilih alasan kurang kirim final terlebih dahulu.");
 
-    const orderRef = doc(db, C.ORDERS, order.id);
-    const shipmentRef = doc(collection(db, C.SHIPMENTS));
-    const prod = produksiByOrderId.get(order.id);
-    const prodRef = prod?.id ? doc(db, C.PRODUKSI, prod.id) : null;
+    const orderRows = selectedOrders.map((order) => ({ order, orderRef: doc(db, C.ORDERS, order.id), prod: produksiByOrderId.get(order.id) }));
 
     setIsSaving(true);
     try {
       await runTransaction(db, async (transaction) => {
-        const orderSnap = await transaction.get(orderRef);
-        if (!orderSnap.exists()) throw new Error("Order tidak ditemukan");
-        const currentData = orderSnap.data();
-        const currentDeliveries = Array.isArray(currentData.deliveries) ? currentData.deliveries : [];
-        const isDuplicate = currentDeliveries.some((d) => d.createdAt === newDelivery.createdAt);
-        const finalDeliveries = isDuplicate ? currentDeliveries : [...currentDeliveries, newDelivery];
-        const finalShippedItems = buildShippedItems(finalDeliveries);
-        const totalOrdered = finalShippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
-        const totalShipped = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
-        const deliveredTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
-        const deliveredHppTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
-        const hasOverDelivery = finalShippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
-        if (hasOverDelivery && !overDeliveryConfirmed) {
-          throw new Error("Data terbaru menunjukkan pengiriman akan melebihi qty pesanan. Muat ulang data lalu konfirmasi ulang.");
+        const liveRows = [];
+        for (const row of orderRows) {
+          const orderSnap = await transaction.get(row.orderRef);
+          if (!orderSnap.exists()) throw new Error(`Order ${row.order.invoice || row.order.id} tidak ditemukan`);
+          let prodSnapData = null;
+          let prodRef = null;
+          if (row.prod?.id) {
+            prodRef = doc(db, C.PRODUKSI, row.prod.id);
+            const prodSnap = await transaction.get(prodRef);
+            prodSnapData = prodSnap.exists() ? prodSnap.data() : null;
+          }
+          liveRows.push({ ...row, orderData: orderSnap.data(), prodRef, prodSnapData });
         }
 
-        const isShortShipment = totalOrdered > 0 && totalShipped > 0 && totalShipped < totalOrdered;
-        const finalShort = isShortShipment && kirimForm.shortShipmentMode === "final";
-        const deliveryStatusRaw = totalShipped <= 0
-          ? "Belum Dikirim"
-          : hasOverDelivery
-            ? "Kelebihan Kirim"
-            : totalShipped < totalOrdered
-              ? "Dikirim Sebagian"
-              : "Selesai";
-        const deliveryStatus = finalShort ? "Ditutup Kurang Kirim" : deliveryStatusRaw;
-        const orderStatus = deliveryStatus === "Selesai"
-          ? "Dikirim"
-          : deliveryStatus === "Kelebihan Kirim"
-            ? "Kelebihan Kirim"
-            : finalShort
-              ? "Ditutup Kurang Kirim"
-              : "Dikirim Sebagian";
-        const shippingStatus = finalShort ? "Kurang Kirim Final" : orderStatus;
-        const shortShipmentRemaining = Math.max(0, totalOrdered - totalShipped);
-        const productionDoneByDelivery = finalShort || (totalOrdered > 0 && totalShipped >= totalOrdered);
-        const nextProduksiStatus = productionDoneByDelivery
-          ? "Selesai"
-          : (currentData.statusProduksi || currentData.produksiStatus || order?.raw?.statusProduksi || order?.raw?.produksiStatus || "Proses");
+        for (const row of liveRows) {
+          const order = row.order;
+          const currentData = row.orderData;
+          const baseItems = orderBaseItems({ ...order, raw: { ...(order.raw || {}), ...currentData }, items: currentData.items || order.items });
+          const currentDeliveries = Array.isArray(currentData.deliveries) ? currentData.deliveries : [];
+          const itemsForOrder = allItems.filter((it) => it.orderId === order.id && Number(it.qtyKirim || 0) > 0);
+          if (itemsForOrder.length === 0) continue;
 
-        transaction.set(shipmentRef, {
-          pesananId: order.id,
-          orderId: order.id,
-          customer: order.customer,
-          produk: order.item,
-          productName: order.item,
-          invoice: order.invoice,
-          tanggalKirim: kirimForm.tanggalKirim,
-          date: kirimForm.tanggalKirim,
-          penerima: kirimForm.penerima.trim(),
-          receiver: kirimForm.penerima.trim(),
-          ekspedisi: kirimForm.ekspedisi || "",
-          courier: kirimForm.ekspedisi || "",
-          items,
-          deliveryItems: cleanDeliveryItems,
-          qty: items.reduce((s, i) => s + i.qtyKirim, 0),
-          totalPesan: totalOrdered,
-          totalKirim: totalShipped,
-          totalSelisih: items.reduce((s, i) => s + Number(i.selisih || 0), 0),
-          deliveryStatus,
-          shippingStatus,
-          shortShipmentClosed: finalShort,
-          shortShipmentMode: finalShort ? "final" : (isShortShipment ? "temporary" : ""),
-          shortShipmentReason: finalShort ? shortShipmentReason : "",
-          shortShipmentNote: finalShort ? shortShipmentNote : "",
-          shortShipmentRemaining,
-          deliveredTotal,
-          deliveredHppTotal,
-          catatan: kirimForm.catatan || "",
-          note: kirimForm.catatan || "",
-          source: "gallery-produksi",
-          createdAt: todayStr(),
-        });
-
-        transaction.update(orderRef, {
-          status: orderStatus,
-          shippingStatus,
-          deliveryStatus,
-          shortShipmentClosed: finalShort,
-          shortShipmentMode: finalShort ? "final" : (isShortShipment ? "temporary" : ""),
-          shortShipmentReason: finalShort ? shortShipmentReason : "",
-          shortShipmentNote: finalShort ? shortShipmentNote : "",
-          shortShipmentRemaining,
-          tanggalKirim: kirimForm.tanggalKirim || todayStr(),
-          deliveries: finalDeliveries,
-          shippedItems: finalShippedItems,
-          deliveredTotal,
-          deliveredHppTotal,
-          totalKirim: totalShipped,
-          totalPesan: totalOrdered,
-          statusProduksi: nextProduksiStatus,
-          produksiStatus: nextProduksiStatus,
-          produksiSource: "gallery-produksi",
-          produksiUpdatedAt: todayStr(),
-          updatedAt: todayStr(),
-        });
-
-        if (prodRef && productionDoneByDelivery && prod?.status !== "Selesai") {
-          transaction.update(prodRef, {
-            status: "Selesai",
-            updatedAt: todayStr(),
-            history: [
-              ...(prod.history || []),
-              { tanggal: todayStr(), status: "Selesai", catatan: "Otomatis selesai karena pengiriman sudah memenuhi pesanan" },
-            ],
+          const cleanDeliveryItems = itemsForOrder.map((i, idx) => {
+            const preferredIndex = Number.isInteger(Number(i.itemIndex)) ? Number(i.itemIndex) : idx;
+            const base = baseItems[preferredIndex] || baseItems[idx] || baseItems[0] || {};
+            const qtyKirim = Number(i.qtyKirim || 0);
+            return {
+              itemIndex: Number(base.itemIndex ?? preferredIndex),
+              name: i.nama || base.name || "Produk",
+              qty: qtyKirim,
+              shippedQty: qtyKirim,
+              orderedQty: Number(i.qtyPesan || base.orderedQty || 0),
+              price: Number(base.price || 0),
+              bahanCost: Number(base.bahanCost || 0),
+              hppPerPcs: Number(base.hppPerPcs || 0),
+              mainMaterial: base.mainMaterial || "",
+              materialQtyPerPcs: Number(base.materialQtyPerPcs || 0),
+              unit: base.unit || "yard",
+            };
           });
+
+          const newDelivery = {
+            date: kirimForm.tanggalKirim || todayStr(),
+            createdAt: deliveryCreatedAt,
+            source: "gallery-produksi",
+            groupId,
+            noteNumber: groupId,
+            receiver: kirimForm.penerima.trim(),
+            penerima: kirimForm.penerima.trim(),
+            courier: kirimForm.ekspedisi || "",
+            ekspedisi: kirimForm.ekspedisi || "",
+            note: kirimForm.catatan || "",
+            shortShipmentMode: kirimForm.shortShipmentMode || "temporary",
+            shortShipmentReason: kirimForm.shortShipmentReason || "",
+            shortShipmentNote: kirimForm.shortShipmentNote || "",
+            items: cleanDeliveryItems,
+            total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
+          };
+
+          const finalDeliveries = [...currentDeliveries, newDelivery];
+          const finalShippedItems = buildShippedItems(baseItems, finalDeliveries);
+          const totalOrdered = finalShippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
+          const totalShipped = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
+          const deliveredTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
+          const deliveredHppTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
+          const hasOverDelivery = finalShippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
+          if (hasOverDelivery && !overDeliveryConfirmed) throw new Error("Data terbaru menunjukkan pengiriman akan melebihi qty pesanan. Muat ulang data lalu konfirmasi ulang.");
+
+          const isShortShipment = totalOrdered > 0 && totalShipped > 0 && totalShipped < totalOrdered;
+          const finalShort = isShortShipment && kirimForm.shortShipmentMode === "final";
+          const deliveryStatusRaw = totalShipped <= 0 ? "Belum Dikirim" : hasOverDelivery ? "Kelebihan Kirim" : totalShipped < totalOrdered ? "Dikirim Sebagian" : "Selesai";
+          const deliveryStatus = finalShort ? "Ditutup Kurang Kirim" : deliveryStatusRaw;
+          const orderStatus = deliveryStatus === "Selesai" ? "Dikirim" : deliveryStatus === "Kelebihan Kirim" ? "Kelebihan Kirim" : finalShort ? "Ditutup Kurang Kirim" : "Dikirim Sebagian";
+          const shippingStatus = finalShort ? "Kurang Kirim Final" : orderStatus;
+          const shortShipmentRemaining = Math.max(0, totalOrdered - totalShipped);
+          const productionDoneByDelivery = finalShort || (totalOrdered > 0 && totalShipped >= totalOrdered);
+          const nextProduksiStatus = productionDoneByDelivery ? "Selesai" : (currentData.statusProduksi || currentData.produksiStatus || "Proses");
+
+          const shipmentRef = doc(collection(db, C.SHIPMENTS));
+          transaction.set(shipmentRef, {
+            pesananId: order.id,
+            orderId: order.id,
+            groupId,
+            noteNumber: groupId,
+            customer: order.customer,
+            produk: order.item,
+            productName: order.item,
+            invoice: order.invoice,
+            tanggalKirim: kirimForm.tanggalKirim,
+            date: kirimForm.tanggalKirim,
+            penerima: kirimForm.penerima.trim(),
+            receiver: kirimForm.penerima.trim(),
+            ekspedisi: kirimForm.ekspedisi || "",
+            courier: kirimForm.ekspedisi || "",
+            items: cleanDeliveryItems.map((it) => ({ ...it, qtyPesan: it.orderedQty, qtyKirim: it.shippedQty })),
+            deliveryItems: cleanDeliveryItems,
+            qty: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0), 0),
+            totalPesan: totalOrdered,
+            totalKirim: totalShipped,
+            totalSelisih: cleanDeliveryItems.reduce((s, i) => s + (Number(i.shippedQty || 0) - Number(i.orderedQty || 0)), 0),
+            deliveryStatus,
+            shippingStatus,
+            shortShipmentClosed: finalShort,
+            shortShipmentMode: finalShort ? "final" : (isShortShipment ? "temporary" : ""),
+            shortShipmentReason: finalShort ? shortShipmentReason : "",
+            shortShipmentNote: finalShort ? shortShipmentNote : "",
+            shortShipmentRemaining,
+            deliveredTotal,
+            deliveredHppTotal,
+            catatan: kirimForm.catatan || "",
+            note: kirimForm.catatan || "",
+            source: "gallery-produksi",
+            createdAt: todayStr(),
+          });
+
+          transaction.update(row.orderRef, {
+            status: orderStatus,
+            shippingStatus,
+            deliveryStatus,
+            shortShipmentClosed: finalShort,
+            shortShipmentMode: finalShort ? "final" : (isShortShipment ? "temporary" : ""),
+            shortShipmentReason: finalShort ? shortShipmentReason : "",
+            shortShipmentNote: finalShort ? shortShipmentNote : "",
+            shortShipmentRemaining,
+            tanggalKirim: kirimForm.tanggalKirim || todayStr(),
+            deliveries: finalDeliveries,
+            shippedItems: finalShippedItems,
+            deliveredTotal,
+            deliveredHppTotal,
+            totalKirim: totalShipped,
+            totalPesan: totalOrdered,
+            statusProduksi: nextProduksiStatus,
+            produksiStatus: nextProduksiStatus,
+            produksiSource: "gallery-produksi",
+            produksiUpdatedAt: todayStr(),
+            updatedAt: todayStr(),
+          });
+
+          if (row.prodRef && productionDoneByDelivery && row.prod?.status !== "Selesai") {
+            transaction.update(row.prodRef, {
+              status: "Selesai",
+              updatedAt: todayStr(),
+              history: [
+                ...(Array.isArray(row.prodSnapData?.history) ? row.prodSnapData.history : []),
+                { tanggal: todayStr(), status: "Selesai", catatan: "Otomatis selesai karena pengiriman sudah memenuhi pesanan" },
+              ],
+            });
+          }
         }
       });
 
       setKirimForm({
         pesananId: "",
+        orderIds: [],
+        customerKey: "",
         tanggalKirim: todayStr(),
         penerima: "",
         ekspedisi: "",
@@ -2731,9 +2822,7 @@ function rateDocId(productType, model, process) {
     const nextQty = Number(editEntryForm.qty || 0);
     if (!Number.isFinite(nextQty) || nextQty <= 0) return alert("Qty wajib diisi dan harus lebih dari 0.");
 
-    const nextModel = editEntryModal.process === "QC Packing"
-      ? ""
-      : canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
+    const nextModel = canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
 
     const editOrder = orders.find((o) => o.id === editEntryModal.orderId);
     if (editOrder) {
@@ -2779,7 +2868,7 @@ function rateDocId(productType, model, process) {
         let newRate = Number(liveEntry.rate || 0);
         if (!hasSetor) {
           const rateInfo = getRateForEmployee(liveEntry.productType || editEntryModal.productType || "Kerudung", nextModel, liveEntry.process, liveEntry.employeeName);
-          if (!rateInfo) throw new Error("Tarif untuk model/proses ini belum tersedia.");
+          if (!rateInfo) throw new Error("Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.");
           newRate = Number(rateInfo.rate || 0);
         }
 
@@ -2791,7 +2880,7 @@ function rateDocId(productType, model, process) {
           totalWage: (hasSetor ? Number(liveEntry.qty || 0) : nextQty) * newRate,
           updatedAt: todayStr(),
         };
-        if (liveEntry.process !== "QC Packing") updates.model = nextModel;
+        updates.model = nextModel;
 
         if (prodRef) {
           const prodSnap = await transaction.get(prodRef);
@@ -2800,7 +2889,7 @@ function rateDocId(productType, model, process) {
             const liveWorkers = Array.isArray(liveProdData.workers) ? liveProdData.workers : [];
             if (!hasSetor) {
               const processKey = lower(liveEntry.process || "");
-              const modelKey = normalizeModelKey(liveEntry.process === "QC Packing" ? "" : nextModel);
+              const modelKey = normalizeModelKey(nextModel);
               const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
               const limit = processKey === "qc packing"
                 ? Number(liveProdData.qty || 0)
@@ -2808,7 +2897,7 @@ function rateDocId(productType, model, process) {
               const alreadyInWorkers = liveWorkers
                 .filter((w) => w.entryId !== liveEntry.id)
                 .filter((w) => lower(w.process) === processKey)
-                .filter((w) => processKey === "qc packing" || normalizeModelKey(w.model || "") === modelKey)
+                .filter((w) => normalizeModelKey(w.model || "") === modelKey)
                 .reduce((sum, w) => sum + Number(w.qty || 0), 0);
               if (limit > 0 && alreadyInWorkers + Number(updates.qty || 0) > limit) {
                 throw new Error(`Qty ${liveEntry.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${updates.qty} pcs.`);
@@ -2818,7 +2907,7 @@ function rateDocId(productType, model, process) {
               if (w.entryId !== liveEntry.id) return w;
               return {
                 ...w,
-                model: liveEntry.process === "QC Packing" ? "" : nextModel,
+                model: nextModel,
                 qty: updates.qty,
                 tanggal: updates.tanggal,
                 productType: liveEntry.productType || w.productType,
@@ -4485,8 +4574,52 @@ function rateDocId(productType, model, process) {
             const qtyReject = Number(totals.qtyReject || 0);
             const qtySetor = Number(totals.qtySetor || 0);
             const selisih = Number(totals.sisaSetor || 0);
+            const statusSetorPanel = (sudahSetor || setorSebagian) ? (
+              <div className="mt-3 rounded-2xl p-3 space-y-2" style={{ background: sudahSetor ? "#f0fdf4" : "#fff7ed", border: `1px solid ${sudahSetor ? "#bbf7d0" : "#fed7aa"}` }}>
+                <div className="text-xs font-bold" style={{ color: sudahSetor ? "#16a34a" : "#b45309" }}>
+                  {sudahSetor ? "✅ Sudah Setor" : "🟠 Setor Sebagian"} — terakhir {totals.tanggalSetor || "-"}
+                </div>
+                <div className="flex flex-wrap gap-3 text-sm">
+                  <span>✔️ Setor: <strong>{qtySetor} pcs</strong></span>
+                  {qtyReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
+                  {selisih > 0 && <span>⚠️ Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
+                </div>
+                {totals.totalWageSetor > 0 && (
+                  <div className="text-sm font-bold" style={{ color: "#a855f7" }}>💰 Total gaji setor: {money(totals.totalWageSetor)}</div>
+                )}
+                {totals.history.length > 0 && (
+                  <div className="space-y-1">
+                    {totals.history.slice(-3).map((h, idx) => (
+                      <div key={h.id || idx} className="rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,.75)", color: "#64748b", border: "1px solid #f3e8ff" }}>
+                        📅 {h.tanggalSetor} · Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? ` · Reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {selisih > 0 && (
+                  <button
+                    onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(selisih), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                    className="mt-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
+                    style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                  >
+                    Setor Lanjutan
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
+                <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
+                <button
+                  onClick={() => { const t = setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                  className="rounded-xl px-3 py-1 text-xs font-bold text-white"
+                  style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                >
+                  Setor Hasil
+                </button>
+              </div>
+            );
             return (
-            <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
+              <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
               <div className="flex justify-between">
                 <div>
                   <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
@@ -4501,50 +4634,7 @@ function rateDocId(productType, model, process) {
               </div>
 
               {/* Status setor bertahap */}
-              {(sudahSetor || setorSebagian) ? (
-                <div className="mt-3 rounded-2xl p-3 space-y-2" style={{ background: sudahSetor ? "#f0fdf4" : "#fff7ed", border: `1px solid ${sudahSetor ? "#bbf7d0" : "#fed7aa"}` }}>
-                  <div className="text-xs font-bold" style={{ color: sudahSetor ? "#16a34a" : "#b45309" }}>
-                    {sudahSetor ? "✅ Sudah Setor" : "🟠 Setor Sebagian"} — terakhir {totals.tanggalSetor || "-"}
-                  </div>
-                  <div className="flex flex-wrap gap-3 text-sm">
-                    <span>✔️ Setor: <strong>{qtySetor} pcs</strong></span>
-                    {qtyReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
-                    {selisih > 0 && <span>⚠️ Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
-                  </div>
-                  {totals.totalWageSetor > 0 && (
-                    <div className="text-sm font-bold" style={{ color: "#a855f7" }}>💰 Total gaji setor: {money(totals.totalWageSetor)}</div>
-                  )}
-                  {totals.history.length > 0 && (
-                    <div className="space-y-1">
-                      {totals.history.slice(-3).map((h, idx) => (
-                        <div key={h.id || idx} className="rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,.75)", color: "#64748b", border: "1px solid #f3e8ff" }}>
-                          📅 {h.tanggalSetor} · Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? ` · Reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {selisih > 0 && (
-                    <button
-                      onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(selisih), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
-                      className="mt-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
-                      style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
-                    >
-                      Setor Lanjutan
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
-                  <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
-                  <button
-                    onClick={() => { const t = setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
-                    className="rounded-xl px-3 py-1 text-xs font-bold text-white"
-                    style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
-                  >
-                    Setor Hasil
-                  </button>
-                </div>
-              )}
+              {statusSetorPanel}
 
               {/* Tombol Edit & Hapus */}
               <div className="mt-2 flex gap-2">
@@ -5489,106 +5579,71 @@ function rateDocId(productType, model, process) {
               }}
             >
               <option value="">Tidak dikaitkan ke pesanan</option>
-              {orders.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
+              {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
             </Select>
 
             <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
             </Select>
-            <Select label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: v === "QC Packing" ? "" : f.model }))}>
+            <Select label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "" }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
             </Select>
 
-            {entryForm.process !== "QC Packing" && (() => {
-              // Ambil items dari order.items yang sudah di-parse safeOrder dengan benar
-              const selOrder = orders.find(o => o.id === entryForm.orderId);
-              // Gunakan order.items langsung (sudah include semua field name/qty dari Gallery Kerudung)
-              const orderModels = selOrder
-                ? (selOrder.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0)
-                : [];
-
-              if (orderModels.length > 0) {
-                return (
-                  <div>
-                    <div className="text-xs font-bold mb-2" style={{ color: "#7c3aed" }}>
-                      Pilih Model ({orderModels.length} model tersedia):
+            {(() => {
+              const rateModels = getRateModelOptions(entryForm.productType, entryForm.process);
+              const selectedPreview = getRatePreview(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName);
+              const selectedOrder = orders.find((o) => o.id === entryForm.orderId);
+              const { limit, label } = selectedOrder && entryForm.model
+                ? getOrderProcessLimit(selectedOrder, entryForm.process, entryForm.model)
+                : { limit: 0, label: "pesanan" };
+              const alreadyQty = selectedOrder && entryForm.model
+                ? processQtyForOrderModel(selectedOrder.id, entryForm.process, entryForm.model)
+                : 0;
+              const sisaQty = limit > 0 ? Math.max(0, limit - alreadyQty) : 0;
+              return (
+                <div className="space-y-2">
+                  <Select
+                    label="Model / Acuan Tarif"
+                    value={entryForm.model}
+                    onChange={(v) => setEntryForm((f) => ({ ...f, model: v, qty: sisaQty > 0 ? String(sisaQty) : f.qty }))}
+                  >
+                    <option value="">-- Pilih model sesuai Master Tarif --</option>
+                    {rateModels.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </Select>
+                  {rateModels.length === 0 && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+                      ⚠️ Belum ada model/tarif untuk {entryForm.productType} · {entryForm.process}. Silakan buat tarif baru di menu Master Tarif.
                     </div>
-                    <div className="space-y-1.5">
-                      {orderModels.map((it, i) => {
-                        const nama = displayModelName(it.name || it.item || "-");
-                        const qtyModel = Number(it.qty || 0);
-                        const sudahInput = productionEntries
-                          .filter(e => e.orderId === entryForm.orderId && lower(e.process) === lower(entryForm.process) && normalizeModelKey(e.model || "") === normalizeModelKey(nama))
-                          .reduce((s, e) => s + Number(e.qty || 0), 0);
-                        const sisaQty = Math.max(0, qtyModel - sudahInput);
-                        const selected = normalizeModelKey(entryForm.model) === normalizeModelKey(nama);
-                        const habis = sisaQty === 0;
-                        return (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => !habis && setEntryForm(f => ({ ...f, model: nama, qty: String(sisaQty) }))}
-                            className="w-full rounded-xl px-3 py-2.5 text-xs font-bold text-left flex justify-between items-center"
-                            style={{
-                              background: selected ? "linear-gradient(135deg,#ec4899,#a855f7)" : habis ? "#f1f5f9" : "#fdf2f8",
-                              color: selected ? "white" : habis ? "#94a3b8" : "#5b21b6",
-                              border: selected ? "none" : `1px solid ${habis ? "#e2e8f0" : "#c4b5fd"}`,
-                              cursor: habis ? "not-allowed" : "pointer",
-                            }}
-                          >
-                            <div>
-                              <div>{nama} {habis ? "✅ Selesai" : ""}</div>
-                              <div className="font-normal mt-0.5" style={{ color: selected ? "rgba(255,255,255,0.75)" : "#94a3b8" }}>
-                                Total: {qtyModel} pcs · Sudah input: {sudahInput} pcs
-                              </div>
-                            </div>
-                            <div className="text-right ml-3">
-                              <div style={{ color: selected ? "white" : habis ? "#94a3b8" : "#ec4899", fontWeight: 900, fontSize: 14 }}>
-                                {sisaQty}
-                              </div>
-                              <div className="font-normal" style={{ color: selected ? "rgba(255,255,255,0.75)" : "#94a3b8" }}>sisa</div>
-                            </div>
-                          </button>
-                        );
-                      })}
+                  )}
+                  {selectedPreview.status === "found" && (
+                    <div className="rounded-2xl border p-3 text-xs" style={{ background: "#ecfdf5", borderColor: "#86efac", color: "#166534" }}>
+                      <div className="font-black">✅ Tarif yang dipakai</div>
+                      <div className="mt-1 font-bold">{entryForm.productType} · {entryForm.process} · {entryForm.model}</div>
+                      <div className="mt-1 text-base font-black">{money(selectedPreview.effectiveRate)} / pcs</div>
+                      {normalizeWorkerNameKey(entryForm.employeeName).includes("konveksi") && (
+                        <div className="mt-1 text-[11px] font-semibold">Tarif Master {money(selectedPreview.baseRate)} / pcs · Tarif Konveksi {money(selectedPreview.effectiveRate)} / pcs</div>
+                      )}
                     </div>
-                    {entryForm.model && (
-                      <div className="mt-2 rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#ede9fe", color: "#7c3aed" }}>
-                        ✅ Model dipilih: <strong>{entryForm.model}</strong>
-                      </div>
-                    )}
-                  </div>
-                );
-              } else {
-                // Tidak ada multi-model / pesanan tidak dipilih — input model manual
-                return (
-                  <div>
-                    <Input label="Model" value={entryForm.model} onChange={(v) => setEntryForm((f) => ({ ...f, model: v }))} placeholder="Harus sama dengan tarif" />
-                    {modelNameOptions.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {modelNameOptions.slice(0, 10).map((name) => (
-                          <button
-                            key={name}
-                            type="button"
-                            onClick={() => setEntryForm((f) => ({ ...f, model: name }))}
-                            className="rounded-full px-3 py-1 text-xs font-bold"
-                            style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" }}
-                          >
-                            {name}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              }
+                  )}
+                  {selectedPreview.status === "missing" && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
+                      ⚠️ Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.
+                    </div>
+                  )}
+                  {selectedPreview.status === "invalid" && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
+                      ⚠️ Tarif Konveksi tidak valid. Silakan perbaiki tarif di Master Tarif.
+                    </div>
+                  )}
+                  {selectedOrder && entryForm.model && limit > 0 && (
+                    <div className="rounded-2xl px-3 py-2 text-xs font-semibold" style={{ background: "#f8fafc", color: "#475569", border: "1px solid #e2e8f0" }}>
+                      Batas {label}: {limit} pcs · sudah input {alreadyQty} pcs · sisa {sisaQty} pcs.
+                    </div>
+                  )}
+                </div>
+              );
             })()}
 
-            {entryForm.process === "QC Packing" && (
-              <div className="rounded-2xl p-3 text-xs font-semibold" style={{ background: "#fdf2f8", color: "#a855f7" }}>
-                QC Packing tidak memakai model, hanya jenis produk.
-              </div>
-            )}
             <Input label="Jumlah pcs" type="number" value={entryForm.qty} onChange={(v) => setEntryForm((f) => ({ ...f, qty: v }))} placeholder="Contoh: 500" />
             <Input label="Tanggal" type="date" value={entryForm.tanggal} onChange={(v) => setEntryForm((f) => ({ ...f, tanggal: v }))} />
             <Input label="Catatan" value={entryForm.catatan} onChange={(v) => setEntryForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
@@ -5683,29 +5738,30 @@ function rateDocId(productType, model, process) {
             <Select label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
             </Select>
-            <Select label="Proses" value={rateForm.process} onChange={(v) => setRateForm((f) => ({ ...f, process: v, model: v === "QC Packing" ? "" : f.model }))}>
+            <Select label="Proses" value={rateForm.process} onChange={(v) => setRateForm((f) => ({ ...f, process: v }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
             </Select>
-            {rateForm.process !== "QC Packing" && (
-              <div>
-                <Input label="Model" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Alya L" />
-                {modelNameOptions.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {modelNameOptions.slice(0, 10).map((name) => (
-                      <button
-                        key={name}
-                        type="button"
-                        onClick={() => setRateForm((f) => ({ ...f, model: name }))}
-                        className="rounded-full px-3 py-1 text-xs font-bold"
-                        style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" }}
-                      >
-                        {name}
-                      </button>
-                    ))}
-                  </div>
-                )}
+            <div>
+              <Input label="Model / Acuan Tarif" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Kerudung / Alya L / Gamis" />
+              <div className="mt-1 text-[11px] font-semibold" style={{ color: "#64748b" }}>
+                Isi sesuai Master Tarif. Untuk Potong/Pengemasan-QC boleh memakai acuan umum seperti Kerudung.
               </div>
-            )}
+              {modelNameOptions.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {modelNameOptions.slice(0, 10).map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setRateForm((f) => ({ ...f, model: name }))}
+                      className="rounded-full px-3 py-1 text-xs font-bold"
+                      style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <Input label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
             <Button onClick={addWorkRate} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
               Simpan Tarif
@@ -5718,67 +5774,88 @@ function rateDocId(productType, model, process) {
         <Modal title="🚚 Catat Pengiriman" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <Select
-              label="Pilih Pesanan"
-              value={kirimForm.pesananId}
+              label="Pilih Customer"
+              value={kirimForm.customerKey || ""}
               onChange={(v) => {
-                const p = orders.find((o) => o.id === v);
-                // Hitung qty yang sudah terkirim dari riwayat deliveries
-                const existingDeliveries = getDeliveryArray(p);
-                const rawItems = Array.isArray(p?.items) && p.items.length > 0
-                  ? p.items.map((it, idx) => {
-                      const qtyPesan = Number(it.qty || 0);
-                      // Hitung sudah terkirim untuk item ini dari deliveries
-                      const sudahKirim = existingDeliveries.reduce((sum, delivery) => {
-                        const found = (delivery.items || []).find((di) =>
-                          di.itemIndex !== undefined ? Number(di.itemIndex) === idx
-                            : (di.name || "").toLowerCase().trim() === (it.name || "").toLowerCase().trim()
-                        );
-                        return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
-                      }, 0);
-                      const sisa = Math.max(0, qtyPesan - sudahKirim);
-                      return {
-                        nama: it.name || it.item || p.item || "",
-                        qtyPesan,
-                        qtyKirim: sisa, // default ke sisa, bukan 0
-                        itemIndex: idx,
-                      };
-                    })
-                  : [{
-                      nama: p?.item || "",
-                      qtyPesan: Number(p?.qty || 0),
-                      qtyKirim: (() => {
-                        const total = Number(p?.qty || 0);
-                        const sudah = existingDeliveries.reduce((sum, d) =>
-                          sum + (d.items || []).reduce((s, di) => s + Number(di.qty ?? di.shippedQty ?? di.qtyKirim ?? 0), 0), 0);
-                        return Math.max(0, total - sudah);
-                      })(),
-                      itemIndex: 0,
-                    }];
+                const customerOrders = ordersForShipment.filter((o) => normalizeKey(o.customer || "") === v);
+                const orderIds = customerOrders.map((o) => o.id);
+                const nextItems = customerOrders.flatMap((p) => {
+                  const existingDeliveries = getDeliveryArray(p);
+                  return orderBaseItems(p).map((it, idx) => {
+                    const qtyPesan = Number(it.orderedQty || it.qty || 0);
+                    const sudahKirim = existingDeliveries.reduce((sum, delivery) => {
+                      const found = (delivery.items || []).find((di) =>
+                        di.itemIndex !== undefined ? Number(di.itemIndex) === idx
+                          : normalizeModelKey(di.name || "") === normalizeModelKey(it.name || "")
+                      );
+                      return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
+                    }, 0);
+                    const sisa = Math.max(0, qtyPesan - sudahKirim);
+                    return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                  }).filter((it) => Number(it.qtyKirim || 0) > 0);
+                });
+                const first = customerOrders[0];
                 setKirimForm((f) => ({
                   ...f,
-                  pesananId: v,
-                  penerima: p?.customer || "",
-                  items: rawItems,
+                  customerKey: v,
+                  pesananId: orderIds[0] || "",
+                  orderIds,
+                  penerima: first?.customer || "",
+                  items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
                   shortShipmentMode: "temporary",
                   shortShipmentReason: "Stok kain habis",
                   shortShipmentNote: "",
                 }));
               }}
             >
-              <option value="">-- Pilih Pesanan --</option>
-              {orders
-                .filter((p) => {
-                  const status = String(p.status || "").toLowerCase();
-                  return !isOrderStatusClosedForShipment(status);
-                })
-                .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-                .map((p) => <option key={p.id} value={p.id}>{p.customer} · {p.item} · {p.qty} pcs</option>)}
+              <option value="">-- Pilih Customer --</option>
+              {shipmentCustomerOptions.map((c) => <option key={c.key} value={c.key}>{c.name} · {c.count} pesanan siap/sisa kirim</option>)}
             </Select>
+            {kirimForm.customerKey && (
+              <div className="rounded-2xl border p-3 text-xs space-y-2" style={{ background: "#f8fafc", borderColor: "#e2e8f0", color: "#475569" }}>
+                <div className="font-black" style={{ color: "#0f172a" }}>Pesanan dalam nota ini</div>
+                {ordersForShipment.filter((o) => normalizeKey(o.customer || "") === kirimForm.customerKey).map((o) => {
+                  const checked = (kirimForm.orderIds || []).includes(o.id);
+                  return (
+                    <label key={o.id} className="flex items-center gap-2 rounded-xl bg-white p-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const nextIds = e.target.checked
+                            ? Array.from(new Set([...(kirimForm.orderIds || []), o.id]))
+                            : (kirimForm.orderIds || []).filter((id) => id !== o.id);
+                          const selectedOrders = ordersForShipment.filter((x) => nextIds.includes(x.id));
+                          const nextItems = selectedOrders.flatMap((p) => {
+                            const existingDeliveries = getDeliveryArray(p);
+                            return orderBaseItems(p).map((it, idx) => {
+                              const qtyPesan = Number(it.orderedQty || it.qty || 0);
+                              const sudahKirim = existingDeliveries.reduce((sum, delivery) => {
+                                const found = (delivery.items || []).find((di) =>
+                                  di.itemIndex !== undefined ? Number(di.itemIndex) === idx
+                                    : normalizeModelKey(di.name || "") === normalizeModelKey(it.name || "")
+                                );
+                                return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
+                              }, 0);
+                              const sisa = Math.max(0, qtyPesan - sudahKirim);
+                              return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                            }).filter((it) => Number(it.qtyKirim || 0) > 0);
+                          });
+                          setKirimForm((f) => ({ ...f, orderIds: nextIds, pesananId: nextIds[0] || "", items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }] }));
+                        }}
+                      />
+                      <span className="flex-1"><b>{o.invoice || o.item}</b> · {o.item} · {o.qty} pcs</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
             <Input label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
             <Input label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
             <Input label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
             {kirimForm.items.map((item, idx) => (
               <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
+                {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"} · {item.customer || kirimForm.penerima}</div>}
                 <Input
                   label="Item"
                   value={item.nama}
