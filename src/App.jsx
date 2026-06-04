@@ -50,8 +50,8 @@ const C = {
   KASBON: "kasbon_pegawai",
 };
 
-const PROD_STATUS = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
-const GENERAL_RATE_PROCESSES = ["Potong", "QC Packing"];
+const PROD_STATUS = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
+const GENERAL_RATE_PROCESSES = ["Potong", "Pengemasan QC"];
 const MODEL_SPECIFIC_PROCESSES = ["Jahit"];
 const PROCESSES_WITH_MODEL = [...GENERAL_RATE_PROCESSES, ...MODEL_SPECIFIC_PROCESSES];
 const PROCESSES_NO_MODEL = [];
@@ -59,18 +59,18 @@ const ALL_PROCESSES = [...PROCESSES_WITH_MODEL, ...PROCESSES_NO_MODEL];
 const PRODUCT_TYPES = ["Kerudung", "Mukena", "Baju Anak", "Gamis", "Lainnya"];
 
 function isGeneralRateProcess(process) {
-  return GENERAL_RATE_PROCESSES.some((p) => lower(p) === lower(process));
+  return GENERAL_RATE_PROCESSES.some((p) => normalizeProcessKey(p) === normalizeProcessKey(process));
 }
 
 function isModelSpecificProcess(process) {
-  return MODEL_SPECIFIC_PROCESSES.some((p) => lower(p) === lower(process));
+  return MODEL_SPECIFIC_PROCESSES.some((p) => normalizeProcessKey(p) === normalizeProcessKey(process));
 }
 
 const PROD_COLORS = {
   Antri: { bg: "#fef3c7", text: "#92400e", icon: "⏳" },
   Potong: { bg: "#dbeafe", text: "#1e40af", icon: "✂️" },
   Jahit: { bg: "#ede9fe", text: "#5b21b6", icon: "🧵" },
-  "QC Packing": { bg: "#fce7f3", text: "#9d174d", icon: "📦" },
+  "Pengemasan QC": { bg: "#fce7f3", text: "#9d174d", icon: "📦" },
   Selesai: { bg: "#d1fae5", text: "#065f46", icon: "✅" },
 };
 
@@ -285,6 +285,38 @@ function normalizeMasterKey(value) {
 
 function normalizeCompactKey(value) {
   return normalizeMasterKey(value).replace(/\s+/g, "");
+}
+
+function normalizeProcessKey(value) {
+  const key = normalizeMasterKey(value);
+  const compact = normalizeCompactKey(value);
+  if (!key) return "";
+  if (key.includes("potong")) return "potong";
+  if (key.includes("jahit")) return "jahit";
+  const isPackingQc =
+    compact === "qcpacking" ||
+    compact === "packingqc" ||
+    compact === "pengemasanqc" ||
+    compact === "qcpengemasan" ||
+    key.includes("qc packing") ||
+    key.includes("packing qc") ||
+    key.includes("pengemasan qc") ||
+    key.includes("qc pengemasan") ||
+    ((key.includes("qc") || key.includes("quality control")) && (key.includes("packing") || key.includes("pengemasan")));
+  if (isPackingQc) return "pengemasan qc";
+  return key;
+}
+
+function sameProcess(a, b) {
+  return normalizeProcessKey(a) === normalizeProcessKey(b);
+}
+
+function displayProcessName(value) {
+  const key = normalizeProcessKey(value);
+  if (key === "potong") return "Potong";
+  if (key === "jahit") return "Jahit";
+  if (key === "pengemasan qc") return "Pengemasan QC";
+  return toTitleCase(cleanMasterText(value));
 }
 
 const WORKER_PROCESS_WORDS = new Set([
@@ -1342,7 +1374,7 @@ export default function App() {
       arr.push(p);
       mapArr.set(p.orderId, arr);
     });
-    const statusOrder = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
+    const statusOrder = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
     const map = new Map();
     mapArr.forEach((arr, orderId) => {
       const best = arr.reduce((a, b) => {
@@ -1926,7 +1958,7 @@ export default function App() {
 
   function processQtyForOrder(orderId, process) {
     return productionEntries
-      .filter((e) => e.orderId === orderId && e.process === process)
+      .filter((e) => e.orderId === orderId && sameProcess(e.process, process))
       .reduce((sum, e) => sum + Number(e.qty || 0), 0);
   }
 
@@ -1935,7 +1967,7 @@ export default function App() {
       .filter((e) =>
         e.id !== excludeEntryId &&
         e.orderId === orderId &&
-        e.process === process &&
+        sameProcess(e.process, process) &&
         normalizeModelKey(e.model || "") === normalizeModelKey(model || "")
       )
       .reduce((sum, e) => sum + Number(e.qty || 0), 0);
@@ -1954,7 +1986,7 @@ export default function App() {
     return productionEntries.some((e) =>
       normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(payload.employeeName) &&
       e.orderId === payload.orderId &&
-      e.process === payload.process &&
+      sameProcess(e.process, payload.process) &&
       normalizeModelKey(e.model) === normalizeModelKey(payload.model) &&
       String(e.tanggal || "") === String(payload.tanggal || "")
     );
@@ -1962,7 +1994,7 @@ export default function App() {
 
 function rateDocId(productType, model, process) {
     const typeKey = safeDocId(normalizeProductTypeKey(productType || "kerudung"), "type");
-    const processKey = safeDocId(lower(process || "proses"), "process");
+    const processKey = safeDocId(normalizeProcessKey(process || "proses") || lower(process || "proses"), "process");
     const modelKey = safeDocId(normalizeModelKey(model || "all"), "model");
     return `rate_${typeKey}_${processKey}_${modelKey}`;
   }
@@ -1978,10 +2010,10 @@ function rateDocId(productType, model, process) {
   function findRate(productType, model, process) {
     const expectedId = rateDocId(productType, model, process);
     const typeKey = normalizeProductTypeKey(productType);
-    const processKey = lower(process);
+    const processKey = normalizeProcessKey(process);
     const modelKey = normalizeModelKey(model || "");
     const matches = workRates.filter((r) =>
-      normalizeProductTypeKey(r.productType) === typeKey && lower(r.process) === processKey
+      normalizeProductTypeKey(r.productType) === typeKey && normalizeProcessKey(r.process) === processKey
     );
     const exact = matches.filter((r) => normalizeModelKey(r.model || "") === modelKey);
     const fallback = matches.filter((r) => {
@@ -2025,10 +2057,10 @@ function rateDocId(productType, model, process) {
     }
 
     const typeKey = normalizeProductTypeKey(productType);
-    const processKey = lower(process);
+    const processKey = normalizeProcessKey(process);
     const map = new Map();
     workRates
-      .filter((r) => normalizeProductTypeKey(r.productType) === typeKey && lower(r.process) === processKey)
+      .filter((r) => normalizeProductTypeKey(r.productType) === typeKey && normalizeProcessKey(r.process) === processKey)
       .forEach((r) => {
         const rawModel = normalizeModelKey(r.model || "") ? r.model : (productType || "Umum");
         const key = normalizeModelKey(rawModel || "");
@@ -2130,7 +2162,7 @@ function rateDocId(productType, model, process) {
 
     function totalSetorProcess(process) {
       return allEntries
-        .filter((e) => lower(e.process) === lower(process))
+        .filter((e) => sameProcess(e.process, process))
         .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
     }
 
@@ -2145,13 +2177,13 @@ function rateDocId(productType, model, process) {
         if (modelQty <= 0) return true;
         const modelKey = normalizeModelKey(item.name || "");
         const modelSetor = allEntries
-          .filter((e) => lower(e.process) === lower(process) && normalizeModelKey(e.model || "") === modelKey)
+          .filter((e) => sameProcess(e.process, process) && normalizeModelKey(e.model || "") === modelKey)
           .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
         return modelSetor >= modelQty;
       });
     }
 
-    const totalQcSetor = totalSetorProcess("qc packing");
+    const totalQcSetor = totalSetorProcess("Pengemasan QC");
     const jahitSelesai = allModelsCompleted("jahit");
     const totalPotongSetor = totalSetorProcess("potong");
     const potongSelesai = totalPotongSetor >= qtyPesanan;
@@ -2161,7 +2193,7 @@ function rateDocId(productType, model, process) {
     if (totalQcSetor >= qtyPesanan) {
       newStatus = "Selesai";
     } else if (jahitSelesai) {
-      newStatus = "QC Packing";
+      newStatus = "Pengemasan QC";
     } else if (totalJahitSetor > 0) {
       newStatus = "Jahit";
     } else if (potongSelesai) {
@@ -2171,7 +2203,7 @@ function rateDocId(productType, model, process) {
     }
 
     // Hanya update jika status berubah ke yang lebih maju
-    const statusOrder = ["Antri", "Potong", "Jahit", "QC Packing", "Selesai"];
+    const statusOrder = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
     const currentIdx = statusOrder.indexOf(prod.status);
     const newIdx = statusOrder.indexOf(newStatus);
     if (newIdx <= currentIdx) return; // Tidak mundurkan status
@@ -2214,7 +2246,7 @@ function rateDocId(productType, model, process) {
       "Antri": "Proses",
       "Potong": "Proses",
       "Jahit": "Proses",
-      "QC Packing": "Proses",
+      "Pengemasan QC": "Proses",
       "Selesai": "Selesai Produksi",
     };
 
@@ -2396,16 +2428,16 @@ function rateDocId(productType, model, process) {
         }
 
         if (liveProdData) {
-          const processKey = lower(entryPayload.process);
+          const processKey = normalizeProcessKey(entryPayload.process);
           const modelKey = normalizeModelKey(entryPayload.model || "");
           const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
           const matchedLiveItem = liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey);
-          const generalProcess = GENERAL_RATE_PROCESSES.some((p) => lower(p) === processKey);
+          const generalProcess = GENERAL_RATE_PROCESSES.some((p) => normalizeProcessKey(p) === processKey);
           const limit = generalProcess
             ? Number(liveProdData.qty || 0)
             : Number(matchedLiveItem?.qty || liveProdData.qty || 0);
           const alreadyInWorkers = liveWorkers
-            .filter((w) => lower(w.process) === processKey)
+            .filter((w) => normalizeProcessKey(w.process) === processKey)
             .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
             .reduce((sum, w) => sum + Number(w.qty || 0), 0);
           if (limit > 0 && alreadyInWorkers + Number(entryPayload.qty || 0) > limit) {
@@ -2857,9 +2889,9 @@ function rateDocId(productType, model, process) {
     const editOrder = orders.find((o) => o.id === editEntryModal.orderId);
     if (editOrder) {
       const { limit, label } = getOrderProcessLimit(editOrder, editEntryModal.process, nextModel);
-      const alreadyQty = editEntryModal.process === "QC Packing"
+      const alreadyQty = isGeneralRateProcess(editEntryModal.process)
         ? productionEntries
-            .filter((e) => e.id !== editEntryModal.id && e.orderId === editOrder.id && e.process === editEntryModal.process)
+            .filter((e) => e.id !== editEntryModal.id && e.orderId === editOrder.id && sameProcess(e.process, editEntryModal.process))
             .reduce((sum, e) => sum + Number(e.qty || 0), 0)
         : processQtyForOrderModel(editOrder.id, editEntryModal.process, nextModel, editEntryModal.id);
       const combinedQty = alreadyQty + nextQty;
@@ -2918,17 +2950,17 @@ function rateDocId(productType, model, process) {
             const liveProdData = prodSnap.data();
             const liveWorkers = Array.isArray(liveProdData.workers) ? liveProdData.workers : [];
             if (!hasSetor) {
-              const processKey = lower(liveEntry.process || "");
+              const processKey = normalizeProcessKey(liveEntry.process || "");
               const modelKey = normalizeModelKey(nextModel);
               const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
-              const generalProcess = GENERAL_RATE_PROCESSES.some((p) => lower(p) === processKey);
+              const generalProcess = GENERAL_RATE_PROCESSES.some((p) => normalizeProcessKey(p) === processKey);
               const matchedLiveItem = liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey);
               const limit = generalProcess
                 ? Number(liveProdData.qty || 0)
                 : Number(matchedLiveItem?.qty || liveProdData.qty || 0);
               const alreadyInWorkers = liveWorkers
                 .filter((w) => w.entryId !== liveEntry.id)
-                .filter((w) => lower(w.process) === processKey)
+                .filter((w) => normalizeProcessKey(w.process) === processKey)
                 .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
                 .reduce((sum, w) => sum + Number(w.qty || 0), 0);
               if (limit > 0 && alreadyInWorkers + Number(updates.qty || 0) > limit) {
@@ -4334,7 +4366,12 @@ function rateDocId(productType, model, process) {
                       const rawStatus = o.status || o.deliveryStatus || o.shippingStatus || "-";
                       return (
                         <div className="mt-2 rounded-2xl bg-white px-3 py-3 text-[11px] space-y-2" style={{ border: "1px solid #fecdd3" }}>
-                          <div className="font-black" style={{ color: "#be123c" }}>Detail masalah pengiriman</div>
+                          <div
+                            className="font-black"
+                            style={{ color: "#be123c" }}
+                          >
+                            Detail masalah pengiriman
+                          </div>
                           <div className="grid grid-cols-2 gap-2">
                             <div className="rounded-xl px-2 py-2" style={{ background: "#f8fafc" }}>
                               <div style={{ color: "#64748b" }}>Pesanan</div>
@@ -4423,7 +4460,7 @@ function rateDocId(productType, model, process) {
             const rekapProses = [
               { label: "✂️ Potong", qty: processQtyForOrder(p.orderId, "Potong") },
               { label: "🧵 Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
-              { label: "📦 QC", qty: processQtyForOrder(p.orderId, "QC Packing") },
+              { label: "📦 Pengemasan QC", qty: processQtyForOrder(p.orderId, "Pengemasan QC") },
             ].filter((r) => r.qty > 0);
             return (
             <div key={p.id} className="rounded-2xl bg-white shadow-sm overflow-hidden" style={{ border: "1px solid #fce7f3" }}>
@@ -4464,13 +4501,13 @@ function rateDocId(productType, model, process) {
                         const modelName = it.name || it.item || "-";
                         const modelQty = Number(it.qty || 0);
                         const potongQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && lower(e.process) === "potong" && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
+                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Potong") && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
                         const jahitQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && lower(e.process) === "jahit" && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
+                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Jahit") && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
                         const qcQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && lower(e.process) === "qc packing")
+                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Pengemasan QC"))
                           .reduce((s, e) => s + Number(e.qty || 0), 0);
                         const jahitDone = jahitQty >= modelQty;
                         return (
@@ -4733,7 +4770,7 @@ function rateDocId(productType, model, process) {
         const totalSetor = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtySetor || 0), 0);
         const totalReject = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtyReject || 0), 0);
         const totalGaji = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).totalWageSetor || 0), 0);
-        const prosesOrder = ["Potong", "Jahit", "QC Packing"];
+        const prosesOrder = ["Potong", "Jahit", "Pengemasan QC"];
         const prosesKeys = [...prosesOrder.filter((p) => byProses[p]), ...Object.keys(byProses).filter((p) => !prosesOrder.includes(p))];
         // Rekap per proses harus berdiri sendiri per proses, bukan memakai rantai Potong -> Jahit -> QC.
         // Alasannya: banyak pekerjaan carry-over dari periode sebelumnya disetor pada periode ini.
@@ -5307,7 +5344,7 @@ function rateDocId(productType, model, process) {
                 <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📋 Per Proses</div>
                 {prosesKeys.map((p) => {
                   const r = byProses[p];
-                  const icon = p === "Potong" ? "✂️" : p === "Jahit" ? "🧵" : p === "QC Packing" ? "📦" : "🔧";
+                  const icon = p === "Potong" ? "✂️" : p === "Jahit" ? "🧵" : sameProcess(p, "Pengemasan QC") ? "📦" : "🔧";
                   const reject = r.qtyReject;
                   return (
                     <div key={p} className="rounded-xl p-3" style={{ background: "#fdf4ff", border: "1px solid #f3e8ff" }}>
@@ -6044,7 +6081,7 @@ function rateDocId(productType, model, process) {
             </div>
 
             {/* Model — hanya untuk non-QC */}
-            {editEntryModal.process !== "QC Packing" && (
+            {!isGeneralRateProcess(editEntryModal.process) && (
               <Input
                 label="Model"
                 value={editEntryForm.model}
