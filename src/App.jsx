@@ -1816,19 +1816,42 @@ export default function App() {
   }
 
   const stats = useMemo(() => {
-    const selesaiOrders = orders.filter((o) => isDoneStatus(o.status) || isSentStatus(o.status));
+    // Dashboard utama HARUS dihitung dari PESANAN, bukan dari jumlah dokumen produksi.
+    // Tujuannya supaya kartu ringkas selalu konsisten:
+    // Total Pesanan = Belum Produksi + Sedang + Selesai + Perlu Dicek.
+    // Produksi bisa duplikat/legacy/tidak 1:1 dengan pesanan, jadi tidak boleh langsung
+    // dipakai sebagai angka kartu "Sedang".
+    const ringkas = (orders || []).reduce((acc, order) => {
+      const prod = produksiByOrderId.get(order.id);
+      const perluDicek = ordersPerluDicekIds.has(order.id);
+      const tertutupAtauSelesai =
+        isOrderClosedForNewWork(order, shipmentByOrderId) ||
+        orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId);
+
+      if (perluDicek) {
+        acc.perluDicek += 1;
+      } else if (tertutupAtauSelesai) {
+        acc.selesai += 1;
+      } else if (prod && prod.status !== "Selesai") {
+        acc.proses += 1;
+      } else {
+        acc.belum += 1;
+      }
+
+      return acc;
+    }, { belum: 0, proses: 0, selesai: 0, perluDicek: 0 });
 
     return {
       pesanan: orders.length,
-      belum: ordersBelumProduksi.length,
-      proses: produksi.filter((p) => p.status !== "Selesai").length,
-      selesai: selesaiOrders.length,
-      kirim: selesaiOrders.length,
-      perluDicek: ordersPerluDicek.length,
+      belum: ringkas.belum,
+      proses: ringkas.proses,
+      selesai: ringkas.selesai,
+      kirim: ringkas.selesai,
+      perluDicek: ringkas.perluDicek,
       boronganPcs: productionEntries.reduce((s, e) => s + Number(e.qty || 0), 0),
       payroll: officialGajiPayrollTotal(payrollExpenses),
     };
-  }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi, ordersPerluDicek]);
+  }, [orders, produksiByOrderId, shipmentByOrderId, ordersPerluDicekIds, productionEntries, payrollExpenses]);
 
   const dashboardSummary = useMemo(() => {
     const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
