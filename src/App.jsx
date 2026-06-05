@@ -42,6 +42,7 @@ const C = {
   ORDERS: "orders",
   MATERIALS: "materials",
   SHIPMENTS: "shipments",
+  SHIPMENT_BATCHES: "shipment_batches",
   PRODUKSI: "produksi",
   WORK_RATES: "work_rates",
   PRODUCTION_ENTRIES: "production_entries",
@@ -3020,8 +3021,13 @@ function rateDocId(productType, model, process) {
 
     setIsSaving(true);
     try {
+      const batchRef = doc(collection(db, C.SHIPMENT_BATCHES));
+      const shipmentRefsByOrderId = new Map(orderRows.map((row) => [row.order.id, doc(collection(db, C.SHIPMENTS))]));
       await runTransaction(db, async (transaction) => {
         const liveRows = [];
+        const batchOrderSummaries = [];
+        const batchItems = [];
+        const batchShipmentIds = [];
         for (const row of orderRows) {
           const orderSnap = await transaction.get(row.orderRef);
           if (!orderSnap.exists()) throw new Error(`Order ${row.order.invoice || row.order.id} tidak ditemukan`);
@@ -3099,12 +3105,51 @@ function rateDocId(productType, model, process) {
           const productionDoneByDelivery = finalShort || (totalOrdered > 0 && totalShipped >= totalOrdered);
           const nextProduksiStatus = productionDoneByDelivery ? "Selesai" : (currentData.statusProduksi || currentData.produksiStatus || "Proses");
 
-          const shipmentRef = doc(collection(db, C.SHIPMENTS));
+          const shipmentRef = shipmentRefsByOrderId.get(order.id) || doc(collection(db, C.SHIPMENTS));
+          batchShipmentIds.push(shipmentRef.id);
+          batchOrderSummaries.push({
+            orderId: order.id,
+            pesananId: order.id,
+            invoice: order.invoice || "",
+            customer: order.customer || "",
+            totalPesanBatch: cleanDeliveryItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0),
+            totalKirimBatch: cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0),
+            totalTagihanBatch: cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0),
+            totalPesanAkumulasi: totalOrdered,
+            totalKirimAkumulasi: totalShipped,
+            shortShipmentRemaining,
+            deliveryStatus,
+            shippingStatus,
+            items: cleanDeliveryItems.map((it) => ({
+              orderId: order.id,
+              pesananId: order.id,
+              invoice: order.invoice || "",
+              customer: order.customer || "",
+              ...it,
+              qtyPesan: it.orderedQty,
+              qtyKirim: it.shippedQty,
+              total: Number(it.shippedQty || 0) * Number(it.price || 0),
+            })),
+          });
+          cleanDeliveryItems.forEach((it) => batchItems.push({
+            orderId: order.id,
+            pesananId: order.id,
+            invoice: order.invoice || "",
+            customer: order.customer || "",
+            ...it,
+            qtyPesan: it.orderedQty,
+            qtyKirim: it.shippedQty,
+            total: Number(it.shippedQty || 0) * Number(it.price || 0),
+          }));
+
           transaction.set(shipmentRef, {
             pesananId: order.id,
             orderId: order.id,
             groupId,
             noteNumber: groupId,
+            batchId: batchRef.id,
+            shipmentType: selectedOrders.length > 1 ? "combined_customer" : "single_order",
+            isCombinedShipment: selectedOrders.length > 1,
             customer: order.customer,
             produk: order.item,
             productName: order.item,
@@ -3169,6 +3214,39 @@ function rateDocId(productType, model, process) {
               ],
             });
           }
+        }
+
+        if (batchItems.length > 0) {
+          const batchOrderIds = [...new Set(batchOrderSummaries.map((o) => o.orderId).filter(Boolean))];
+          const batchInvoices = [...new Set(batchOrderSummaries.map((o) => o.invoice).filter(Boolean))];
+          transaction.set(batchRef, {
+            groupId,
+            noteNumber: groupId,
+            shipmentType: selectedOrders.length > 1 ? "combined_customer" : "single_order",
+            isCombinedShipment: selectedOrders.length > 1,
+            source: "gallery-produksi",
+            customer: batchOrderSummaries[0]?.customer || kirimForm.penerima.trim() || "",
+            customerName: batchOrderSummaries[0]?.customer || kirimForm.penerima.trim() || "",
+            tanggalKirim: kirimForm.tanggalKirim || todayStr(),
+            date: kirimForm.tanggalKirim || todayStr(),
+            createdAt: todayStr(),
+            receiver: kirimForm.penerima.trim(),
+            penerima: kirimForm.penerima.trim(),
+            courier: kirimForm.ekspedisi || "",
+            ekspedisi: kirimForm.ekspedisi || "",
+            note: kirimForm.catatan || "",
+            catatan: kirimForm.catatan || "",
+            orderIds: batchOrderIds,
+            pesananIds: batchOrderIds,
+            invoices: batchInvoices,
+            shipmentIds: batchShipmentIds,
+            orders: batchOrderSummaries,
+            items: batchItems,
+            totalKirimBatch: batchItems.reduce((s, i) => s + Number(i.qtyKirim || i.shippedQty || i.qty || 0), 0),
+            totalTagihanBatch: batchItems.reduce((s, i) => s + Number(i.total || 0), 0),
+            totalHppBatch: batchItems.reduce((s, i) => s + Number(i.qtyKirim || i.shippedQty || i.qty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0),
+            status: "Aktif",
+          });
         }
       });
 
