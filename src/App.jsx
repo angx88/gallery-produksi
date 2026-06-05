@@ -1727,20 +1727,52 @@ export default function App() {
     setModal("kirim");
   }
 
-  const stats = useMemo(() => {
-    const selesaiOrders = orders.filter((o) => isDoneStatus(o.status) || isSentStatus(o.status));
+  const orderDashboardBuckets = useMemo(() => {
+    // Dashboard utama harus memakai kategori yang saling lepas, supaya:
+    // Total Pesanan = Belum Produksi + Sedang + Selesai + Perlu Dicek.
+    // Jangan hitung "Sedang" dari jumlah dokumen produksi, karena produksi bisa duplikat
+    // atau tidak 1:1 dengan pesanan. Kunci utamanya tetap order/pesanan.
+    const buckets = { belum: [], proses: [], selesai: [], perluDicek: [] };
+    const needCheckIds = new Set(ordersPerluDicek.map((o) => o.id));
 
+    (orders || []).forEach((order) => {
+      const prod = produksiByOrderId.get(order.id);
+      const raw = order?.raw || {};
+      const status = lower(order.status || raw.status || "");
+      const selesaiProduksi = prod?.status === "Selesai" || raw.statusProduksi === "Selesai" || raw.produksiStatus === "Selesai";
+      const sudahSelesaiAtauKirim =
+        selesaiProduksi ||
+        orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) ||
+        isOrderClosedForNewWork(order, shipmentByOrderId) ||
+        status.includes("batal") ||
+        status.includes("cancel");
+
+      if (needCheckIds.has(order.id)) {
+        buckets.perluDicek.push(order);
+      } else if (sudahSelesaiAtauKirim) {
+        buckets.selesai.push(order);
+      } else if (prod && prod.status !== "Selesai") {
+        buckets.proses.push(order);
+      } else {
+        buckets.belum.push(order);
+      }
+    });
+
+    return buckets;
+  }, [orders, ordersPerluDicek, produksiByOrderId, shipmentByOrderId]);
+
+  const stats = useMemo(() => {
     return {
       pesanan: orders.length,
-      belum: ordersBelumProduksi.length,
-      proses: produksi.filter((p) => p.status !== "Selesai").length,
-      selesai: selesaiOrders.length,
-      kirim: selesaiOrders.length,
-      perluDicek: ordersPerluDicek.length,
+      belum: orderDashboardBuckets.belum.length,
+      proses: orderDashboardBuckets.proses.length,
+      selesai: orderDashboardBuckets.selesai.length,
+      kirim: orderDashboardBuckets.selesai.length,
+      perluDicek: orderDashboardBuckets.perluDicek.length,
       boronganPcs: productionEntries.reduce((s, e) => s + Number(e.qty || 0), 0),
       payroll: officialGajiPayrollTotal(payrollExpenses),
     };
-  }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi, ordersPerluDicek]);
+  }, [orders, orderDashboardBuckets, productionEntries, payrollExpenses]);
 
   const dashboardSummary = useMemo(() => {
     const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
@@ -3852,7 +3884,7 @@ function rateDocId(productType, model, process) {
 
       <div className="grid grid-cols-5 gap-2 p-4">
         {[
-          { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋" },
+          { label: "Total Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋" },
           { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "⏳" },
           { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "🧵" },
           { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "✅" },
