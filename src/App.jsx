@@ -116,8 +116,16 @@ function getDeliveryArray(orderLike) {
 function isOrderStatusClosedForShipment(status) {
   const s = lower(status);
   if (!s) return false;
+  // Status sebagian harus tetap muncul di form kirim lanjutan.
+  // Contoh: order 200 pcs, sudah kirim 150 pcs, maka sisa 50 pcs wajib tetap bisa dikirim hari ini.
+  if (s.includes("dikirim sebagian") || s.includes("kirim sebagian") || s.includes("sebagian")) return false;
+  if (s.includes("belum dikirim") || s.includes("belum kirim")) return false;
   if (s.includes("selesai produksi")) return false;
-  if (s.includes("dikirim") || s.includes("terkirim") || s.includes("kirim selesai")) return true;
+  if (s.includes("kurang kirim final") || s.includes("ditutup kurang kirim") || s.includes("ditutup") || s.includes("closed")) return true;
+  if (s.includes("kelebihan kirim")) return true;
+  if (s.includes("terkirim") || s.includes("kirim selesai")) return true;
+  // Hanya status dikirim penuh yang ditutup. Dikirim Sebagian sudah ditangani di atas.
+  if (s === "dikirim" || s.includes("sudah dikirim")) return true;
   if (s.includes("done") || s.includes("complete")) return true;
   if (s === "selesai") return true;
   return false;
@@ -683,50 +691,16 @@ function buildFullDeliveryPayload(order) {
   };
 }
 
-function shipmentLineItems(shipment) {
-  if (Array.isArray(shipment?.deliveryItems) && shipment.deliveryItems.length > 0) return shipment.deliveryItems;
-  if (Array.isArray(shipment?.items) && shipment.items.length > 0) return shipment.items;
-  return [];
-}
-
-function shipmentItemsForOrder(shipment, order) {
-  const items = shipmentLineItems(shipment);
-  if (!order) return items;
-
-  const orderId = String(order.id || "").trim();
-  const invoice = String(order.invoice || "").trim();
-  const topOrderId = String(shipment?.orderId || shipment?.pesananId || "").trim();
-  const topInvoice = String(shipment?.invoice || shipment?.raw?.orderCode || shipment?.raw?.kode || "").trim();
-  const orderIds = Array.isArray(shipment?.orderIds) ? shipment.orderIds.map((id) => String(id || "").trim()) : [];
-  const invoices = Array.isArray(shipment?.invoices) ? shipment.invoices.map((id) => String(id || "").trim()) : [];
-
-  const itemHasOrderIdentity = items.some((it) => it?.orderId || it?.pesananId || it?.invoice || it?.orderInvoice);
-  if (itemHasOrderIdentity) {
-    return items.filter((it) => {
-      const itemOrderId = String(it?.orderId || it?.pesananId || "").trim();
-      const itemInvoice = String(it?.invoice || it?.orderInvoice || "").trim();
-      return (orderId && itemOrderId === orderId) || (invoice && itemInvoice === invoice);
-    });
-  }
-
-  if (orderId && (topOrderId === orderId || orderIds.includes(orderId))) return items;
-  if (invoice && (topInvoice === invoice || invoices.includes(invoice))) return items;
-  return [];
-}
-
 function shipmentDeliveredQtyForOrder(order, shipmentByOrderId) {
   const rows = shipmentByOrderId?.get?.(order?.id) || [];
   return rows.reduce((sum, shipment) => {
-    const items = shipmentItemsForOrder(shipment, order);
-    if (items.length > 0) {
-      return sum + items.reduce((itemSum, item) => itemSum + Number(item.qtyKirim ?? item.shippedQty ?? item.qty ?? 0), 0);
+    if (Array.isArray(shipment.items) && shipment.items.length > 0) {
+      return sum + shipment.items.reduce((itemSum, item) => itemSum + Number(item.qtyKirim ?? item.shippedQty ?? item.qty ?? 0), 0);
     }
-    const shipmentOrderIds = Array.isArray(shipment?.orderIds) ? shipment.orderIds.map((id) => String(id || "").trim()) : [];
-    const isTopLevelMatch =
-      String(shipment?.orderId || shipment?.pesananId || "").trim() === String(order?.id || "").trim() ||
-      shipmentOrderIds.includes(String(order?.id || "").trim()) ||
-      String(shipment?.invoice || "").trim() === String(order?.invoice || "").trim();
-    return isTopLevelMatch ? sum + Number(shipment.totalKirim ?? shipment.qty ?? shipment.raw?.qty ?? 0) : sum;
+    if (Array.isArray(shipment.deliveryItems) && shipment.deliveryItems.length > 0) {
+      return sum + shipment.deliveryItems.reduce((itemSum, item) => itemSum + Number(item.qtyKirim ?? item.shippedQty ?? item.qty ?? 0), 0);
+    }
+    return sum + Number(shipment.totalKirim ?? shipment.qty ?? shipment.raw?.qty ?? 0);
   }, 0);
 }
 
@@ -761,111 +735,6 @@ function isOrderClosedForNewWork(order, shipmentByOrderId = null) {
   if (status.includes("ditutup") || status.includes("closed")) return true;
   if (isShortShipmentClosed(order)) return true;
   return isOrderFullyDelivered(order, shipmentByOrderId);
-}
-
-function productionStatusRank(status) {
-  const idx = PROD_STATUS.indexOf(String(status || ""));
-  return idx >= 0 ? idx : 0;
-}
-
-function chooseBetterProduction(current, candidate) {
-  if (!current) return candidate;
-  if (!candidate) return current;
-  const currentRank = productionStatusRank(current.status);
-  const candidateRank = productionStatusRank(candidate.status);
-  if (candidateRank !== currentRank) return candidateRank > currentRank ? candidate : current;
-
-  const currentCompleteness = [current.orderId, current.pesananId, current.invoice, current.customer, current.item, Array.isArray(current.items) && current.items.length > 0].filter(Boolean).length;
-  const candidateCompleteness = [candidate.orderId, candidate.pesananId, candidate.invoice, candidate.customer, candidate.item, Array.isArray(candidate.items) && candidate.items.length > 0].filter(Boolean).length;
-  if (candidateCompleteness !== currentCompleteness) return candidateCompleteness > currentCompleteness ? candidate : current;
-
-  return String(candidate.updatedAt || candidate.createdAt || candidate.tanggalMulai || "") >= String(current.updatedAt || current.createdAt || current.tanggalMulai || "")
-    ? candidate
-    : current;
-}
-
-function normalizedInvoice(value) {
-  return String(value || "").trim();
-}
-
-function productionMatchesOrder(prod, order) {
-  if (!prod || !order) return false;
-  const prodOrderId = String(prod.orderId || prod.pesananId || "").trim();
-  const orderId = String(order.id || "").trim();
-  if (prodOrderId && orderId && prodOrderId === orderId) return true;
-  const prodInvoice = normalizedInvoice(prod.invoice || prod.orderInvoice || prod.kode || prod.code);
-  const orderInvoice = normalizedInvoice(order.invoice || order.raw?.invoice || order.raw?.orderId || order.raw?.kode || order.raw?.code);
-  return !!prodInvoice && !!orderInvoice && prodInvoice === orderInvoice;
-}
-
-function buildProductionItemsFromOrder(order, fallbackProd = null) {
-  const parsedItems = (order?.items || [])
-    .filter((it) => it && it.name && it.name !== "-" && Number(it.qty || 0) > 0)
-    .map((it) => ({ name: it.name || it.item || "Pesanan", qty: Number(it.qty || 0) }));
-  if (parsedItems.length > 0) return parsedItems;
-
-  const rawItems = Array.isArray(order?.raw?.items) ? order.raw.items : [];
-  const mappedRawItems = rawItems
-    .filter((it) => Number(it?.qty || it?.quantity || it?.jumlah || 0) > 0)
-    .map((it) => ({ name: displayModelName(it?.name || it?.item || it?.productName || it?.model || order?.item || "Pesanan"), qty: Number(it?.qty || it?.quantity || it?.jumlah || 0) }));
-  if (mappedRawItems.length > 0) return mappedRawItems;
-
-  const qty = dashboardTotalOrderedQty(order) || Number(order?.qty || fallbackProd?.qty || 0);
-  return [{ name: order?.item || fallbackProd?.item || "Pesanan", qty: Number(qty || 0) }];
-}
-
-function entriesForProductionOrder(entries, prod, order) {
-  const orderId = String(order?.id || prod?.orderId || prod?.pesananId || "").trim();
-  const invoice = normalizedInvoice(order?.invoice || prod?.invoice || order?.raw?.invoice);
-  const prodId = String(prod?.id || "").trim();
-  return (entries || []).filter((entry) => {
-    const entryOrderId = String(entry?.orderId || entry?.pesananId || "").trim();
-    const entryInvoice = normalizedInvoice(entry?.invoice || entry?.orderInvoice);
-    const entryProdId = String(entry?.produksiId || entry?.productionId || "").trim();
-    return (orderId && entryOrderId === orderId) || (invoice && entryInvoice === invoice) || (prodId && entryProdId === prodId);
-  });
-}
-
-function inferProductionStatusFromReality(prod, order, entries, shipmentByOrderId) {
-  if (order && (isOrderClosedForNewWork(order, shipmentByOrderId) || orderHasCompletedProduction(order, new Map([[order.id, prod]]), shipmentByOrderId))) {
-    return "Selesai";
-  }
-
-  const qtyPesanan = Math.max(0, Number(prod?.qty || dashboardTotalOrderedQty(order) || 0));
-  const relatedEntries = entriesForProductionOrder(entries, prod, order);
-
-  const totalGiven = (process) => relatedEntries
-    .filter((e) => sameProcess(e.process, process))
-    .reduce((sum, e) => sum + Number(e.qty || 0), 0);
-  const totalSetor = (process) => relatedEntries
-    .filter((e) => sameProcess(e.process, process))
-    .reduce((sum, e) => sum + Number(setorTotals(e).qtySetor || 0), 0);
-
-  const qcSetor = totalSetor("Pengemasan QC");
-  const qcGiven = totalGiven("Pengemasan QC");
-  if (qtyPesanan > 0 && qcSetor >= qtyPesanan) return "Selesai";
-  if (qcGiven > 0 || qcSetor > 0) return "Pengemasan QC";
-
-  const items = buildProductionItemsFromOrder(order, prod).filter((it) => Number(it.qty || 0) > 0);
-  const jahitSetor = totalSetor("Jahit");
-  const jahitGiven = totalGiven("Jahit");
-  const potongSetor = totalSetor("Potong");
-  const potongGiven = totalGiven("Potong");
-
-  const allJahitModelDone = items.length > 0 && items.every((item) => {
-    const modelKey = normalizeModelKey(item.name || "");
-    const modelQty = Number(item.qty || 0);
-    const modelSetor = relatedEntries
-      .filter((e) => sameProcess(e.process, "Jahit") && normalizeModelKey(e.model || "") === modelKey)
-      .reduce((sum, e) => sum + Number(setorTotals(e).qtySetor || 0), 0);
-    return modelQty <= 0 || modelSetor >= modelQty;
-  });
-
-  if ((qtyPesanan > 0 && jahitSetor >= qtyPesanan) || allJahitModelDone) return "Pengemasan QC";
-  if (jahitGiven > 0 || jahitSetor > 0) return "Jahit";
-  if (qtyPesanan > 0 && potongSetor >= qtyPesanan) return "Jahit";
-  if (potongGiven > 0 || potongSetor > 0) return "Potong";
-  return "Antri";
 }
 
 function orderBaseItems(order) {
@@ -1301,7 +1170,6 @@ export default function App() {
   const previousOrderIdsRef = useRef(new Set());
   const firstOrderLoadRef = useRef(true);
   const legacyDeliverySyncingRef = useRef(new Set());
-  const productionBackfillSyncingRef = useRef(new Set());
 
   const [prodForm, setProdForm] = useState({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
   const [rateForm, setRateForm] = useState({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
@@ -1474,73 +1342,59 @@ export default function App() {
     });
   }, [user, orders]);
 
-  // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total.
-  // Matching tidak hanya lewat orderId, tapi juga invoice agar data manual lama tetap tersambung.
+  // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total
   useEffect(() => {
     if (produksi.length === 0 || orders.length === 0) return;
-    const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
-    const orderByInvoice = new Map();
-    orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
-      if (inv) orderByInvoice.set(inv, o);
-    });
-
     const needsMigration = produksi.filter((p) => {
-      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
-      if (!order) return false;
       if (!Array.isArray(p.items) || p.items.length === 0) return true;
+      // Juga migrasi jika hanya 1 item dengan qty sama dengan total (fallback lama)
       if (p.items.length === 1 && Number(p.items[0].qty) === Number(p.qty)) {
+        const order = orders.find((o) => o.id === p.orderId);
         if (order && Array.isArray(order.items) && order.items.length > 1) return true;
       }
       return false;
     });
     if (needsMigration.length === 0) return;
 
-    needsMigration.slice(0, 25).forEach(async (p) => {
-      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
+    needsMigration.forEach(async (p) => {
+      const order = orders.find((o) => o.id === p.orderId);
       if (!order) return;
-      const key = `items-${p.id}`;
-      if (productionBackfillSyncingRef.current.has(key)) return;
-      productionBackfillSyncingRef.current.add(key);
+      // Gunakan order.items yang sudah di-parse oleh safeOrder (termasuk semua model dari Gallery Kerudung)
+      const orderItems = (order.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0).length > 0
+        ? order.items.filter(it => it.name && it.name !== "-" && Number(it.qty) > 0).map((it) => ({ name: it.name || "", qty: Number(it.qty || 0) }))
+        : [{ name: order.item || p.item || "Pesanan", qty: Number(order.qty || p.qty || 0) }];
       try {
-        await updateDoc(doc(db, C.PRODUKSI, p.id), {
-          items: buildProductionItemsFromOrder(order, p),
-          orderId: p.orderId || order.id,
-          invoice: p.invoice || order.invoice || "",
-          updatedAt: todayStr(),
-        });
-      } catch (_) {
-      } finally {
-        productionBackfillSyncingRef.current.delete(key);
-      }
+        await updateDoc(doc(db, C.PRODUKSI, p.id), { items: orderItems });
+      } catch (_) {}
     });
   }, [produksi, orders]);
 
   const q = search.toLowerCase();
 
   const produksiByOrderId = useMemo(() => {
-    // Matching produksi harus tahan data lama: orderId, pesananId, dan invoice.
-    // Jika ada duplikat, pilih dokumen yang paling maju/lengkap, bukan asal dokumen terakhir.
-    const orderByInvoice = new Map();
-    orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
-      if (inv) orderByInvoice.set(inv, o);
-    });
-
-    const map = new Map();
+    // Simpan SEMUA produksi per orderId dalam array sementara, lalu pilih
+    // yang statusnya paling maju (atau updatedAt terbaru jika status sama).
+    // Ini mencegah data produksi tertimpa diam-diam jika ada duplikat orderId.
+    const mapArr = new Map();
     produksi.forEach((p) => {
-      const matchedOrderIds = new Set();
-      const directId = String(p.orderId || p.pesananId || "").trim();
-      if (directId) matchedOrderIds.add(directId);
-      const byInvoice = orderByInvoice.get(normalizedInvoice(p.invoice || p.orderInvoice));
-      if (byInvoice?.id) matchedOrderIds.add(byInvoice.id);
-
-      matchedOrderIds.forEach((orderId) => {
-        map.set(orderId, chooseBetterProduction(map.get(orderId), p));
+      if (!p.orderId) return;
+      const arr = mapArr.get(p.orderId) || [];
+      arr.push(p);
+      mapArr.set(p.orderId, arr);
+    });
+    const statusOrder = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
+    const map = new Map();
+    mapArr.forEach((arr, orderId) => {
+      const best = arr.reduce((a, b) => {
+        const ia = statusOrder.indexOf(a.status);
+        const ib = statusOrder.indexOf(b.status);
+        if (ib !== ia) return ib > ia ? b : a;
+        return String(b.updatedAt || b.createdAt || "") >= String(a.updatedAt || a.createdAt || "") ? b : a;
       });
+      map.set(orderId, best);
     });
     return map;
-  }, [produksi, orders]);
+  }, [produksi]);
 
   const shipmentByOrderId = useMemo(() => {
     // Bangun index orders terlebih dahulu (O(n)) sebelum loop shipments,
@@ -1555,37 +1409,18 @@ export default function App() {
     shipments.forEach((p) => {
       const candidates = new Set();
 
-      // Cari lewat ID langsung, termasuk format nota kirim gabungan.
-      const directIds = [p.pesananId, p.orderId, ...(Array.isArray(p.orderIds) ? p.orderIds : []), ...(Array.isArray(p.pesananIds) ? p.pesananIds : [])]
-        .map((id) => String(id || "").trim())
-        .filter(Boolean);
-      directIds.forEach((id) => {
-        const found = orderById.get(id);
-        if (found) candidates.add(found);
-      });
+      // Cari lewat ID langsung
+      const byPesananId = orderById.get(String(p.pesananId || "").trim());
+      const byOrderId = orderById.get(String(p.orderId || "").trim());
+      if (byPesananId) candidates.add(byPesananId);
+      if (byOrderId) candidates.add(byOrderId);
 
-      // Cari lewat invoice, termasuk invoice dalam items/orders nota gabungan.
-      const invoiceKeys = [p.invoice, p.raw?.orderCode, p.raw?.kode, ...(Array.isArray(p.invoices) ? p.invoices : [])]
-        .map((inv) => String(inv || "").trim())
-        .filter(Boolean);
-      if (Array.isArray(p.orders)) {
-        p.orders.forEach((row) => {
-          const id = String(row?.orderId || row?.pesananId || "").trim();
-          const inv = String(row?.invoice || "").trim();
-          if (id && orderById.get(id)) candidates.add(orderById.get(id));
-          if (inv) invoiceKeys.push(inv);
-        });
-      }
-      shipmentLineItems(p).forEach((item) => {
-        const id = String(item?.orderId || item?.pesananId || "").trim();
-        const inv = String(item?.invoice || item?.orderInvoice || "").trim();
-        if (id && orderById.get(id)) candidates.add(orderById.get(id));
-        if (inv) invoiceKeys.push(inv);
-      });
-      invoiceKeys.forEach((inv) => {
+      // Cari lewat invoice
+      const inv = String(p.invoice || p.raw?.orderCode || p.raw?.kode || "").trim();
+      if (inv) {
         const byInv = orderByInvoice.get(inv);
         if (byInv) candidates.add(byInv);
-      });
+      }
 
       candidates.forEach((o) => {
         const arr = map.get(o.id) || [];
@@ -1596,145 +1431,6 @@ export default function App() {
 
     return map;
   }, [shipments, orders]);
-
-  // Backfill dan normalisasi produksi lama.
-  // Tujuan: data lama/manual tidak perlu diklik ulang satu-satu.
-  // - Produksi lama tanpa orderId dilink lewat invoice.
-  // - Pesanan lama tanpa dokumen produksi dibuatkan otomatis.
-  // - Status produksi dihitung dari kondisi nyata: pengiriman, potong, jahit, QC/setor.
-  useEffect(() => {
-    if (!user || orders.length === 0) return;
-
-    const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
-    const orderByInvoice = new Map();
-    orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
-      if (inv) orderByInvoice.set(inv, o);
-    });
-
-    const tasks = [];
-
-    produksi.forEach((prod) => {
-      const directOrder = orderById.get(String(prod.orderId || prod.pesananId || "").trim());
-      const invoiceOrder = orderByInvoice.get(normalizedInvoice(prod.invoice || prod.orderInvoice));
-      const order = directOrder || invoiceOrder;
-      if (!order) return;
-
-      const inferredStatus = inferProductionStatusFromReality(prod, order, productionEntries, shipmentByOrderId);
-      const shouldLink = !prod.orderId || prod.orderId !== order.id || !prod.invoice;
-      const shouldUpgradeStatus = productionStatusRank(inferredStatus) > productionStatusRank(prod.status);
-      const shouldFixItems = !Array.isArray(prod.items) || prod.items.length === 0;
-
-      if (shouldLink || shouldUpgradeStatus || shouldFixItems) {
-        tasks.push({ type: "update", prod, order, inferredStatus, shouldLink, shouldUpgradeStatus, shouldFixItems });
-      }
-    });
-
-    orders.forEach((order) => {
-      if (lower(order.status).includes("batal") || lower(order.status).includes("cancel")) return;
-      const existing = produksiByOrderId.get(order.id);
-      if (existing) return;
-      const inferredStatus = orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) ? "Selesai" : "Antri";
-      tasks.push({ type: "create", order, inferredStatus });
-    });
-
-    if (tasks.length === 0) return;
-
-    tasks.slice(0, 15).forEach(async (task) => {
-      const key = task.type === "create"
-        ? `create-${task.order.id}`
-        : `update-${task.prod.id}-${task.inferredStatus}`;
-      if (productionBackfillSyncingRef.current.has(key)) return;
-      productionBackfillSyncingRef.current.add(key);
-
-      try {
-        if (task.type === "create") {
-          const order = task.order;
-          const prodId = `prod_${safeDocId(order.id, "order")}`;
-          const prodRef = doc(db, C.PRODUKSI, prodId);
-          const orderRef = doc(db, C.ORDERS, order.id);
-          const orderItems = buildProductionItemsFromOrder(order);
-          await runTransaction(db, async (transaction) => {
-            const prodSnap = await transaction.get(prodRef);
-            const orderSnap = await transaction.get(orderRef);
-            if (!orderSnap.exists()) return;
-            if (!prodSnap.exists()) {
-              transaction.set(prodRef, {
-                orderId: order.id,
-                invoice: order.invoice || "",
-                customer: order.customer || "-",
-                item: order.item || orderItems[0]?.name || "Pesanan",
-                qty: dashboardTotalOrderedQty(order),
-                items: orderItems,
-                warna: order.warna || "",
-                ukuran: order.ukuran || "",
-                status: task.inferredStatus,
-                workers: [],
-                tanggalMulai: order.createdAt || todayStr(),
-                catatan: task.inferredStatus === "Selesai" ? "Backfill otomatis: pesanan lama sudah selesai/dikirim." : "Backfill otomatis: pesanan lama masuk antrian produksi.",
-                source: "gallery-produksi-auto-backfill",
-                createdAt: todayStr(),
-                updatedAt: todayStr(),
-                history: [{ tanggal: todayStr(), status: task.inferredStatus, catatan: "Backfill otomatis dari data pesanan lama" }],
-              });
-            }
-            const liveOrder = orderSnap.data();
-            transaction.update(orderRef, {
-              statusProduksi: task.inferredStatus,
-              produksiStatus: task.inferredStatus,
-              produksiSource: "gallery-produksi-auto-backfill",
-              produksiUpdatedAt: todayStr(),
-              ...(isSentStatus(liveOrder?.status) || lower(liveOrder?.status) === "lunas" || lower(liveOrder?.status).includes("batal") || lower(liveOrder?.status).includes("ditutup")
-                ? {}
-                : { status: task.inferredStatus === "Selesai" ? "Selesai Produksi" : "Proses" }),
-              updatedAt: todayStr(),
-            });
-          });
-        } else {
-          const { prod, order, inferredStatus, shouldLink, shouldUpgradeStatus, shouldFixItems } = task;
-          const prodRef = doc(db, C.PRODUKSI, prod.id);
-          const orderRef = doc(db, C.ORDERS, order.id);
-          await runTransaction(db, async (transaction) => {
-            const prodSnap = await transaction.get(prodRef);
-            const orderSnap = await transaction.get(orderRef);
-            if (!prodSnap.exists() || !orderSnap.exists()) return;
-            const liveProd = prodSnap.data();
-            const liveOrder = orderSnap.data();
-            const nextStatus = productionStatusRank(inferredStatus) > productionStatusRank(liveProd.status) ? inferredStatus : liveProd.status || "Antri";
-            const prodPatch = { updatedAt: todayStr() };
-            if (shouldLink) {
-              prodPatch.orderId = order.id;
-              prodPatch.invoice = liveProd.invoice || order.invoice || "";
-              prodPatch.customer = liveProd.customer || order.customer || "-";
-            }
-            if (shouldFixItems) prodPatch.items = buildProductionItemsFromOrder(order, liveProd);
-            if (shouldUpgradeStatus && nextStatus !== liveProd.status) {
-              prodPatch.status = nextStatus;
-              prodPatch.history = [
-                ...(Array.isArray(liveProd.history) ? liveProd.history : []),
-                { tanggal: todayStr(), status: nextStatus, catatan: "Status otomatis dihitung ulang dari data lama/pengiriman/setor" },
-              ];
-            }
-            transaction.update(prodRef, prodPatch);
-            transaction.update(orderRef, {
-              statusProduksi: nextStatus,
-              produksiStatus: nextStatus,
-              produksiSource: "gallery-produksi-auto-backfill",
-              produksiUpdatedAt: todayStr(),
-              ...(isSentStatus(liveOrder?.status) || lower(liveOrder?.status) === "lunas" || lower(liveOrder?.status).includes("batal") || lower(liveOrder?.status).includes("ditutup")
-                ? {}
-                : nextStatus === "Selesai" ? { status: "Selesai Produksi" } : { status: "Proses" }),
-              updatedAt: todayStr(),
-            });
-          });
-        }
-      } catch (e) {
-        console.warn("Backfill/normalisasi produksi gagal:", task.order?.invoice || task.prod?.invoice || task.prod?.id, e);
-      } finally {
-        productionBackfillSyncingRef.current.delete(key);
-      }
-    });
-  }, [user, orders, produksi, productionEntries, produksiByOrderId, shipmentByOrderId]);
 
   function orderSmallStatus(order) {
     const kirim = shipmentByOrderId.get(order.id);
@@ -1907,47 +1603,12 @@ export default function App() {
     const orderIdsWithShipment = new Set();
 
     shipments.forEach((shipment) => {
-      const matchedOrders = new Set();
-      const directIds = [
-        shipment.pesananId,
-        shipment.orderId,
-        ...(Array.isArray(shipment.orderIds) ? shipment.orderIds : []),
-        ...(Array.isArray(shipment.pesananIds) ? shipment.pesananIds : []),
-      ].map((id) => String(id || "").trim()).filter(Boolean);
-      directIds.forEach((id) => {
-        const found = orderById.get(id);
-        if (found) matchedOrders.add(found);
-      });
-
-      const invoiceKeys = [
-        shipment.invoice,
-        shipment.raw?.orderCode,
-        shipment.raw?.kode,
-        ...(Array.isArray(shipment.invoices) ? shipment.invoices : []),
-      ].map((inv) => String(inv || "").trim()).filter(Boolean);
-      if (Array.isArray(shipment.orders)) {
-        shipment.orders.forEach((row) => {
-          const id = String(row?.orderId || row?.pesananId || "").trim();
-          const inv = String(row?.invoice || "").trim();
-          if (id && orderById.get(id)) matchedOrders.add(orderById.get(id));
-          if (inv) invoiceKeys.push(inv);
-        });
-      }
-      shipmentLineItems(shipment).forEach((item) => {
-        const id = String(item?.orderId || item?.pesananId || "").trim();
-        const inv = String(item?.invoice || item?.orderInvoice || "").trim();
-        if (id && orderById.get(id)) matchedOrders.add(orderById.get(id));
-        if (inv) invoiceKeys.push(inv);
-      });
-      invoiceKeys.forEach((inv) => {
-        const found = orderByInvoice.get(inv);
-        if (found) matchedOrders.add(found);
-      });
-
-      const matchedOrder = Array.from(matchedOrders)[0] || null;
-      matchedOrders.forEach((o) => {
-        if (o?.id) orderIdsWithShipment.add(o.id);
-      });
+      const matchedOrder =
+        orderById.get(String(shipment.pesananId || "").trim()) ||
+        orderById.get(String(shipment.orderId || "").trim()) ||
+        orderByInvoice.get(String(shipment.invoice || "").trim()) ||
+        null;
+      if (matchedOrder?.id) orderIdsWithShipment.add(matchedOrder.id);
       rows.push({
         ...shipment,
         id: shipment.id,
@@ -2075,42 +1736,19 @@ export default function App() {
   }
 
   const stats = useMemo(() => {
-    // Dashboard utama HARUS dihitung dari PESANAN, bukan dari jumlah dokumen produksi.
-    // Tujuannya supaya kartu ringkas selalu konsisten:
-    // Total Pesanan = Belum Produksi + Sedang + Selesai + Perlu Dicek.
-    // Produksi bisa duplikat/legacy/tidak 1:1 dengan pesanan, jadi tidak boleh langsung
-    // dipakai sebagai angka kartu "Sedang".
-    const ringkas = (orders || []).reduce((acc, order) => {
-      const prod = produksiByOrderId.get(order.id);
-      const perluDicek = ordersPerluDicekIds.has(order.id);
-      const tertutupAtauSelesai =
-        isOrderClosedForNewWork(order, shipmentByOrderId) ||
-        orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId);
-
-      if (perluDicek) {
-        acc.perluDicek += 1;
-      } else if (tertutupAtauSelesai) {
-        acc.selesai += 1;
-      } else if (prod && prod.status !== "Selesai") {
-        acc.proses += 1;
-      } else {
-        acc.belum += 1;
-      }
-
-      return acc;
-    }, { belum: 0, proses: 0, selesai: 0, perluDicek: 0 });
+    const selesaiOrders = orders.filter((o) => isDoneStatus(o.status) || isSentStatus(o.status));
 
     return {
       pesanan: orders.length,
-      belum: ringkas.belum,
-      proses: ringkas.proses,
-      selesai: ringkas.selesai,
-      kirim: ringkas.selesai,
-      perluDicek: ringkas.perluDicek,
+      belum: ordersBelumProduksi.length,
+      proses: produksi.filter((p) => p.status !== "Selesai").length,
+      selesai: selesaiOrders.length,
+      kirim: selesaiOrders.length,
+      perluDicek: ordersPerluDicek.length,
       boronganPcs: productionEntries.reduce((s, e) => s + Number(e.qty || 0), 0),
       payroll: officialGajiPayrollTotal(payrollExpenses),
     };
-  }, [orders, produksiByOrderId, shipmentByOrderId, ordersPerluDicekIds, productionEntries, payrollExpenses]);
+  }, [orders, produksi, productionEntries, payrollExpenses, ordersBelumProduksi, ordersPerluDicek]);
 
   const dashboardSummary = useMemo(() => {
     const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
@@ -2220,29 +1858,6 @@ export default function App() {
       .slice(0, 5);
 
     const alerts = [];
-
-    const produksiGroups = new Map();
-    (produksi || []).forEach((prod) => {
-      const key = String(prod.orderId || prod.pesananId || prod.invoice || "").trim();
-      if (!key) return;
-      const arr = produksiGroups.get(key) || [];
-      arr.push(prod);
-      produksiGroups.set(key, arr);
-    });
-    produksiGroups.forEach((arr, key) => {
-      if (arr.length > 1) {
-        const best = arr.reduce((a, b) => chooseBetterProduction(a, b));
-        alerts.push({
-          type: "Produksi duplikat",
-          text: `${best.customer || "Customer"} · ${best.invoice || key} · ${arr.length} data produksi ditemukan`,
-          tab: "produksi",
-          targetSearch: best.invoice || key || best.customer || "",
-          orderId: best.orderId || best.pesananId || "",
-          invoice: best.invoice || key || "",
-        });
-      }
-    });
-
     (productionEntries || []).forEach((entry) => {
       const totals = setorTotals(entry);
       const totalAktivitas = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
@@ -2252,7 +1867,6 @@ export default function App() {
           type: "Setor melebihi diberi",
           text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
           tab: "borongan",
-          targetSearch: `${displayWorkerName(entry.employeeName)} ${entry.process || ""} ${displayModelName(entry.model || "")}`.trim(),
         });
       }
       if (Number(entry.rate || 0) <= 0) {
@@ -2260,7 +1874,6 @@ export default function App() {
           type: "Tarif kosong",
           text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")}`,
           tab: "tarif",
-          targetSearch: `${entry.process || ""} ${displayModelName(entry.model || "")}`.trim(),
         });
       }
     });
@@ -2271,9 +1884,6 @@ export default function App() {
           type: "Order tanpa produk/qty",
           text: `${order.customer || order.raw?.customer || "Tanpa nama"} · ${order.invoice || order.raw?.invoice || order.id}`,
           tab: "pesanan",
-          targetSearch: order.invoice || order.raw?.invoice || order.customer || order.raw?.customer || order.id || "",
-          orderId: order.id,
-          invoice: order.invoice || order.raw?.invoice || "",
         });
       }
       const deliveries = Array.isArray(order.raw?.deliveries) ? order.raw.deliveries : [];
@@ -2285,9 +1895,6 @@ export default function App() {
               type: "Pengiriman tanpa itemIndex",
               text: `${order.customer || "Tanpa nama"} · ${order.invoice || order.id} · kirim ${dIdx + 1}.${iIdx + 1}`,
               tab: "kirim",
-              targetSearch: order.invoice || order.customer || order.id || "",
-              orderId: order.id,
-              invoice: order.invoice || "",
             });
           }
         });
@@ -2318,35 +1925,13 @@ export default function App() {
         kirimBelumLengkap: kirimBelumLengkap.slice(0, 4),
       },
       topPekerja,
-      alerts: alerts.slice(0, 5),
-      alertItems: alerts,
+      alerts: alerts.slice(0, 8),
       alertCount: alerts.length,
       weeklyRows,
       maxWeeklyPcs,
       monthLabel: monthStart.slice(0, 7),
     };
   }, [orders, produksi, productionEntries]);
-
-  function openAlertTarget(alert) {
-    if (!alert) return;
-    setAlertDetailModal(false);
-    setPesananOnlyNeedCheck(false);
-    setBoronganOnlyBelumSetor(false);
-    setBoronganOnlyOverSetor(false);
-    setProduksiOnlyBelumSelesai(false);
-    setKirimOnlyBelumLengkap(false);
-
-    if (alert.type === "Setor melebihi diberi") {
-      setBoronganOnlyOverSetor(true);
-    }
-    if (alert.type === "Produksi duplikat") {
-      setProduksiOnlyBelumSelesai(false);
-    }
-
-    const targetSearch = String(alert.targetSearch || alert.invoice || alert.orderId || alert.text || "").trim();
-    setSearch(targetSearch);
-    setTab(alert.tab || "dashboard");
-  }
 
   const workerNameOptions = useMemo(() => {
     const map = new Map();
@@ -3100,22 +2685,6 @@ function rateDocId(productType, model, process) {
           liveRows.push({ ...row, orderData: orderSnap.data(), prodRef, prodSnapData });
         }
 
-        const combinedShipmentItems = [];
-        const combinedOrderSummaries = [];
-        const combinedInvoices = [];
-        const combinedOrderIds = [];
-        let combinedTotalKirim = 0;
-        let combinedTotalPesan = 0;
-        let combinedDeliveredTotal = 0;
-        let combinedDeliveredHppTotal = 0;
-        let combinedTotalKirimAkumulasi = 0;
-        let combinedRemainingAfterShipment = 0;
-        let combinedDeliveredTotalAkumulasi = 0;
-        let combinedDeliveredHppTotalAkumulasi = 0;
-        let combinedHasShortFinal = false;
-        let combinedHasOverDelivery = false;
-        let combinedHasPartialDelivery = false;
-
         for (const row of liveRows) {
           const order = row.order;
           const currentData = row.orderData;
@@ -3128,12 +2697,24 @@ function rateDocId(productType, model, process) {
             const preferredIndex = Number.isInteger(Number(i.itemIndex)) ? Number(i.itemIndex) : idx;
             const base = baseItems[preferredIndex] || baseItems[idx] || baseItems[0] || {};
             const qtyKirim = Number(i.qtyKirim || 0);
+            const originalOrderedQty = Number(i.qtyOrderAsli ?? base.orderedQty ?? i.qtyPesan ?? 0);
+            const alreadyShippedBefore = Number(i.sudahKirim ?? totalDeliveredForItem(base, preferredIndex, currentDeliveries));
+            const remainingBefore = Math.max(0, originalOrderedQty - alreadyShippedBefore);
+            const batchOrderedQty = Number(i.qtyPesan ?? remainingBefore ?? qtyKirim);
             return {
               itemIndex: Number(base.itemIndex ?? preferredIndex),
               name: i.nama || base.name || "Produk",
+              // qty/qtyKirim/shippedQty adalah qty real batch hari ini, bukan akumulasi.
               qty: qtyKirim,
+              qtyKirim,
               shippedQty: qtyKirim,
-              orderedQty: Number(i.qtyPesan || base.orderedQty || 0),
+              // orderedQty pada delivery dipakai sebagai target nota batch ini: sisa yang dikirim hari ini.
+              // Total pesanan asli tetap ada di originalOrderedQty agar audit tidak kehilangan konteks.
+              orderedQty: batchOrderedQty,
+              originalOrderedQty,
+              alreadyShippedBefore,
+              remainingBefore,
+              remainingAfter: Math.max(0, originalOrderedQty - alreadyShippedBefore - qtyKirim),
               price: Number(base.price || 0),
               bahanCost: Number(base.bahanCost || 0),
               hppPerPcs: Number(base.hppPerPcs || 0),
@@ -3166,7 +2747,15 @@ function rateDocId(productType, model, process) {
           const totalOrdered = finalShippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
           const totalShipped = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
           const deliveredTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
-          const deliveredHppTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
+          const deliveredHppTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || i.qty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
+
+          // Angka batch hanya untuk nota hari ini. Jangan memakai angka akumulasi,
+          // supaya kirim lanjutan membuat nota baru sesuai qty real hari ini.
+          const batchOrdered = cleanDeliveryItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
+          const batchShipped = cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || i.qty || 0), 0);
+          const batchDeliveredTotal = cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || i.qty || 0) * Number(i.price || 0), 0);
+          const batchDeliveredHppTotal = cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || i.qty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
+          const batchSelisih = cleanDeliveryItems.reduce((s, i) => s + (Number(i.shippedQty || i.qty || 0) - Number(i.orderedQty || 0)), 0);
           const hasOverDelivery = finalShippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
           if (hasOverDelivery && !overDeliveryConfirmed) throw new Error("Data terbaru menunjukkan pengiriman akan melebihi qty pesanan. Muat ulang data lalu konfirmasi ulang.");
 
@@ -3180,49 +2769,49 @@ function rateDocId(productType, model, process) {
           const productionDoneByDelivery = finalShort || (totalOrdered > 0 && totalShipped >= totalOrdered);
           const nextProduksiStatus = productionDoneByDelivery ? "Selesai" : (currentData.statusProduksi || currentData.produksiStatus || "Proses");
 
-          const deliveryQtyNow = cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || i.shippedQty || 0), 0);
-          const deliveryValueNow = cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || i.shippedQty || 0) * Number(i.price || 0), 0);
-          const deliveryHppNow = cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
-          const orderShipmentItems = cleanDeliveryItems.map((it) => ({
-            ...it,
-            orderId: order.id,
+          const shipmentRef = doc(collection(db, C.SHIPMENTS));
+          transaction.set(shipmentRef, {
             pesananId: order.id,
-            invoice: order.invoice || "",
-            customer: order.customer || "",
-            productName: it.name || order.item || "Produk",
-            qtyPesan: it.orderedQty,
-            qtyKirim: it.shippedQty,
-          }));
-          combinedShipmentItems.push(...orderShipmentItems);
-          combinedOrderSummaries.push({
             orderId: order.id,
-            pesananId: order.id,
-            invoice: order.invoice || "",
-            customer: order.customer || "",
-            produk: order.item || "",
-            qtyPesan: totalOrdered,
-            qtyKirim: deliveryQtyNow,
-            qtyKirimAkumulasi: totalShipped,
+            groupId,
+            noteNumber: groupId,
+            customer: order.customer,
+            produk: order.item,
+            productName: order.item,
+            invoice: order.invoice,
+            tanggalKirim: kirimForm.tanggalKirim,
+            date: kirimForm.tanggalKirim,
+            penerima: kirimForm.penerima.trim(),
+            receiver: kirimForm.penerima.trim(),
+            ekspedisi: kirimForm.ekspedisi || "",
+            courier: kirimForm.ekspedisi || "",
+            items: cleanDeliveryItems.map((it) => ({ ...it, qtyPesan: it.orderedQty, qtyKirim: it.shippedQty })),
+            deliveryItems: cleanDeliveryItems,
+            // Field utama shipment adalah angka batch hari ini, bukan akumulasi semua pengiriman.
+            qty: batchShipped,
+            totalPesan: batchOrdered,
+            totalKirim: batchShipped,
+            totalSelisih: batchSelisih,
+            // Field akumulasi tetap disimpan untuk laporan dan sinkron status order.
+            totalPesanAkumulasi: totalOrdered,
+            totalKirimAkumulasi: totalShipped,
+            totalSelisihAkumulasi: totalShipped - totalOrdered,
             deliveryStatus,
             shippingStatus,
             shortShipmentClosed: finalShort,
+            shortShipmentMode: finalShort ? "final" : (isShortShipment ? "temporary" : ""),
+            shortShipmentReason: finalShort ? shortShipmentReason : "",
+            shortShipmentNote: finalShort ? shortShipmentNote : "",
             shortShipmentRemaining,
-            deliveredTotal,
-            deliveredHppTotal,
+            deliveredTotal: batchDeliveredTotal,
+            deliveredHppTotal: batchDeliveredHppTotal,
+            deliveredTotalAkumulasi: deliveredTotal,
+            deliveredHppTotalAkumulasi: deliveredHppTotal,
+            catatan: kirimForm.catatan || "",
+            note: kirimForm.catatan || "",
+            source: "gallery-produksi",
+            createdAt: todayStr(),
           });
-          combinedOrderIds.push(order.id);
-          if (order.invoice) combinedInvoices.push(order.invoice);
-          combinedTotalKirim += deliveryQtyNow;
-          combinedTotalPesan += totalOrdered;
-          combinedDeliveredTotal += deliveryValueNow;
-          combinedDeliveredHppTotal += deliveryHppNow;
-          combinedTotalKirimAkumulasi += totalShipped;
-          combinedRemainingAfterShipment += shortShipmentRemaining;
-          combinedDeliveredTotalAkumulasi += deliveredTotal;
-          combinedDeliveredHppTotalAkumulasi += deliveredHppTotal;
-          combinedHasShortFinal = combinedHasShortFinal || finalShort;
-          combinedHasOverDelivery = combinedHasOverDelivery || hasOverDelivery;
-          combinedHasPartialDelivery = combinedHasPartialDelivery || (totalShipped > 0 && totalShipped < totalOrdered);
 
           transaction.update(row.orderRef, {
             status: orderStatus,
@@ -3258,68 +2847,6 @@ function rateDocId(productType, model, process) {
             });
           }
         }
-
-        if (combinedShipmentItems.length === 0) {
-          throw new Error("Tidak ada item pengiriman yang valid untuk disimpan.");
-        }
-
-        const uniqueOrderIds = Array.from(new Set(combinedOrderIds.filter(Boolean)));
-        const uniqueInvoices = Array.from(new Set(combinedInvoices.filter(Boolean)));
-        const combinedDeliveryStatus = combinedHasShortFinal
-          ? "Ditutup Kurang Kirim"
-          : combinedHasOverDelivery
-            ? "Kelebihan Kirim"
-            : combinedHasPartialDelivery
-              ? "Dikirim Sebagian"
-              : "Selesai";
-        const shipmentRef = doc(collection(db, C.SHIPMENTS));
-        transaction.set(shipmentRef, {
-          shipmentType: uniqueOrderIds.length > 1 ? "combined_customer" : "single_order",
-          isCombinedShipment: uniqueOrderIds.length > 1,
-          groupId,
-          noteNumber: groupId,
-          pesananId: uniqueOrderIds[0] || "",
-          orderId: uniqueOrderIds[0] || "",
-          orderIds: uniqueOrderIds,
-          pesananIds: uniqueOrderIds,
-          invoice: uniqueInvoices.join(", "),
-          invoices: uniqueInvoices,
-          customer: kirimForm.penerima.trim(),
-          penerima: kirimForm.penerima.trim(),
-          receiver: kirimForm.penerima.trim(),
-          produk: uniqueOrderIds.length > 1 ? `${combinedShipmentItems.length} item dari ${uniqueOrderIds.length} pesanan` : (combinedShipmentItems[0]?.name || combinedShipmentItems[0]?.productName || "Produk"),
-          productName: uniqueOrderIds.length > 1 ? `${combinedShipmentItems.length} item gabungan` : (combinedShipmentItems[0]?.name || combinedShipmentItems[0]?.productName || "Produk"),
-          tanggalKirim: kirimForm.tanggalKirim || todayStr(),
-          date: kirimForm.tanggalKirim || todayStr(),
-          ekspedisi: kirimForm.ekspedisi || "",
-          courier: kirimForm.ekspedisi || "",
-          items: combinedShipmentItems,
-          deliveryItems: combinedShipmentItems,
-          orders: combinedOrderSummaries,
-          qty: combinedShipmentItems.reduce((s, i) => s + Number(i.qty || i.shippedQty || i.qtyKirim || 0), 0),
-          totalPesan: combinedTotalPesan,
-          totalKirim: combinedTotalKirim,
-          totalKirimBatch: combinedTotalKirim,
-          totalKirimAkumulasi: combinedTotalKirimAkumulasi,
-          totalSelisih: combinedTotalKirimAkumulasi - combinedTotalPesan,
-          totalSelisihBatch: combinedTotalKirim - combinedTotalPesan,
-          deliveryStatus: combinedDeliveryStatus,
-          shippingStatus: combinedDeliveryStatus,
-          shortShipmentClosed: combinedHasShortFinal,
-          shortShipmentMode: combinedHasShortFinal ? "final" : (combinedHasPartialDelivery ? "temporary" : ""),
-          shortShipmentReason: combinedHasShortFinal ? shortShipmentReason : "",
-          shortShipmentNote: combinedHasShortFinal ? shortShipmentNote : "",
-          shortShipmentRemaining: combinedRemainingAfterShipment,
-          deliveredTotal: combinedDeliveredTotal,
-          deliveredHppTotal: combinedDeliveredHppTotal,
-          deliveredTotalAkumulasi: combinedDeliveredTotalAkumulasi,
-          deliveredHppTotalAkumulasi: combinedDeliveredHppTotalAkumulasi,
-          catatan: kirimForm.catatan || "",
-          note: kirimForm.catatan || "",
-          source: "gallery-produksi",
-          createdAt: todayStr(),
-          createdAtIso: deliveryCreatedAt,
-        });
       });
 
       setKirimForm({
@@ -4374,31 +3901,6 @@ function rateDocId(productType, model, process) {
         ))}
       </div>
 
-      {dashboardInsights.alertCount > 0 && (
-        <div className="mx-4 mb-3 rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "2px solid #fb7185", background: "linear-gradient(135deg,#fff1f2,#ffffff)" }}>
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
-              <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
-            </div>
-            <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-4 py-2 text-xs font-black" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
-          </div>
-          <div className="space-y-2">
-            {dashboardInsights.alerts.map((alert, idx) => (
-              <button key={`${alert.type}-${idx}`} onClick={() => openAlertTarget(alert)} className="w-full rounded-2xl p-2 text-left" style={{ background: "#fff7f7", border: "1px solid #fecaca" }}>
-                <div className="text-[11px] font-black" style={{ color: "#be123c" }}>{alert.type}</div>
-                <div className="text-[10px]" style={{ color: "#64748b" }}>{alert.text}</div>
-              </button>
-            ))}
-            {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
-              <button type="button" onClick={() => setAlertDetailModal(true)} className="w-full rounded-2xl px-3 py-2 text-[10px] font-black" style={{ background: "#ffe4e6", color: "#be123c" }}>
-                +{dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain · Buka semua
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
       {stats.belum > 0 && (
         <div className="mx-4 mb-2 rounded-2xl px-4 py-3 flex items-center gap-3"
           style={{ background: "linear-gradient(135deg,#fef3c7,#fde68a)", border: "1.5px solid #fbbf24" }}>
@@ -4636,6 +4138,31 @@ function rateDocId(productType, model, process) {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fecaca", background: "linear-gradient(135deg,#fff1f2,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
+              </div>
+              <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
+            </div>
+            {dashboardInsights.alerts.length === 0 ? (
+              <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>Tidak ada alert data bermasalah.</div>
+            ) : (
+              <div className="space-y-2">
+                {dashboardInsights.alerts.map((alert, idx) => (
+                  <button key={`${alert.type}-${idx}`} onClick={() => setTab(alert.tab)} className="w-full rounded-2xl p-2 text-left" style={{ background: "#fff7f7", border: "1px solid #fecaca" }}>
+                    <div className="text-[11px] font-black" style={{ color: "#be123c" }}>{alert.type}</div>
+                    <div className="text-[10px]" style={{ color: "#64748b" }}>{alert.text}</div>
+                  </button>
+                ))}
+                {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
+                  <div className="text-[10px]" style={{ color: "#94a3b8" }}>+{dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain</div>
+                )}
               </div>
             )}
           </div>
@@ -5061,11 +4588,20 @@ function rateDocId(productType, model, process) {
                 </div>
               )}
 
-              {/* Status produksi otomatis dari input borongan/setor/pengiriman.
-                  Tombol ubah status manual sengaja tidak ditampilkan agar proses tidak bergantung klik manual. */}
+              {/* Ubah status — compact pills */}
               <div className="px-4 pb-3">
-                <div className="rounded-2xl px-3 py-2 text-xs font-bold" style={{ background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>
-                  Status otomatis: {PROD_COLORS[p.status]?.icon || "🧵"} {p.status || "Antri"}
+                <div className="flex gap-1 flex-wrap">
+                  {PROD_STATUS.map((s) => (
+                    <button key={s} onClick={() => updateProduksiStatus(p.id, s)}
+                      className="rounded-full px-2 py-1 text-xs font-semibold"
+                      style={{
+                        background: p.status === s ? "linear-gradient(135deg,#ec4899,#a855f7)" : "#fdf2f8",
+                        color: p.status === s ? "white" : "#a855f7",
+                        border: "1px solid #f9a8d4",
+                      }}>
+                      {PROD_COLORS[s]?.icon} {s}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
@@ -6366,7 +5902,19 @@ function rateDocId(productType, model, process) {
                       return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
                     }, 0);
                     const sisa = Math.max(0, qtyPesan - sudahKirim);
-                    return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                    return {
+                      orderId: p.id,
+                      invoice: p.invoice || "",
+                      customer: p.customer || "",
+                      nama: it.name || p.item || "",
+                      // Untuk nota hari ini, qtyPesan berarti sisa yang akan diproses pada batch kirim ini.
+                      // Qty total asli tetap disimpan agar status akumulasi order tetap benar.
+                      qtyPesan: sisa,
+                      qtyOrderAsli: qtyPesan,
+                      sudahKirim,
+                      qtyKirim: sisa,
+                      itemIndex: idx,
+                    };
                   }).filter((it) => Number(it.qtyKirim || 0) > 0);
                 });
                 const first = customerOrders[0];
@@ -6413,7 +5961,19 @@ function rateDocId(productType, model, process) {
                                 return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
                               }, 0);
                               const sisa = Math.max(0, qtyPesan - sudahKirim);
-                              return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                              return {
+                      orderId: p.id,
+                      invoice: p.invoice || "",
+                      customer: p.customer || "",
+                      nama: it.name || p.item || "",
+                      // Untuk nota hari ini, qtyPesan berarti sisa yang akan diproses pada batch kirim ini.
+                      // Qty total asli tetap disimpan agar status akumulasi order tetap benar.
+                      qtyPesan: sisa,
+                      qtyOrderAsli: qtyPesan,
+                      sudahKirim,
+                      qtyKirim: sisa,
+                      itemIndex: idx,
+                    };
                             }).filter((it) => Number(it.qtyKirim || 0) > 0);
                           });
                           setKirimForm((f) => ({ ...f, orderIds: nextIds, pesananId: nextIds[0] || "", items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }] }));
@@ -7049,29 +6609,36 @@ function rateDocId(productType, model, process) {
                 Tutup
               </button>
             </div>
-            {dashboardInsights.alertCount === 0 ? (
+            {dashboardInsights.alerts.length === 0 ? (
               <div className="rounded-2xl p-6 text-center text-sm font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>
                 ✅ Tidak ada data bermasalah saat ini.
               </div>
             ) : (
               <div className="space-y-3">
-                {(dashboardInsights.alertItems || []).map((alert, idx) => (
+                {dashboardInsights.alerts.map((alert, idx) => (
                   <div key={`alert-modal-${alert.type}-${idx}`} className="rounded-2xl p-4" style={{ background: "#fff7f7", border: "1.5px solid #fecaca" }}>
                     <div className="font-black text-sm mb-1" style={{ color: "#be123c" }}>{alert.type}</div>
                     <div className="text-xs" style={{ color: "#64748b" }}>{alert.text}</div>
                     <button
                       type="button"
-                      onClick={() => openAlertTarget(alert)}
+                      onClick={() => {
+                        setAlertDetailModal(false);
+                        if (alert.type === "Setor melebihi diberi") {
+                          setBoronganOnlyOverSetor(true);
+                          setBoronganOnlyBelumSetor(false);
+                        }
+                        setTab(alert.tab);
+                      }}
                       className="mt-3 rounded-xl px-4 py-2 text-xs font-bold text-white"
                       style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
                     >
-                      Buka data terkait ›
+                      Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
                     </button>
                   </div>
                 ))}
-                {(dashboardInsights.alertItems || []).length > 0 && (
+                {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
                   <div className="rounded-2xl px-4 py-3 text-xs font-semibold text-center" style={{ background: "#fff1f2", color: "#be123c", border: "1px solid #fecaca" }}>
-                    Klik salah satu temuan untuk membuka data terkait dengan filter otomatis.
+                    + {dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain tersembunyi. Periksa tiap tab untuk melihat semua.
                   </div>
                 )}
               </div>
