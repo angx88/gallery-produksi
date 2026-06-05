@@ -1460,28 +1460,33 @@ export default function App() {
     const candidates = orders.filter((o) => shouldAutoSyncLegacyDelivery(o));
     if (candidates.length === 0) return;
 
-    candidates.slice(0, 20).forEach(async (order) => {
-      if (legacyDeliverySyncingRef.current.has(order.id)) return;
-      legacyDeliverySyncingRef.current.add(order.id);
-      try {
-        // Baca snapshot terbaru dari Firestore sebelum update, agar tidak
-        // double-fire jika useEffect dipanggil lagi sebelum Firestore selesai update.
-        await runTransaction(db, async (transaction) => {
-          const orderRef = doc(db, C.ORDERS, order.id);
-          const snap = await transaction.get(orderRef);
-          if (!snap.exists()) return;
-          const live = snap.data();
-          // Jika sudah ter-sync (oleh proses lain atau trigger sebelumnya), skip
-          if (live.legacyDeliverySynced === true) return;
-          if (Array.isArray(live.deliveries) && live.deliveries.length > 0) return;
-          transaction.update(orderRef, buildFullDeliveryPayload(order));
-        });
-      } catch (e) {
-        console.warn("Auto sinkron pengiriman data lama gagal:", order.invoice || order.id, e);
-      } finally {
-        legacyDeliverySyncingRef.current.delete(order.id);
+    // Proses secara sequential (bukan paralel forEach async) agar tidak membanjiri Firestore quota.
+    // Batasi 5 per run — sisanya akan diproses di run berikutnya saat onSnapshot menyala lagi.
+    (async () => {
+      const batch = candidates.slice(0, 5);
+      for (const order of batch) {
+        if (legacyDeliverySyncingRef.current.has(order.id)) continue;
+        legacyDeliverySyncingRef.current.add(order.id);
+        try {
+          // Baca snapshot terbaru dari Firestore sebelum update, agar tidak
+          // double-fire jika useEffect dipanggil lagi sebelum Firestore selesai update.
+          await runTransaction(db, async (transaction) => {
+            const orderRef = doc(db, C.ORDERS, order.id);
+            const snap = await transaction.get(orderRef);
+            if (!snap.exists()) return;
+            const live = snap.data();
+            // Jika sudah ter-sync (oleh proses lain atau trigger sebelumnya), skip
+            if (live.legacyDeliverySynced === true) return;
+            if (Array.isArray(live.deliveries) && live.deliveries.length > 0) return;
+            transaction.update(orderRef, buildFullDeliveryPayload(order));
+          });
+        } catch (e) {
+          console.warn("Auto sinkron pengiriman data lama gagal:", order.invoice || order.id, e);
+        } finally {
+          legacyDeliverySyncingRef.current.delete(order.id);
+        }
       }
-    });
+    })();
   }, [user, orders]);
 
   // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total.
@@ -1506,24 +1511,26 @@ export default function App() {
     });
     if (needsMigration.length === 0) return;
 
-    needsMigration.slice(0, 25).forEach(async (p) => {
-      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
-      if (!order) return;
-      const key = `items-${p.id}`;
-      if (productionBackfillSyncingRef.current.has(key)) return;
-      productionBackfillSyncingRef.current.add(key);
-      try {
-        await updateDoc(doc(db, C.PRODUKSI, p.id), {
-          items: buildProductionItemsFromOrder(order, p),
-          orderId: p.orderId || order.id,
-          invoice: p.invoice || order.invoice || "",
-          updatedAt: todayStr(),
-        });
-      } catch (_) {
-      } finally {
-        productionBackfillSyncingRef.current.delete(key);
+    (async () => {
+      for (const p of needsMigration.slice(0, 8)) {
+        const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
+        if (!order) continue;
+        const key = `items-${p.id}`;
+        if (productionBackfillSyncingRef.current.has(key)) continue;
+        productionBackfillSyncingRef.current.add(key);
+        try {
+          await updateDoc(doc(db, C.PRODUKSI, p.id), {
+            items: buildProductionItemsFromOrder(order, p),
+            orderId: p.orderId || order.id,
+            invoice: p.invoice || order.invoice || "",
+            updatedAt: todayStr(),
+          });
+        } catch (_) {
+        } finally {
+          productionBackfillSyncingRef.current.delete(key);
+        }
       }
-    });
+    })();
   }, [produksi, orders]);
 
   const q = search.toLowerCase();
@@ -1651,12 +1658,15 @@ export default function App() {
 
     if (tasks.length === 0) return;
 
-    tasks.slice(0, 15).forEach(async (task) => {
-      const key = task.type === "create"
-        ? `create-${task.order.id}`
-        : `update-${task.prod.id}-${task.inferredStatus}`;
-      if (productionBackfillSyncingRef.current.has(key)) return;
-      productionBackfillSyncingRef.current.add(key);
+    // Sequential processing agar tidak memicu burst write ke Firestore.
+    // Batasi 8 per run — sisanya diproses di run berikutnya.
+    (async () => {
+      for (const task of tasks.slice(0, 8)) {
+        const key = task.type === "create"
+          ? `create-${task.order.id}`
+          : `update-${task.prod.id}-${task.inferredStatus}`;
+        if (productionBackfillSyncingRef.current.has(key)) continue;
+        productionBackfillSyncingRef.current.add(key);
 
       try {
         if (task.type === "create") {
@@ -1739,13 +1749,19 @@ export default function App() {
             });
           });
         }
-      } catch (e) {
-        console.warn("Backfill/normalisasi produksi gagal:", task.order?.invoice || task.prod?.invoice || task.prod?.id, e);
-      } finally {
-        productionBackfillSyncingRef.current.delete(key);
+        } catch (e) {
+          console.warn("Backfill/normalisasi produksi gagal:", task.order?.invoice || task.prod?.invoice || task.prod?.id, e);
+        } finally {
+          productionBackfillSyncingRef.current.delete(key);
+        }
       }
-    });
-  }, [user, orders, produksi, productionEntries, produksiByOrderId, shipmentByOrderId]);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, orders, produksi, productionEntries]);
+  // SENGAJA: produksiByOrderId dan shipmentByOrderId tidak masuk dependency.
+  // Keduanya adalah useMemo derivasi dari produksi/orders yang sudah ada di atas.
+  // Jika dimasukkan, setiap kali Map dibuat ulang (setiap render) effect akan re-run
+  // → memicu write Firestore → onSnapshot update → state berubah → loop tak berujung.
 
   function orderSmallStatus(order) {
     const kirim = shipmentByOrderId.get(order.id);
@@ -2054,20 +2070,22 @@ export default function App() {
     const category = { pesanan: orders.length, belum: 0, proses: 0, selesai: 0, perluDicek: 0 };
 
     (orders || []).forEach((order) => {
+      // perluDicek bisa overlap dengan selesai/proses/belum — hitung keduanya agar
+      // total Pesanan = Belum + Sedang + Selesai + Perlu Dicek tidak tumpang-tindih.
+      // Contoh: order sudah terkirim semua tapi ada kelebihan kirim → masuk selesai DAN perluDicek.
       if (ordersPerluDicekIds.has(order.id)) {
         category.perluDicek += 1;
-        return;
+        // TIDAK return — lanjut ke kategorisasi status utama di bawah
       }
       if (orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId)) {
         category.selesai += 1;
-        return;
-      }
-      if (produksiByOrderId.has(order.id)) {
+      } else if (produksiByOrderId.has(order.id)) {
         category.proses += 1;
-        return;
+      } else {
+        category.belum += 1;
       }
-      category.belum += 1;
     });
+    // Konsistensi: belum + proses + selesai == total pesanan (perluDicek adalah subset overlay)
 
     return {
       ...category,
