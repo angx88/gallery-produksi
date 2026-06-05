@@ -2236,6 +2236,9 @@ export default function App() {
           type: "Produksi duplikat",
           text: `${best.customer || "Customer"} · ${best.invoice || key} · ${arr.length} data produksi ditemukan`,
           tab: "produksi",
+          targetSearch: best.invoice || key || best.customer || "",
+          orderId: best.orderId || best.pesananId || "",
+          invoice: best.invoice || key || "",
         });
       }
     });
@@ -2249,6 +2252,7 @@ export default function App() {
           type: "Setor melebihi diberi",
           text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
           tab: "borongan",
+          targetSearch: `${displayWorkerName(entry.employeeName)} ${entry.process || ""} ${displayModelName(entry.model || "")}`.trim(),
         });
       }
       if (Number(entry.rate || 0) <= 0) {
@@ -2256,6 +2260,7 @@ export default function App() {
           type: "Tarif kosong",
           text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")}`,
           tab: "tarif",
+          targetSearch: `${entry.process || ""} ${displayModelName(entry.model || "")}`.trim(),
         });
       }
     });
@@ -2266,6 +2271,9 @@ export default function App() {
           type: "Order tanpa produk/qty",
           text: `${order.customer || order.raw?.customer || "Tanpa nama"} · ${order.invoice || order.raw?.invoice || order.id}`,
           tab: "pesanan",
+          targetSearch: order.invoice || order.raw?.invoice || order.customer || order.raw?.customer || order.id || "",
+          orderId: order.id,
+          invoice: order.invoice || order.raw?.invoice || "",
         });
       }
       const deliveries = Array.isArray(order.raw?.deliveries) ? order.raw.deliveries : [];
@@ -2277,6 +2285,9 @@ export default function App() {
               type: "Pengiriman tanpa itemIndex",
               text: `${order.customer || "Tanpa nama"} · ${order.invoice || order.id} · kirim ${dIdx + 1}.${iIdx + 1}`,
               tab: "kirim",
+              targetSearch: order.invoice || order.customer || order.id || "",
+              orderId: order.id,
+              invoice: order.invoice || "",
             });
           }
         });
@@ -2307,13 +2318,35 @@ export default function App() {
         kirimBelumLengkap: kirimBelumLengkap.slice(0, 4),
       },
       topPekerja,
-      alerts: alerts.slice(0, 8),
+      alerts: alerts.slice(0, 5),
+      alertItems: alerts,
       alertCount: alerts.length,
       weeklyRows,
       maxWeeklyPcs,
       monthLabel: monthStart.slice(0, 7),
     };
   }, [orders, produksi, productionEntries]);
+
+  function openAlertTarget(alert) {
+    if (!alert) return;
+    setAlertDetailModal(false);
+    setPesananOnlyNeedCheck(false);
+    setBoronganOnlyBelumSetor(false);
+    setBoronganOnlyOverSetor(false);
+    setProduksiOnlyBelumSelesai(false);
+    setKirimOnlyBelumLengkap(false);
+
+    if (alert.type === "Setor melebihi diberi") {
+      setBoronganOnlyOverSetor(true);
+    }
+    if (alert.type === "Produksi duplikat") {
+      setProduksiOnlyBelumSelesai(false);
+    }
+
+    const targetSearch = String(alert.targetSearch || alert.invoice || alert.orderId || alert.text || "").trim();
+    setSearch(targetSearch);
+    setTab(alert.tab || "dashboard");
+  }
 
   const workerNameOptions = useMemo(() => {
     const map = new Map();
@@ -4341,6 +4374,31 @@ function rateDocId(productType, model, process) {
         ))}
       </div>
 
+      {dashboardInsights.alertCount > 0 && (
+        <div className="mx-4 mb-3 rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "2px solid #fb7185", background: "linear-gradient(135deg,#fff1f2,#ffffff)" }}>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
+              <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
+            </div>
+            <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-4 py-2 text-xs font-black" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
+          </div>
+          <div className="space-y-2">
+            {dashboardInsights.alerts.map((alert, idx) => (
+              <button key={`${alert.type}-${idx}`} onClick={() => openAlertTarget(alert)} className="w-full rounded-2xl p-2 text-left" style={{ background: "#fff7f7", border: "1px solid #fecaca" }}>
+                <div className="text-[11px] font-black" style={{ color: "#be123c" }}>{alert.type}</div>
+                <div className="text-[10px]" style={{ color: "#64748b" }}>{alert.text}</div>
+              </button>
+            ))}
+            {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
+              <button type="button" onClick={() => setAlertDetailModal(true)} className="w-full rounded-2xl px-3 py-2 text-[10px] font-black" style={{ background: "#ffe4e6", color: "#be123c" }}>
+                +{dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain · Buka semua
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {stats.belum > 0 && (
         <div className="mx-4 mb-2 rounded-2xl px-4 py-3 flex items-center gap-3"
           style={{ background: "linear-gradient(135deg,#fef3c7,#fde68a)", border: "1.5px solid #fbbf24" }}>
@@ -4578,31 +4636,6 @@ function rateDocId(productType, model, process) {
                     </div>
                   </div>
                 ))}
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fecaca", background: "linear-gradient(135deg,#fff1f2,#ffffff)" }}>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
-                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
-              </div>
-              <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
-            </div>
-            {dashboardInsights.alerts.length === 0 ? (
-              <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>Tidak ada alert data bermasalah.</div>
-            ) : (
-              <div className="space-y-2">
-                {dashboardInsights.alerts.map((alert, idx) => (
-                  <button key={`${alert.type}-${idx}`} onClick={() => setTab(alert.tab)} className="w-full rounded-2xl p-2 text-left" style={{ background: "#fff7f7", border: "1px solid #fecaca" }}>
-                    <div className="text-[11px] font-black" style={{ color: "#be123c" }}>{alert.type}</div>
-                    <div className="text-[10px]" style={{ color: "#64748b" }}>{alert.text}</div>
-                  </button>
-                ))}
-                {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
-                  <div className="text-[10px]" style={{ color: "#94a3b8" }}>+{dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain</div>
-                )}
               </div>
             )}
           </div>
@@ -7016,36 +7049,29 @@ function rateDocId(productType, model, process) {
                 Tutup
               </button>
             </div>
-            {dashboardInsights.alerts.length === 0 ? (
+            {dashboardInsights.alertCount === 0 ? (
               <div className="rounded-2xl p-6 text-center text-sm font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>
                 ✅ Tidak ada data bermasalah saat ini.
               </div>
             ) : (
               <div className="space-y-3">
-                {dashboardInsights.alerts.map((alert, idx) => (
+                {(dashboardInsights.alertItems || []).map((alert, idx) => (
                   <div key={`alert-modal-${alert.type}-${idx}`} className="rounded-2xl p-4" style={{ background: "#fff7f7", border: "1.5px solid #fecaca" }}>
                     <div className="font-black text-sm mb-1" style={{ color: "#be123c" }}>{alert.type}</div>
                     <div className="text-xs" style={{ color: "#64748b" }}>{alert.text}</div>
                     <button
                       type="button"
-                      onClick={() => {
-                        setAlertDetailModal(false);
-                        if (alert.type === "Setor melebihi diberi") {
-                          setBoronganOnlyOverSetor(true);
-                          setBoronganOnlyBelumSetor(false);
-                        }
-                        setTab(alert.tab);
-                      }}
+                      onClick={() => openAlertTarget(alert)}
                       className="mt-3 rounded-xl px-4 py-2 text-xs font-bold text-white"
                       style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
                     >
-                      Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
+                      Buka data terkait ›
                     </button>
                   </div>
                 ))}
-                {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
+                {(dashboardInsights.alertItems || []).length > 0 && (
                   <div className="rounded-2xl px-4 py-3 text-xs font-semibold text-center" style={{ background: "#fff1f2", color: "#be123c", border: "1px solid #fecaca" }}>
-                    + {dashboardInsights.alertCount - dashboardInsights.alerts.length} temuan lain tersembunyi. Periksa tiap tab untuk melihat semua.
+                    Klik salah satu temuan untuk membuka data terkait dengan filter otomatis.
                   </div>
                 )}
               </div>
