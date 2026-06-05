@@ -763,6 +763,111 @@ function isOrderClosedForNewWork(order, shipmentByOrderId = null) {
   return isOrderFullyDelivered(order, shipmentByOrderId);
 }
 
+function productionStatusRank(status) {
+  const idx = PROD_STATUS.indexOf(String(status || ""));
+  return idx >= 0 ? idx : 0;
+}
+
+function chooseBetterProduction(current, candidate) {
+  if (!current) return candidate;
+  if (!candidate) return current;
+  const currentRank = productionStatusRank(current.status);
+  const candidateRank = productionStatusRank(candidate.status);
+  if (candidateRank !== currentRank) return candidateRank > currentRank ? candidate : current;
+
+  const currentCompleteness = [current.orderId, current.pesananId, current.invoice, current.customer, current.item, Array.isArray(current.items) && current.items.length > 0].filter(Boolean).length;
+  const candidateCompleteness = [candidate.orderId, candidate.pesananId, candidate.invoice, candidate.customer, candidate.item, Array.isArray(candidate.items) && candidate.items.length > 0].filter(Boolean).length;
+  if (candidateCompleteness !== currentCompleteness) return candidateCompleteness > currentCompleteness ? candidate : current;
+
+  return String(candidate.updatedAt || candidate.createdAt || candidate.tanggalMulai || "") >= String(current.updatedAt || current.createdAt || current.tanggalMulai || "")
+    ? candidate
+    : current;
+}
+
+function normalizedInvoice(value) {
+  return String(value || "").trim();
+}
+
+function productionMatchesOrder(prod, order) {
+  if (!prod || !order) return false;
+  const prodOrderId = String(prod.orderId || prod.pesananId || "").trim();
+  const orderId = String(order.id || "").trim();
+  if (prodOrderId && orderId && prodOrderId === orderId) return true;
+  const prodInvoice = normalizedInvoice(prod.invoice || prod.orderInvoice || prod.kode || prod.code);
+  const orderInvoice = normalizedInvoice(order.invoice || order.raw?.invoice || order.raw?.orderId || order.raw?.kode || order.raw?.code);
+  return !!prodInvoice && !!orderInvoice && prodInvoice === orderInvoice;
+}
+
+function buildProductionItemsFromOrder(order, fallbackProd = null) {
+  const parsedItems = (order?.items || [])
+    .filter((it) => it && it.name && it.name !== "-" && Number(it.qty || 0) > 0)
+    .map((it) => ({ name: it.name || it.item || "Pesanan", qty: Number(it.qty || 0) }));
+  if (parsedItems.length > 0) return parsedItems;
+
+  const rawItems = Array.isArray(order?.raw?.items) ? order.raw.items : [];
+  const mappedRawItems = rawItems
+    .filter((it) => Number(it?.qty || it?.quantity || it?.jumlah || 0) > 0)
+    .map((it) => ({ name: displayModelName(it?.name || it?.item || it?.productName || it?.model || order?.item || "Pesanan"), qty: Number(it?.qty || it?.quantity || it?.jumlah || 0) }));
+  if (mappedRawItems.length > 0) return mappedRawItems;
+
+  const qty = dashboardTotalOrderedQty(order) || Number(order?.qty || fallbackProd?.qty || 0);
+  return [{ name: order?.item || fallbackProd?.item || "Pesanan", qty: Number(qty || 0) }];
+}
+
+function entriesForProductionOrder(entries, prod, order) {
+  const orderId = String(order?.id || prod?.orderId || prod?.pesananId || "").trim();
+  const invoice = normalizedInvoice(order?.invoice || prod?.invoice || order?.raw?.invoice);
+  const prodId = String(prod?.id || "").trim();
+  return (entries || []).filter((entry) => {
+    const entryOrderId = String(entry?.orderId || entry?.pesananId || "").trim();
+    const entryInvoice = normalizedInvoice(entry?.invoice || entry?.orderInvoice);
+    const entryProdId = String(entry?.produksiId || entry?.productionId || "").trim();
+    return (orderId && entryOrderId === orderId) || (invoice && entryInvoice === invoice) || (prodId && entryProdId === prodId);
+  });
+}
+
+function inferProductionStatusFromReality(prod, order, entries, shipmentByOrderId) {
+  if (order && (isOrderClosedForNewWork(order, shipmentByOrderId) || orderHasCompletedProduction(order, new Map([[order.id, prod]]), shipmentByOrderId))) {
+    return "Selesai";
+  }
+
+  const qtyPesanan = Math.max(0, Number(prod?.qty || dashboardTotalOrderedQty(order) || 0));
+  const relatedEntries = entriesForProductionOrder(entries, prod, order);
+
+  const totalGiven = (process) => relatedEntries
+    .filter((e) => sameProcess(e.process, process))
+    .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+  const totalSetor = (process) => relatedEntries
+    .filter((e) => sameProcess(e.process, process))
+    .reduce((sum, e) => sum + Number(setorTotals(e).qtySetor || 0), 0);
+
+  const qcSetor = totalSetor("Pengemasan QC");
+  const qcGiven = totalGiven("Pengemasan QC");
+  if (qtyPesanan > 0 && qcSetor >= qtyPesanan) return "Selesai";
+  if (qcGiven > 0 || qcSetor > 0) return "Pengemasan QC";
+
+  const items = buildProductionItemsFromOrder(order, prod).filter((it) => Number(it.qty || 0) > 0);
+  const jahitSetor = totalSetor("Jahit");
+  const jahitGiven = totalGiven("Jahit");
+  const potongSetor = totalSetor("Potong");
+  const potongGiven = totalGiven("Potong");
+
+  const allJahitModelDone = items.length > 0 && items.every((item) => {
+    const modelKey = normalizeModelKey(item.name || "");
+    const modelQty = Number(item.qty || 0);
+    const modelSetor = relatedEntries
+      .filter((e) => sameProcess(e.process, "Jahit") && normalizeModelKey(e.model || "") === modelKey)
+      .reduce((sum, e) => sum + Number(setorTotals(e).qtySetor || 0), 0);
+    return modelQty <= 0 || modelSetor >= modelQty;
+  });
+
+  if ((qtyPesanan > 0 && jahitSetor >= qtyPesanan) || allJahitModelDone) return "Pengemasan QC";
+  if (jahitGiven > 0 || jahitSetor > 0) return "Jahit";
+  if (qtyPesanan > 0 && potongSetor >= qtyPesanan) return "Jahit";
+  if (potongGiven > 0 || potongSetor > 0) return "Potong";
+  return "Antri";
+}
+
 function orderBaseItems(order) {
   const rawItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
     ? order.raw.items
@@ -1196,6 +1301,7 @@ export default function App() {
   const previousOrderIdsRef = useRef(new Set());
   const firstOrderLoadRef = useRef(true);
   const legacyDeliverySyncingRef = useRef(new Set());
+  const productionBackfillSyncingRef = useRef(new Set());
 
   const [prodForm, setProdForm] = useState({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
   const [rateForm, setRateForm] = useState({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
@@ -1368,59 +1474,73 @@ export default function App() {
     });
   }, [user, orders]);
 
-  // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total
+  // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total.
+  // Matching tidak hanya lewat orderId, tapi juga invoice agar data manual lama tetap tersambung.
   useEffect(() => {
     if (produksi.length === 0 || orders.length === 0) return;
+    const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
+    const orderByInvoice = new Map();
+    orders.forEach((o) => {
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      if (inv) orderByInvoice.set(inv, o);
+    });
+
     const needsMigration = produksi.filter((p) => {
+      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
+      if (!order) return false;
       if (!Array.isArray(p.items) || p.items.length === 0) return true;
-      // Juga migrasi jika hanya 1 item dengan qty sama dengan total (fallback lama)
       if (p.items.length === 1 && Number(p.items[0].qty) === Number(p.qty)) {
-        const order = orders.find((o) => o.id === p.orderId);
         if (order && Array.isArray(order.items) && order.items.length > 1) return true;
       }
       return false;
     });
     if (needsMigration.length === 0) return;
 
-    needsMigration.forEach(async (p) => {
-      const order = orders.find((o) => o.id === p.orderId);
+    needsMigration.slice(0, 25).forEach(async (p) => {
+      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
       if (!order) return;
-      // Gunakan order.items yang sudah di-parse oleh safeOrder (termasuk semua model dari Gallery Kerudung)
-      const orderItems = (order.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0).length > 0
-        ? order.items.filter(it => it.name && it.name !== "-" && Number(it.qty) > 0).map((it) => ({ name: it.name || "", qty: Number(it.qty || 0) }))
-        : [{ name: order.item || p.item || "Pesanan", qty: Number(order.qty || p.qty || 0) }];
+      const key = `items-${p.id}`;
+      if (productionBackfillSyncingRef.current.has(key)) return;
+      productionBackfillSyncingRef.current.add(key);
       try {
-        await updateDoc(doc(db, C.PRODUKSI, p.id), { items: orderItems });
-      } catch (_) {}
+        await updateDoc(doc(db, C.PRODUKSI, p.id), {
+          items: buildProductionItemsFromOrder(order, p),
+          orderId: p.orderId || order.id,
+          invoice: p.invoice || order.invoice || "",
+          updatedAt: todayStr(),
+        });
+      } catch (_) {
+      } finally {
+        productionBackfillSyncingRef.current.delete(key);
+      }
     });
   }, [produksi, orders]);
 
   const q = search.toLowerCase();
 
   const produksiByOrderId = useMemo(() => {
-    // Simpan SEMUA produksi per orderId dalam array sementara, lalu pilih
-    // yang statusnya paling maju (atau updatedAt terbaru jika status sama).
-    // Ini mencegah data produksi tertimpa diam-diam jika ada duplikat orderId.
-    const mapArr = new Map();
-    produksi.forEach((p) => {
-      if (!p.orderId) return;
-      const arr = mapArr.get(p.orderId) || [];
-      arr.push(p);
-      mapArr.set(p.orderId, arr);
+    // Matching produksi harus tahan data lama: orderId, pesananId, dan invoice.
+    // Jika ada duplikat, pilih dokumen yang paling maju/lengkap, bukan asal dokumen terakhir.
+    const orderByInvoice = new Map();
+    orders.forEach((o) => {
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      if (inv) orderByInvoice.set(inv, o);
     });
-    const statusOrder = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
+
     const map = new Map();
-    mapArr.forEach((arr, orderId) => {
-      const best = arr.reduce((a, b) => {
-        const ia = statusOrder.indexOf(a.status);
-        const ib = statusOrder.indexOf(b.status);
-        if (ib !== ia) return ib > ia ? b : a;
-        return String(b.updatedAt || b.createdAt || "") >= String(a.updatedAt || a.createdAt || "") ? b : a;
+    produksi.forEach((p) => {
+      const matchedOrderIds = new Set();
+      const directId = String(p.orderId || p.pesananId || "").trim();
+      if (directId) matchedOrderIds.add(directId);
+      const byInvoice = orderByInvoice.get(normalizedInvoice(p.invoice || p.orderInvoice));
+      if (byInvoice?.id) matchedOrderIds.add(byInvoice.id);
+
+      matchedOrderIds.forEach((orderId) => {
+        map.set(orderId, chooseBetterProduction(map.get(orderId), p));
       });
-      map.set(orderId, best);
     });
     return map;
-  }, [produksi]);
+  }, [produksi, orders]);
 
   const shipmentByOrderId = useMemo(() => {
     // Bangun index orders terlebih dahulu (O(n)) sebelum loop shipments,
@@ -1476,6 +1596,145 @@ export default function App() {
 
     return map;
   }, [shipments, orders]);
+
+  // Backfill dan normalisasi produksi lama.
+  // Tujuan: data lama/manual tidak perlu diklik ulang satu-satu.
+  // - Produksi lama tanpa orderId dilink lewat invoice.
+  // - Pesanan lama tanpa dokumen produksi dibuatkan otomatis.
+  // - Status produksi dihitung dari kondisi nyata: pengiriman, potong, jahit, QC/setor.
+  useEffect(() => {
+    if (!user || orders.length === 0) return;
+
+    const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
+    const orderByInvoice = new Map();
+    orders.forEach((o) => {
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      if (inv) orderByInvoice.set(inv, o);
+    });
+
+    const tasks = [];
+
+    produksi.forEach((prod) => {
+      const directOrder = orderById.get(String(prod.orderId || prod.pesananId || "").trim());
+      const invoiceOrder = orderByInvoice.get(normalizedInvoice(prod.invoice || prod.orderInvoice));
+      const order = directOrder || invoiceOrder;
+      if (!order) return;
+
+      const inferredStatus = inferProductionStatusFromReality(prod, order, productionEntries, shipmentByOrderId);
+      const shouldLink = !prod.orderId || prod.orderId !== order.id || !prod.invoice;
+      const shouldUpgradeStatus = productionStatusRank(inferredStatus) > productionStatusRank(prod.status);
+      const shouldFixItems = !Array.isArray(prod.items) || prod.items.length === 0;
+
+      if (shouldLink || shouldUpgradeStatus || shouldFixItems) {
+        tasks.push({ type: "update", prod, order, inferredStatus, shouldLink, shouldUpgradeStatus, shouldFixItems });
+      }
+    });
+
+    orders.forEach((order) => {
+      if (lower(order.status).includes("batal") || lower(order.status).includes("cancel")) return;
+      const existing = produksiByOrderId.get(order.id);
+      if (existing) return;
+      const inferredStatus = orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) ? "Selesai" : "Antri";
+      tasks.push({ type: "create", order, inferredStatus });
+    });
+
+    if (tasks.length === 0) return;
+
+    tasks.slice(0, 15).forEach(async (task) => {
+      const key = task.type === "create"
+        ? `create-${task.order.id}`
+        : `update-${task.prod.id}-${task.inferredStatus}`;
+      if (productionBackfillSyncingRef.current.has(key)) return;
+      productionBackfillSyncingRef.current.add(key);
+
+      try {
+        if (task.type === "create") {
+          const order = task.order;
+          const prodId = `prod_${safeDocId(order.id, "order")}`;
+          const prodRef = doc(db, C.PRODUKSI, prodId);
+          const orderRef = doc(db, C.ORDERS, order.id);
+          const orderItems = buildProductionItemsFromOrder(order);
+          await runTransaction(db, async (transaction) => {
+            const prodSnap = await transaction.get(prodRef);
+            const orderSnap = await transaction.get(orderRef);
+            if (!orderSnap.exists()) return;
+            if (!prodSnap.exists()) {
+              transaction.set(prodRef, {
+                orderId: order.id,
+                invoice: order.invoice || "",
+                customer: order.customer || "-",
+                item: order.item || orderItems[0]?.name || "Pesanan",
+                qty: dashboardTotalOrderedQty(order),
+                items: orderItems,
+                warna: order.warna || "",
+                ukuran: order.ukuran || "",
+                status: task.inferredStatus,
+                workers: [],
+                tanggalMulai: order.createdAt || todayStr(),
+                catatan: task.inferredStatus === "Selesai" ? "Backfill otomatis: pesanan lama sudah selesai/dikirim." : "Backfill otomatis: pesanan lama masuk antrian produksi.",
+                source: "gallery-produksi-auto-backfill",
+                createdAt: todayStr(),
+                updatedAt: todayStr(),
+                history: [{ tanggal: todayStr(), status: task.inferredStatus, catatan: "Backfill otomatis dari data pesanan lama" }],
+              });
+            }
+            const liveOrder = orderSnap.data();
+            transaction.update(orderRef, {
+              statusProduksi: task.inferredStatus,
+              produksiStatus: task.inferredStatus,
+              produksiSource: "gallery-produksi-auto-backfill",
+              produksiUpdatedAt: todayStr(),
+              ...(isSentStatus(liveOrder?.status) || lower(liveOrder?.status) === "lunas" || lower(liveOrder?.status).includes("batal") || lower(liveOrder?.status).includes("ditutup")
+                ? {}
+                : { status: task.inferredStatus === "Selesai" ? "Selesai Produksi" : "Proses" }),
+              updatedAt: todayStr(),
+            });
+          });
+        } else {
+          const { prod, order, inferredStatus, shouldLink, shouldUpgradeStatus, shouldFixItems } = task;
+          const prodRef = doc(db, C.PRODUKSI, prod.id);
+          const orderRef = doc(db, C.ORDERS, order.id);
+          await runTransaction(db, async (transaction) => {
+            const prodSnap = await transaction.get(prodRef);
+            const orderSnap = await transaction.get(orderRef);
+            if (!prodSnap.exists() || !orderSnap.exists()) return;
+            const liveProd = prodSnap.data();
+            const liveOrder = orderSnap.data();
+            const nextStatus = productionStatusRank(inferredStatus) > productionStatusRank(liveProd.status) ? inferredStatus : liveProd.status || "Antri";
+            const prodPatch = { updatedAt: todayStr() };
+            if (shouldLink) {
+              prodPatch.orderId = order.id;
+              prodPatch.invoice = liveProd.invoice || order.invoice || "";
+              prodPatch.customer = liveProd.customer || order.customer || "-";
+            }
+            if (shouldFixItems) prodPatch.items = buildProductionItemsFromOrder(order, liveProd);
+            if (shouldUpgradeStatus && nextStatus !== liveProd.status) {
+              prodPatch.status = nextStatus;
+              prodPatch.history = [
+                ...(Array.isArray(liveProd.history) ? liveProd.history : []),
+                { tanggal: todayStr(), status: nextStatus, catatan: "Status otomatis dihitung ulang dari data lama/pengiriman/setor" },
+              ];
+            }
+            transaction.update(prodRef, prodPatch);
+            transaction.update(orderRef, {
+              statusProduksi: nextStatus,
+              produksiStatus: nextStatus,
+              produksiSource: "gallery-produksi-auto-backfill",
+              produksiUpdatedAt: todayStr(),
+              ...(isSentStatus(liveOrder?.status) || lower(liveOrder?.status) === "lunas" || lower(liveOrder?.status).includes("batal") || lower(liveOrder?.status).includes("ditutup")
+                ? {}
+                : nextStatus === "Selesai" ? { status: "Selesai Produksi" } : { status: "Proses" }),
+              updatedAt: todayStr(),
+            });
+          });
+        }
+      } catch (e) {
+        console.warn("Backfill/normalisasi produksi gagal:", task.order?.invoice || task.prod?.invoice || task.prod?.id, e);
+      } finally {
+        productionBackfillSyncingRef.current.delete(key);
+      }
+    });
+  }, [user, orders, produksi, productionEntries, produksiByOrderId, shipmentByOrderId]);
 
   function orderSmallStatus(order) {
     const kirim = shipmentByOrderId.get(order.id);
@@ -1961,6 +2220,26 @@ export default function App() {
       .slice(0, 5);
 
     const alerts = [];
+
+    const produksiGroups = new Map();
+    (produksi || []).forEach((prod) => {
+      const key = String(prod.orderId || prod.pesananId || prod.invoice || "").trim();
+      if (!key) return;
+      const arr = produksiGroups.get(key) || [];
+      arr.push(prod);
+      produksiGroups.set(key, arr);
+    });
+    produksiGroups.forEach((arr, key) => {
+      if (arr.length > 1) {
+        const best = arr.reduce((a, b) => chooseBetterProduction(a, b));
+        alerts.push({
+          type: "Produksi duplikat",
+          text: `${best.customer || "Customer"} · ${best.invoice || key} · ${arr.length} data produksi ditemukan`,
+          tab: "produksi",
+        });
+      }
+    });
+
     (productionEntries || []).forEach((entry) => {
       const totals = setorTotals(entry);
       const totalAktivitas = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
@@ -4749,20 +5028,11 @@ function rateDocId(productType, model, process) {
                 </div>
               )}
 
-              {/* Ubah status — compact pills */}
+              {/* Status produksi otomatis dari input borongan/setor/pengiriman.
+                  Tombol ubah status manual sengaja tidak ditampilkan agar proses tidak bergantung klik manual. */}
               <div className="px-4 pb-3">
-                <div className="flex gap-1 flex-wrap">
-                  {PROD_STATUS.map((s) => (
-                    <button key={s} onClick={() => updateProduksiStatus(p.id, s)}
-                      className="rounded-full px-2 py-1 text-xs font-semibold"
-                      style={{
-                        background: p.status === s ? "linear-gradient(135deg,#ec4899,#a855f7)" : "#fdf2f8",
-                        color: p.status === s ? "white" : "#a855f7",
-                        border: "1px solid #f9a8d4",
-                      }}>
-                      {PROD_COLORS[s]?.icon} {s}
-                    </button>
-                  ))}
+                <div className="rounded-2xl px-3 py-2 text-xs font-bold" style={{ background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>
+                  Status otomatis: {PROD_COLORS[p.status]?.icon || "🧵"} {p.status || "Antri"}
                 </div>
               </div>
             </div>
