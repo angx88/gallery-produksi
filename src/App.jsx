@@ -4,7 +4,7 @@ import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
 import { safeDocId } from "./utils/idUtils";
-import { normalizeInvoice } from "./utils/normalizers";
+import { normalizeInvoice, normalizeKey } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -147,9 +147,6 @@ function orderItemsForMaterial(order) {
     mainMaterial: materialNameFromItem(it) || materialNameFromItem(order?.raw) || materialNameFromItem(order),
     materialQtyPerPcs: materialQtyPerPcsFromItem(it) || materialQtyPerPcsFromItem(order?.raw) || materialQtyPerPcsFromItem(order),
   }));
-}
-function normalizeKey(value) {
-  return lower(value).replace(/[^a-z0-9]/g, "");
 }
 function todayStr() {
   return new Date().toISOString().split("T")[0];
@@ -6748,6 +6745,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
