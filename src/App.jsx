@@ -1032,7 +1032,8 @@ function safeShipment(d) {
 function Button({ children, onClick, className = "", style = {}, disabled }) {
   return (
     <button
-      disabled={disabled}
+      type="button"
+      disabled={Boolean(disabled)}
       onClick={onClick}
       className={`px-4 py-3 text-white transition-all active:scale-95 shadow-sm ${className}`}
       style={{ borderRadius: 16, fontWeight: 800, opacity: disabled ? 0.55 : 1, ...style }}
@@ -1234,6 +1235,18 @@ export default function App() {
     setToast(msg);
     toastTimerRef.current = setTimeout(() => setToast(""), duration);
   }, []);
+
+  // Pengaman khusus tombol Simpan:
+  // kalau proses simpan gagal/terputus dan isSaving tersangkut true,
+  // tombol simpan dibuka lagi supaya input tidak terkunci.
+  useEffect(() => {
+    if (!isSaving) return undefined;
+    const timer = setTimeout(() => {
+      setIsSaving(false);
+      showToast("⚠️ Proses simpan terlalu lama. Tombol Simpan dibuka lagi.", 3500);
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [isSaving, showToast]);
 
   useEffect(() => {
     const syncAutoPeriod = () => {
