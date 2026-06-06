@@ -32,3 +32,7 @@ export function normalizeModelKey(name) {
 export function normalizeProductTypeKey(name) {
   return normalizeCompactKey(name);
 }
+
+export function normalizeMasterKey(value) {
+  return normalizeKey(value);
+}
