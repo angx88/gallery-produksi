@@ -1244,7 +1244,7 @@ export default function App() {
   const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
   const [editEntryModal, setEditEntryModal] = useState(null); // entry yang sedang diedit
-  const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
+  const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "", orderId: "" });
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
   const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false);
@@ -2632,6 +2632,27 @@ export default function App() {
     return { limit: Number(order.qty || 0), label: "pesanan" };
   }
 
+  function confirmQtyOverLimit({ process, label, limit, alreadyQty, inputQty, mode = "input" }) {
+    if (!(limit > 0) || Number(alreadyQty || 0) + Number(inputQty || 0) <= limit) return true;
+    return window.confirm(
+      `⚠️ Qty ${process} melebihi qty ${label}.\n` +
+      `Batas: ${limit} pcs\n` +
+      `Sudah input: ${alreadyQty} pcs\n` +
+      `${mode === "edit" ? "Qty baru" : "Input baru"}: ${inputQty} pcs\n\n` +
+      `Lanjutkan simpan? Gunakan ini hanya jika ada koreksi/hitungan lapangan yang memang benar.`
+    );
+  }
+
+  function qcProgressForOrder(order) {
+    const prod = produksiByOrderId.get(order?.id);
+    const qtyPesanan = Math.max(0, Number(prod?.qty || dashboardTotalOrderedQty(order) || order?.qty || 0));
+    const relatedEntries = entriesForProductionOrder(productionEntries, prod, order);
+    const qcSetor = relatedEntries
+      .filter((e) => sameProcess(e.process, "Pengemasan QC"))
+      .reduce((sum, e) => sum + Number(setorTotals(e).qtySetor || 0), 0);
+    return { qtyPesanan, qcSetor, selesai: qtyPesanan > 0 && qcSetor >= qtyPesanan };
+  }
+
   function isDuplicateEntry(payload) {
     return productionEntries.some((e) =>
       normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(payload.employeeName) &&
@@ -3037,14 +3058,13 @@ function rateDocId(productType, model, process) {
         ? processQtyForOrder(order.id, entryForm.process)
         : processQtyForOrderModel(order.id, entryForm.process, cleanModel);
       const nextQty = alreadyQty + Number(entryForm.qty || 0);
-      if (limit > 0 && nextQty > limit) {
-        return alert(
-          `Qty ${entryForm.process} melebihi qty ${label}.\n` +
-          `Batas: ${limit} pcs\n` +
-          `Sudah input: ${alreadyQty} pcs\n` +
-          `Input baru: ${entryForm.qty} pcs`
-        );
-      }
+      if (!confirmQtyOverLimit({
+        process: entryForm.process,
+        label,
+        limit,
+        alreadyQty,
+        inputQty: Number(entryForm.qty || 0),
+      })) return;
     }
 
     const entryId = `entry_${safeDocId(cleanEmployeeName, "worker")}_${safeDocId(entryForm.orderId || "umum", "order")}_${safeDocId(entryForm.process, "process")}_${safeDocId(cleanModel || "all", "model")}_${safeDocId(entryForm.tanggal, "date")}`;
@@ -3099,9 +3119,8 @@ function rateDocId(productType, model, process) {
             .filter((w) => normalizeProcessKey(w.process) === processKey)
             .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
             .reduce((sum, w) => sum + Number(w.qty || 0), 0);
-          if (limit > 0 && alreadyInWorkers + Number(entryPayload.qty || 0) > limit) {
-            throw new Error(`Qty ${entryPayload.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${entryPayload.qty} pcs.`);
-          }
+          // Qty berlebih sudah diperingatkan sebelum transaksi. Tetap izinkan simpan
+          // karena di lapangan bisa ada koreksi hitungan potong/jahit/QC.
         }
 
         transaction.set(entryRef, entryPayload);
@@ -3308,6 +3327,21 @@ function rateDocId(productType, model, process) {
     if (localHasOverDelivery) {
       overDeliveryConfirmed = window.confirm("Ada pesanan yang akan lebih kirim. Kelebihan ini akan menambah tagihan customer di Gallery Kerudung. Lanjut simpan?");
       if (!overDeliveryConfirmed) return;
+    }
+
+    const qcBelumSelesai = selectedOrders
+      .map((order) => ({ order, qc: qcProgressForOrder(order) }))
+      .filter(({ qc }) => qc.qtyPesanan > 0 && qc.qcSetor < qc.qtyPesanan);
+    if (qcBelumSelesai.length > 0) {
+      const detail = qcBelumSelesai
+        .slice(0, 5)
+        .map(({ order, qc }) => `• ${order.invoice || order.customer || order.id}: QC setor ${qc.qcSetor}/${qc.qtyPesanan} pcs`)
+        .join("\n");
+      const okQc = window.confirm(
+        `⚠️ QC/Pengemasan belum selesai di sistem.\n${detail}\n\n` +
+        `Tetap simpan pengiriman? Pilih OK hanya jika barang memang sudah siap/koreksi data akan dibereskan.`
+      );
+      if (!okQc) return;
     }
 
     const totalOrderedLocal = selectedOrders.reduce((sum, order) => sum + dashboardTotalOrderedQty(order), 0);
@@ -3599,7 +3633,6 @@ function rateDocId(productType, model, process) {
         payrollSnap.docs.forEach((d) => batch.delete(d.ref));
         await batch.commit();
         await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi()]);
-        refreshPayroll(); // hapus entry juga hapus payroll terkait
       }
       showToast("🗑️ Data berhasil dihapus", 3000);
     } catch (e) {
@@ -3614,6 +3647,7 @@ function rateDocId(productType, model, process) {
       tanggal: entry.tanggal || todayStr(),
       catatan: entry.catatan || "",
       model: entry.model || "",
+      orderId: entry.orderId || "",
     });
   }
 
@@ -3623,8 +3657,9 @@ function rateDocId(productType, model, process) {
     if (!Number.isFinite(nextQty) || nextQty <= 0) return alert("Qty wajib diisi dan harus lebih dari 0.");
 
     const nextModel = canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
+    const nextOrderId = editEntryForm.orderId || editEntryModal.orderId || "";
 
-    const editOrder = orders.find((o) => o.id === editEntryModal.orderId);
+    const editOrder = orders.find((o) => o.id === nextOrderId);
     if (editOrder) {
       const { limit, label } = getOrderProcessLimit(editOrder, editEntryModal.process, nextModel);
       const alreadyQty = isGeneralRateProcess(editEntryModal.process)
@@ -3633,20 +3668,21 @@ function rateDocId(productType, model, process) {
             .reduce((sum, e) => sum + Number(e.qty || 0), 0)
         : processQtyForOrderModel(editOrder.id, editEntryModal.process, nextModel, editEntryModal.id);
       const combinedQty = alreadyQty + nextQty;
-      if (limit > 0 && combinedQty > limit) {
-        return alert(
-          `Qty ${editEntryModal.process} melebihi qty ${label}.\n` +
-          `Batas: ${limit} pcs\n` +
-          `Sudah input lain: ${alreadyQty} pcs\n` +
-          `Qty baru: ${editEntryForm.qty} pcs`
-        );
-      }
+      if (!confirmQtyOverLimit({
+        process: editEntryModal.process,
+        label,
+        limit,
+        alreadyQty,
+        inputQty: nextQty,
+        mode: "edit",
+      })) return;
     }
 
     const entryRef = doc(db, C.PRODUCTION_ENTRIES, editEntryModal.id);
+    const nextProd = nextOrderId ? produksiByOrderId.get(nextOrderId) : null;
     const prodRef = editEntryModal.produksiId
       ? doc(db, C.PRODUKSI, editEntryModal.produksiId)
-      : null;
+      : (nextProd?.id ? doc(db, C.PRODUKSI, nextProd.id) : null);
 
     setIsSaving(true);
     try {
@@ -3681,6 +3717,15 @@ function rateDocId(productType, model, process) {
           updatedAt: todayStr(),
         };
         updates.model = nextModel;
+        if (!liveEntry.orderId && nextOrderId) {
+          const linkedOrder = orders.find((o) => o.id === nextOrderId);
+          updates.orderId = nextOrderId;
+          updates.pesananId = nextOrderId;
+          updates.produksiId = nextProd?.id || liveEntry.produksiId || "";
+          updates.invoice = linkedOrder?.invoice || liveEntry.invoice || "";
+          updates.customer = linkedOrder?.customer || liveEntry.customer || "";
+          updates.item = linkedOrder?.item || liveEntry.item || "";
+        }
 
         if (prodRef) {
           const prodSnap = await transaction.get(prodRef);
@@ -3701,11 +3746,10 @@ function rateDocId(productType, model, process) {
                 .filter((w) => normalizeProcessKey(w.process) === processKey)
                 .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
                 .reduce((sum, w) => sum + Number(w.qty || 0), 0);
-              if (limit > 0 && alreadyInWorkers + Number(updates.qty || 0) > limit) {
-                throw new Error(`Qty ${liveEntry.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${updates.qty} pcs.`);
-              }
+              // Qty berlebih sudah diperingatkan sebelum transaksi. Tetap izinkan simpan
+              // untuk koreksi lapangan yang sudah dikonfirmasi admin.
             }
-            const nextWorkers = liveWorkers.map((w) => {
+            let nextWorkers = liveWorkers.map((w) => {
               if (w.entryId !== liveEntry.id) return w;
               return {
                 ...w,
@@ -3716,6 +3760,20 @@ function rateDocId(productType, model, process) {
                 process: liveEntry.process || w.process,
               };
             });
+            if (!nextWorkers.some((w) => w.entryId === liveEntry.id) && nextOrderId) {
+              nextWorkers = [
+                ...nextWorkers,
+                {
+                  employeeName: liveEntry.employeeName,
+                  process: liveEntry.process,
+                  productType: liveEntry.productType || editEntryModal.productType || "Kerudung",
+                  model: nextModel,
+                  qty: updates.qty,
+                  tanggal: updates.tanggal,
+                  entryId: liveEntry.id,
+                },
+              ];
+            }
             transaction.update(prodRef, {
               workers: nextWorkers,
               updatedAt: todayStr(),
@@ -3726,6 +3784,7 @@ function rateDocId(productType, model, process) {
         transaction.update(entryRef, updates);
       });
 
+      await Promise.all([refreshProductionEntries(), refreshProduksi()]);
       setEditEntryModal(null);
       showToast("✅ Entry berhasil diupdate", 3000);
     } catch (e) {
@@ -3916,7 +3975,17 @@ function rateDocId(productType, model, process) {
     const potonganKasbonEstimasi = Math.min(totalKasbon, jumlah);
     const gajiDiterimaEstimasi = jumlah - potonganKasbonEstimasi;
 
+    const belumSetorPeriode = productionEntries.filter((e) =>
+      normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
+      dateInRange(e.tanggal, dari, sampai) &&
+      Number(setorTotals(e).sisaSetor || 0) > 0
+    );
+    const belumSetorPcsPeriode = belumSetorPeriode.reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0);
+
     let konfirmasiMsg = `Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nGaji kotor: ${money(jumlah)}`;
+    if (belumSetorPcsPeriode > 0) {
+      konfirmasiMsg += `\n\n⚠️ Masih ada ${belumSetorPcsPeriode} pcs borongan periode ini yang belum setor. Item itu belum masuk gaji sekarang dan akan masuk setelah disetor.`;
+    }
     if (totalKasbon > 0) {
       konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
     }
@@ -5459,6 +5528,11 @@ function rateDocId(productType, model, process) {
                   <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
                   <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
                   {e.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {e.invoice}</div>}
+                  {!e.orderId && (
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      <span className="rounded-full px-2 py-0.5 text-[11px] font-black" style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}>⚠️ Tanpa Pesanan</span>
+                    </div>
+                  )}
                   <div className="text-xs" style={{ color: "#94a3b8" }}>📅 {e.tanggal}</div>
                 </div>
                 <div className="text-right">
@@ -5479,6 +5553,15 @@ function rateDocId(productType, model, process) {
                 >
                   ✏️ Edit
                 </button>
+                {!e.orderId && (
+                  <button
+                    onClick={() => openEditEntry(e)}
+                    className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                    style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}
+                  >
+                    🔗 Kaitkan ke Pesanan
+                  </button>
+                )}
                 <button
                   onClick={() => requestDeleteEntry(e)}
                   className="flex-1 rounded-2xl py-2 text-xs font-bold"
@@ -6851,6 +6934,17 @@ function rateDocId(productType, model, process) {
                 ⚠️ Nama pekerja & proses tidak bisa diubah di sini
               </div>
             </div>
+
+            {!editEntryModal.orderId && (
+              <Select
+                label="Kaitkan ke Pesanan"
+                value={editEntryForm.orderId}
+                onChange={(v) => setEditEntryForm(f => ({ ...f, orderId: v, model: v ? "" : f.model }))}
+              >
+                <option value="">Belum dikaitkan</option>
+                {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
+              </Select>
+            )}
 
             {/* Model — hanya untuk non-QC */}
             {!isGeneralRateProcess(editEntryModal.process) && (
