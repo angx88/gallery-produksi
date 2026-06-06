@@ -1,4 +1,4 @@
-export function normText(value) {
+﻿export function normText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
@@ -15,7 +15,8 @@ export function isJahitProcess(process) {
 }
 
 export function isQcProcess(process) {
-  return sameProcess(process, "Pengemasan QC");
+  const value = normText(process);
+  return value === normText("Pengemasan QC") || value === "qc";
 }
 
 export function entryProcessRequiresOrder(process) {

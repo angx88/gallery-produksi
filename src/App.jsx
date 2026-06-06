@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
 import {
@@ -20,6 +20,7 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import "./index.css";
+import { sameProcess, entryProcessRequiresOrder, entryProcessWarnsWithoutOrder } from "./utils/processUtils";
 const provider = new GoogleAuthProvider();
 const C = {
   ORDERS: "orders",
@@ -65,18 +66,12 @@ function isGeneralRateProcess(process) {
 function isModelSpecificProcess(process) {
   return MODEL_SPECIFIC_PROCESSES.some((p) => normalizeProcessKey(p) === normalizeProcessKey(process));
 }
-function entryProcessRequiresOrder(process) {
-  return sameProcess(process, "Jahit");
-}
-function entryProcessWarnsWithoutOrder(process) {
-  return sameProcess(process, "Potong") || sameProcess(process, "Pengemasan QC");
-}
 const PROD_COLORS = {
-  Antri: { bg: "#fef3c7", text: "#92400e", icon: "⏳" },
-  Potong: { bg: "#dbeafe", text: "#1e40af", icon: "✂️" },
-  Jahit: { bg: "#ede9fe", text: "#5b21b6", icon: "🧵" },
-  "Pengemasan QC": { bg: "#fce7f3", text: "#9d174d", icon: "📦" },
-  Selesai: { bg: "#d1fae5", text: "#065f46", icon: "✅" },
+  Antri: { bg: "#fef3c7", text: "#92400e", icon: "â³" },
+  Potong: { bg: "#dbeafe", text: "#1e40af", icon: "âœ‚ï¸" },
+  Jahit: { bg: "#ede9fe", text: "#5b21b6", icon: "ðŸ§µ" },
+  "Pengemasan QC": { bg: "#fce7f3", text: "#9d174d", icon: "ðŸ“¦" },
+  Selesai: { bg: "#d1fae5", text: "#065f46", icon: "âœ…" },
 };
 const lower = (v) => String(v || "").toLowerCase();
 function isSentStatus(status) {
@@ -98,7 +93,7 @@ function safeDocId(value, fallback = "doc") {
   const raw = String(value || "").trim().toLowerCase();
   const clean = raw
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[Ì€-Í¯]/g, "")
     .replace(/[^a-z0-9_-]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 120);
@@ -230,7 +225,7 @@ function toTitleCase(str) {
 }
 function cleanMasterText(value) {
   return stripDiacritics(value)
-    .replace(/[’`]/g, "'")
+    .replace(/[â€™`]/g, "'")
     .replace(/[._\-/\\]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -263,9 +258,6 @@ function normalizeProcessKey(value) {
     ((key.includes("qc") || key.includes("quality control")) && (key.includes("packing") || key.includes("pengemasan")));
   if (isPackingQc) return "pengemasan qc";
   return key;
-}
-function sameProcess(a, b) {
-  return normalizeProcessKey(a) === normalizeProcessKey(b);
 }
 function displayProcessName(value) {
   const key = normalizeProcessKey(value);
@@ -1008,7 +1000,7 @@ function GlobalReadableStyle() {
   );
 }
 function StatusBadge({ status }) {
-  const s = PROD_COLORS[status] || { bg: "#f1f5f9", text: "#64748b", icon: "❓" };
+  const s = PROD_COLORS[status] || { bg: "#f1f5f9", text: "#64748b", icon: "â“" };
   return (
     <span className="rounded-full px-3.5 py-1.5 text-xs font-black inline-flex items-center gap-1.5" style={{ background: s.bg, color: s.text, border: "1px solid rgba(15,23,42,0.06)" }}>
       {s.icon} {status || "Antri"}
@@ -1090,7 +1082,7 @@ export default function App() {
     if (!isSaving) return undefined;
     const timer = setTimeout(() => {
       setIsSaving(false);
-      showToast("⚠️ Proses simpan terlalu lama. Tombol Simpan dibuka lagi.", 3500);
+      showToast("âš ï¸ Proses simpan terlalu lama. Tombol Simpan dibuka lagi.", 3500);
     }, 30000);
     return () => clearTimeout(timer);
   }, [isSaving, showToast]);
@@ -1294,10 +1286,10 @@ export default function App() {
         );
       }
       await Promise.all(jobs);
-      showToast("✅ Data sudah diperbarui", 2200);
+      showToast("âœ… Data sudah diperbarui", 2200);
     } catch (e) {
       console.warn("Gagal refresh data:", e);
-      showToast("⚠️ Gagal refresh data. Coba lagi.", 3500);
+      showToast("âš ï¸ Gagal refresh data. Coba lagi.", 3500);
     } finally {
       isRefreshingDataRef.current = false;
       setRefreshingDataUi(false);
@@ -1385,7 +1377,7 @@ export default function App() {
       } catch (e) {
         if (!cancelled) {
           console.warn("Gagal memuat data awal:", e);
-          showToast("⚠️ Gagal memuat sebagian data. Coba refresh aplikasi.", 4000);
+          showToast("âš ï¸ Gagal memuat sebagian data. Coba refresh aplikasi.", 4000);
         }
       }
     })();
@@ -1693,13 +1685,13 @@ export default function App() {
   function orderSmallStatus(order) {
     const kirim = shipmentByOrderId.get(order.id);
     const prod = produksiByOrderId.get(order.id);
-    if ((kirim && kirim.length > 0) || hasDeliveryDetail(order) || isSentStatus(order.status)) return { label: "🚚 Sudah dikirim", color: "#2563eb" };
+    if ((kirim && kirim.length > 0) || hasDeliveryDetail(order) || isSentStatus(order.status)) return { label: "ðŸšš Sudah dikirim", color: "#2563eb" };
     if (prod) {
-      if (prod.status === "Selesai") return { label: "✅ Selesai produksi", color: "#16a34a" };
-      return { label: "🧵 Sedang produksi", color: "#7c3aed" };
+      if (prod.status === "Selesai") return { label: "âœ… Selesai produksi", color: "#16a34a" };
+      return { label: "ðŸ§µ Sedang produksi", color: "#7c3aed" };
     }
-    if (isDoneStatus(order.status)) return { label: "✅ Selesai di Gallery Kerudung", color: "#16a34a" };
-    return { label: "⚠ Belum masuk produksi", color: "#d97706" };
+    if (isDoneStatus(order.status)) return { label: "âœ… Selesai di Gallery Kerudung", color: "#16a34a" };
+    return { label: "âš  Belum masuk produksi", color: "#d97706" };
   }
   const filteredOrders = useMemo(() => {
     const isBelumProduksi = (o) => {
@@ -2106,7 +2098,7 @@ export default function App() {
       await batch.commit();
       setProduksi((prev) => (prev || []).filter((row) => !deletableRows.some((del) => del.id === row.id)));
       await refreshProduksi();
-      showToast(`✅ ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
+      showToast(`âœ… ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
     } catch (e) {
       console.error(e);
       alert(friendlyErrorMessage("Membersihkan duplikat", e));
@@ -2147,7 +2139,7 @@ export default function App() {
       const duplicateKey = normalizedInvoice(sample.invoice || sample.orderInvoice || sample.orderId || sample.pesananId || sample.id);
       alerts.push({
         type: "Produksi duplikat",
-        text: `${sample.customer || "Customer"} · ${sample.invoice || sample.orderId || sample.id || "-"} · ${rows.length} data produksi ditemukan`,
+        text: `${sample.customer || "Customer"} Â· ${sample.invoice || sample.orderId || sample.id || "-"} Â· ${rows.length} data produksi ditemukan`,
         tab: "produksi",
         search: sample.invoice || sample.orderId || sample.customer || "",
         duplicateKey,
@@ -2160,7 +2152,7 @@ export default function App() {
       if (diberi > 0 && totalAktivitas > diberi) {
         alerts.push({
           type: "Setor melebihi diberi",
-          text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
+          text: `${displayWorkerName(entry.employeeName)} Â· ${entry.process || "-"} Â· ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
           tab: "borongan",
           search: displayWorkerName(entry.employeeName),
         });
@@ -2168,7 +2160,7 @@ export default function App() {
       if (Number(entry.rate || 0) <= 0) {
         alerts.push({
           type: "Tarif kosong",
-          text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")}`,
+          text: `${displayWorkerName(entry.employeeName)} Â· ${entry.process || "-"} Â· ${displayModelName(entry.model || "-")}`,
           tab: "tarif",
           search: displayModelName(entry.model || ""),
         });
@@ -2178,7 +2170,7 @@ export default function App() {
       if (dashboardTotalOrderedQty(order) <= 0) {
         alerts.push({
           type: "Order tanpa produk/qty",
-          text: `${order.customer || order.raw?.customer || "Tanpa nama"} · ${order.invoice || order.raw?.invoice || order.id}`,
+          text: `${order.customer || order.raw?.customer || "Tanpa nama"} Â· ${order.invoice || order.raw?.invoice || order.id}`,
           tab: "pesanan",
           search: order.invoice || order.customer || "",
         });
@@ -2190,7 +2182,7 @@ export default function App() {
           if (item && (item.itemIndex === undefined || item.itemIndex === null || item.itemIndex === "")) {
             alerts.push({
               type: "Pengiriman tanpa itemIndex",
-              text: `${order.customer || "Tanpa nama"} · ${order.invoice || order.id} · kirim ${dIdx + 1}.${iIdx + 1}`,
+              text: `${order.customer || "Tanpa nama"} Â· ${order.invoice || order.id} Â· kirim ${dIdx + 1}.${iIdx + 1}`,
               tab: "kirim",
               search: order.invoice || order.customer || "",
             });
@@ -2269,7 +2261,7 @@ export default function App() {
   function confirmQtyOverLimit({ process, label, limit, alreadyQty, inputQty, mode = "input" }) {
     if (!(limit > 0) || Number(alreadyQty || 0) + Number(inputQty || 0) <= limit) return true;
     return window.confirm(
-      `⚠️ Qty ${process} melebihi qty ${label}.\n` +
+      `âš ï¸ Qty ${process} melebihi qty ${label}.\n` +
       `Batas: ${limit} pcs\n` +
       `Sudah input: ${alreadyQty} pcs\n` +
       `${mode === "edit" ? "Qty baru" : "Input baru"}: ${inputQty} pcs\n\n` +
@@ -2469,7 +2461,7 @@ function rateDocId(productType, model, process) {
     } else if (totalJahitSetor > 0) {
       newStatus = "Jahit";
     } else if (potongSelesai) {
-      newStatus = "Jahit"; // Potong sudah selesai semua → lanjut ke Jahit
+      newStatus = "Jahit"; // Potong sudah selesai semua â†’ lanjut ke Jahit
     } else if (totalPotongSetor > 0) {
       newStatus = "Potong";
     }
@@ -2555,7 +2547,7 @@ function rateDocId(productType, model, process) {
           });
         }
       });
-      showToast("✅ Status produksi diperbarui", 2500);
+      showToast("âœ… Status produksi diperbarui", 2500);
     } catch (e) {
       alert(friendlyErrorMessage("Update status", e));
     } finally {
@@ -2589,7 +2581,7 @@ function rateDocId(productType, model, process) {
       await refreshWorkRates();
       setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
       setModal(null);
-      showToast("✅ Tarif berhasil disimpan", 2500);
+      showToast("âœ… Tarif berhasil disimpan", 2500);
     } catch (e) {
       alert(friendlyErrorMessage("Simpan tarif", e));
     } finally {
@@ -2605,7 +2597,7 @@ function rateDocId(productType, model, process) {
     }
     if (!entryForm.orderId && entryProcessWarnsWithoutOrder(entryForm.process)) {
       const okNoOrder = window.confirm(
-        `⚠️ ${entryForm.process} belum dikaitkan ke pesanan.\n\n` +
+        `âš ï¸ ${entryForm.process} belum dikaitkan ke pesanan.\n\n` +
         `Entry tetap boleh disimpan dan tetap bisa disetor/masuk rekap gaji, tapi tidak akan ikut progress pesanan di Tab Produksi sampai dikaitkan.\n\n` +
         `Lanjut simpan tanpa pesanan?`
       );
@@ -2796,7 +2788,7 @@ function rateDocId(productType, model, process) {
         nextHistoryForStatus = nextHistory;
         nextSisaForToast = nextSisa;
       });
-      showToast(nextSisaForToast > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "✅ Setor selesai tersimpan.", 3500);
+      showToast(nextSisaForToast > 0 ? `âœ… Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "âœ… Setor selesai tersimpan.", 3500);
       await autoUpdateProduksiStatus(setorModal, nextHistoryForStatus);
       await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi(), refreshOrders()]); // setor membuat dokumen payroll baru dan bisa mengubah status produksi
       setSetorModal(null);
@@ -2819,10 +2811,10 @@ function rateDocId(productType, model, process) {
     if (unlinkedSetorEntries.length > 0) {
       const preview = unlinkedSetorEntries
         .slice(0, 5)
-        .map((e) => `• ${displayWorkerName(e.employeeName)} · ${e.process}${e.model ? ` · ${e.model}` : ""} · setor ${Number(getEntrySetorTotals(e).qtySetor || 0)} pcs`)
+        .map((e) => `â€¢ ${displayWorkerName(e.employeeName)} Â· ${e.process}${e.model ? ` Â· ${e.model}` : ""} Â· setor ${Number(getEntrySetorTotals(e).qtySetor || 0)} pcs`)
         .join("\n");
       const okUnlinked = window.confirm(
-        `⚠️ Ada ${unlinkedSetorEntries.length} entry borongan sudah setor tapi masih Tanpa Pesanan.\n${preview}\n\n` +
+        `âš ï¸ Ada ${unlinkedSetorEntries.length} entry borongan sudah setor tapi masih Tanpa Pesanan.\n${preview}\n\n` +
         `Kalau entry ini milik pesanan yang akan dikirim, kaitkan dulu di Tab Borongan agar progress produksi benar.\n\n` +
         `Tetap lanjut simpan pengiriman?`
       );
@@ -2883,10 +2875,10 @@ function rateDocId(productType, model, process) {
     if (qcBelumSelesai.length > 0) {
       const detail = qcBelumSelesai
         .slice(0, 5)
-        .map(({ order, qc }) => `• ${order.invoice || order.customer || order.id}: QC setor ${qc.qcSetor}/${qc.qtyPesanan} pcs`)
+        .map(({ order, qc }) => `â€¢ ${order.invoice || order.customer || order.id}: QC setor ${qc.qcSetor}/${qc.qtyPesanan} pcs`)
         .join("\n");
       const okQc = window.confirm(
-        `⚠️ QC/Pengemasan belum selesai di sistem.\n${detail}\n\n` +
+        `âš ï¸ QC/Pengemasan belum selesai di sistem.\n${detail}\n\n` +
         `Tetap simpan pengiriman? Pilih OK hanya jika barang memang sudah siap/koreksi data akan dibereskan.`
       );
       if (!okQc) return;
@@ -3164,7 +3156,7 @@ function rateDocId(productType, model, process) {
         await batch.commit();
         await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi()]);
       }
-      showToast("🗑️ Data berhasil dihapus", 3000);
+      showToast("ðŸ—‘ï¸ Data berhasil dihapus", 3000);
     } catch (e) {
       alert(friendlyErrorMessage("Hapus data", e));
     }
@@ -3286,7 +3278,7 @@ function rateDocId(productType, model, process) {
       });
       await Promise.all([refreshProductionEntries(), refreshProduksi()]);
       setEditEntryModal(null);
-      showToast("✅ Entry berhasil diupdate", 3000);
+      showToast("âœ… Entry berhasil diupdate", 3000);
     } catch (e) {
       alert(friendlyErrorMessage("Update data", e));
     } finally {
@@ -3384,7 +3376,7 @@ function rateDocId(productType, model, process) {
         transaction.delete(markerRef);
         transaction.delete(historyRef);
       });
-      showToast("↩️ Status gajian dibatalkan dan kasbon dikembalikan", 3500);
+      showToast("â†©ï¸ Status gajian dibatalkan dan kasbon dikembalikan", 3500);
       refreshKasbon();
       refreshPayroll();
     } catch (e) {
@@ -3410,7 +3402,7 @@ function rateDocId(productType, model, process) {
         source: "input_manual_lama",
         createdAt: todayStr(),
       });
-      showToast("✅ Riwayat gajian berhasil disimpan", 3000);
+      showToast("âœ… Riwayat gajian berhasil disimpan", 3000);
       refreshGajianHistory();
       setFormGajianLama({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
     } catch (e) {
@@ -3433,7 +3425,7 @@ function rateDocId(productType, model, process) {
   async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     if (!nama) return;
     if (sudahGajian(nama, dari, sampai)) {
-      showToast("✅ Status gajian sudah tercatat", 2500);
+      showToast("âœ… Status gajian sudah tercatat", 2500);
       return;
     }
     const jumlah = Number(r?.gaji || 0);
@@ -3450,10 +3442,10 @@ function rateDocId(productType, model, process) {
     const belumSetorPcsPeriode = belumSetorPeriode.reduce((s, e) => s + Number(getEntrySetorTotals(e).sisaSetor || 0), 0);
     let konfirmasiMsg = `Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nGaji kotor: ${money(jumlah)}`;
     if (belumSetorPcsPeriode > 0) {
-      konfirmasiMsg += `\n\n⚠️ Masih ada ${belumSetorPcsPeriode} pcs borongan periode ini yang belum setor. Item itu belum masuk gaji sekarang dan akan masuk setelah disetor.`;
+      konfirmasiMsg += `\n\nâš ï¸ Masih ada ${belumSetorPcsPeriode} pcs borongan periode ini yang belum setor. Item itu belum masuk gaji sekarang dan akan masuk setelah disetor.`;
     }
     if (totalKasbon > 0) {
-      konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
+      konfirmasiMsg += `\n\nðŸ’° Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
     }
     const ok = window.confirm(konfirmasiMsg);
     if (!ok) return;
@@ -3477,7 +3469,7 @@ function rateDocId(productType, model, process) {
         )
       );
       if (!existingSnap.empty) {
-        showToast("✅ Status gajian sudah tercatat (cek server)", 2500);
+        showToast("âœ… Status gajian sudah tercatat (cek server)", 2500);
         return;
       }
       await runTransaction(db, async (transaction) => {
@@ -3554,8 +3546,8 @@ function rateDocId(productType, model, process) {
         });
       });
       const toastMsg = actualPotonganKasbon > 0
-        ? `✅ Gajian tersimpan · Kasbon dipotong ${money(actualPotonganKasbon)}`
-        : "✅ Status berubah menjadi Sudah gajian";
+        ? `âœ… Gajian tersimpan Â· Kasbon dipotong ${money(actualPotonganKasbon)}`
+        : "âœ… Status berubah menjadi Sudah gajian";
       showToast(toastMsg, 3500);
       refreshKasbon();
       refreshPayroll();
@@ -3571,7 +3563,7 @@ function rateDocId(productType, model, process) {
     try {
       await deleteDoc(doc(db, C.GAJIAN_HISTORY, id));
       await refreshGajianHistory();
-      showToast("🗑️ Riwayat gajian dihapus", 2500);
+      showToast("ðŸ—‘ï¸ Riwayat gajian dihapus", 2500);
       refreshGajianHistory();
     } catch (e) {
       alert(friendlyErrorMessage("Menghapus data", e));
@@ -3606,7 +3598,7 @@ function rateDocId(productType, model, process) {
       const tgl = escapeHtml(d.tanggalSetor || d.tanggal || "-");
       const invoice = d.invoice ? `<br><span style="font-size:10px;color:#94a3b8;">${escapeHtml(d.invoice)}</span>` : "";
       const pesanan = d.customer && d.customer !== "-" ? `${escapeHtml(d.customer)}${invoice}` : escapeHtml(d.invoice || "-");
-      const prosesModel = `${escapeHtml(d.process || "")}${d.model && d.model !== "-" ? " · " + escapeHtml(d.model) : ""}`;
+      const prosesModel = `${escapeHtml(d.process || "")}${d.model && d.model !== "-" ? " Â· " + escapeHtml(d.model) : ""}`;
       const setor = d.sudahSetor ? Number(d.qtySetor || 0) : null;
       const reject = Number(d.qtyReject || 0);
       const pendapatan = d.sudahSetor
@@ -3626,15 +3618,15 @@ function rateDocId(productType, model, process) {
     }).join("");
     const carryRows = (carryOver || []).map((e) => {
       const entryOrder = orders.find((o) => o.id === e.orderId);
-      const model = e.model && e.model !== "-" ? ` · ${escapeHtml(e.model)}` : "";
+      const model = e.model && e.model !== "-" ? ` Â· ${escapeHtml(e.model)}` : "";
       const periodeAsli = e.tanggal ? getMingguPeriod(e.tanggal) : null;
       const periode = periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : (e.tanggal || "-");
       const cust = e.customer || entryOrder?.customer || "-";
       const sisaSetor = Number(getEntrySetorTotals(e).sisaSetor || 0);
       return `<div class="carry-item">
         <strong>${escapeHtml(e.process || "")}${model}</strong>
-        <span>${escapeHtml(cust)}${e.invoice ? " · " + escapeHtml(e.invoice) : ""}</span>
-        <span>${escapeHtml(periode)} · ${sisaSetor} pcs belum disetor</span>
+        <span>${escapeHtml(cust)}${e.invoice ? " Â· " + escapeHtml(e.invoice) : ""}</span>
+        <span>${escapeHtml(periode)} Â· ${sisaSetor} pcs belum disetor</span>
       </div>`;
     }).join("");
     const cetakTgl = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
@@ -3654,7 +3646,7 @@ function rateDocId(productType, model, process) {
     </head><body>
       <div class="toolbar"><button onclick="window.print()">Cetak / Simpan PDF</button></div>
       <div class="slip">
-        <div class="header"><img src="${logoSrc}" onerror="this.style.display='none'" /><div><h1>Slip Pendapatan Borongan</h1><p>Gallery Kerudung · Dokumen resmi penggajian borongan</p></div></div>
+        <div class="header"><img src="${logoSrc}" onerror="this.style.display='none'" /><div><h1>Slip Pendapatan Borongan</h1><p>Gallery Kerudung Â· Dokumen resmi penggajian borongan</p></div></div>
         <div class="body">
           <div class="info">
             <div class="info-row"><span>Nama Pekerja</span><strong>${escapeHtml(nama)}</strong></div>
@@ -3669,7 +3661,7 @@ function rateDocId(productType, model, process) {
           ${carryRows ? `<div class="carry"><h3>Tanggungan Minggu Lalu (Belum Disetor)</h3>${carryRows}</div>` : ""}
           <div class="ttd"><div class="ttd-box"><div class="label">Hormat kami,</div><div class="name">${escapeHtml(nama)}</div></div><div class="ttd-box"><div class="label">Mengetahui, Gallery Kerudung</div><div class="name">Astri Apriani</div></div></div>
         </div>
-        <div class="footer">Dicetak otomatis oleh sistem Gallery Kerudung · ${escapeHtml(cetakTgl)}</div>
+        <div class="footer">Dicetak otomatis oleh sistem Gallery Kerudung Â· ${escapeHtml(cetakTgl)}</div>
       </div>
     </body></html>`;
   }
@@ -3692,7 +3684,7 @@ function rateDocId(productType, model, process) {
         printTab.document.write(html);
         printTab.document.close();
       }
-      showToast("✅ Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.", 4500);
+      showToast("âœ… Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.", 4500);
       return html;
     } catch (e) {
       alert(friendlyErrorMessage("Membuat slip gaji", e));
@@ -3848,7 +3840,7 @@ function rateDocId(productType, model, process) {
         ctx.fill();
         ctx.fillStyle = "#2d1b69";
         ctx.font = "bold 16px Segoe UI, Arial";
-        drawWrappedText(ctx, `${d.process || ""}${d.model && d.model !== "-" ? " · " + d.model : ""}`, 50, y + 23, 450, 18, 1);
+        drawWrappedText(ctx, `${d.process || ""}${d.model && d.model !== "-" ? " Â· " + d.model : ""}`, 50, y + 23, 450, 18, 1);
         ctx.fillStyle = "#94a3b8";
         ctx.font = "13px Segoe UI, Arial";
         drawWrappedText(ctx, `${d.customer || "-"}${d.invoice ? " / " + d.invoice : ""}`, 50, y + 45, 440, 16, 1);
@@ -3933,7 +3925,7 @@ function rateDocId(productType, model, process) {
       ctx.fillStyle = "#c084fc";
       ctx.font = "bold 14px Segoe UI, Arial";
       ctx.textAlign = "center";
-      ctx.fillText(`Gallery Kerudung · ${new Date().toLocaleDateString("id-ID")}`, W / 2, y);
+      ctx.fillText(`Gallery Kerudung Â· ${new Date().toLocaleDateString("id-ID")}`, W / 2, y);
       ctx.textAlign = "left";
       const imgUrl = canvas.toDataURL("image/png");
       const res = await fetch(imgUrl);
@@ -3957,7 +3949,7 @@ function rateDocId(productType, model, process) {
           title: `Slip Gaji ${slipImage.nama}`,
           text: `Slip Pendapatan Borongan - ${slipImage.nama} (${slipImage.dari} s/d ${slipImage.sampai})`,
         });
-        showToast("✅ Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.", 3500);
+        showToast("âœ… Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.", 3500);
         return;
       }
       const a = document.createElement("a");
@@ -3966,7 +3958,7 @@ function rateDocId(productType, model, process) {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      showToast("⚠️ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.", 6000);
+      showToast("âš ï¸ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.", 6000);
     } catch (e) {
       if (e?.name === "AbortError") return;
       alert(friendlyErrorMessage("Share slip gaji", e));
@@ -3988,7 +3980,7 @@ function rateDocId(productType, model, process) {
       >
         <GlobalReadableStyle />
         <div className="w-full max-w-sm rounded-3xl bg-white/80 p-8 shadow-xl text-center" style={{ border: "1.5px solid #f9a8d4" }}>
-          <div className="mb-2 text-4xl">🏭✨</div>
+          <div className="mb-2 text-4xl">ðŸ­âœ¨</div>
           <div
             className="mb-1 text-3xl font-bold"
             style={{
@@ -4030,7 +4022,7 @@ function rateDocId(productType, model, process) {
         <div className="flex items-start justify-between relative z-10">
           <div>
             <div className="hd-header-title text-4xl font-black leading-tight">Gallery Produksi</div>
-            <div className="mt-2 text-lg font-bold opacity-95">💕 made by order ✨</div>
+            <div className="mt-2 text-lg font-bold opacity-95">ðŸ’• made by order âœ¨</div>
           </div>
           <div className="flex flex-col items-center gap-3">
             <img
@@ -4046,7 +4038,7 @@ function rateDocId(productType, model, process) {
           </div>
         </div>
         <div className="mt-7 rounded-3xl px-5 py-4 flex items-center gap-4 relative z-10" style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.25)" }}>
-          <span className="text-2xl">🔍</span>
+          <span className="text-2xl">ðŸ”</span>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -4061,19 +4053,19 @@ function rateDocId(productType, model, process) {
             style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.35)" }}
             title="Refresh data"
           >
-            <span>{refreshingDataUi ? "..." : "↻"}</span>
+            <span>{refreshingDataUi ? "..." : "â†»"}</span>
             <span>{refreshingDataUi ? "Memuat" : "Refresh"}</span>
           </button>
-          {search && <button type="button" onClick={() => setSearch("")} className="text-pink-100 font-bold">✕</button>}
+          {search && <button type="button" onClick={() => setSearch("")} className="text-pink-100 font-bold">âœ•</button>}
         </div>
       </div>
       <div className="hd-stat-grid grid grid-cols-5 gap-2 p-4">
         {[
-          { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋" },
-          { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "⏳" },
-          { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "🧵" },
-          { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "✅" },
-          { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "🔎" },
+          { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "ðŸ“‹" },
+          { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "â³" },
+          { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "ðŸ§µ" },
+          { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "âœ…" },
+          { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "ðŸ”Ž" },
         ].map((s) => (
           <div key={s.label} className="hd-stat-card rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1.2px solid #fbcfe8" }}>
             <div className="text-base">{s.icon}</div>
@@ -4086,10 +4078,10 @@ function rateDocId(productType, model, process) {
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fecaca", background: "linear-gradient(135deg,#fff1f2,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>ðŸš¨ Alert Data Bermasalah</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
               </div>
-              <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
+              <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek â€º</button>
             </div>
             {dashboardInsights.alerts.length === 0 ? (
               <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>Tidak ada alert data bermasalah.</div>
@@ -4126,7 +4118,7 @@ function rateDocId(productType, model, process) {
       {stats.belum > 0 && (
         <div className="mx-4 mb-2 rounded-2xl px-4 py-3 flex items-center gap-3"
           style={{ background: "linear-gradient(135deg,#fef3c7,#fde68a)", border: "1.5px solid #fbbf24" }}>
-          <span className="text-xl">⚠️</span>
+          <span className="text-xl">âš ï¸</span>
           <div className="flex-1">
             <div className="text-xs font-bold" style={{ color: "#92400e" }}>{stats.belum} pesanan belum masuk produksi</div>
             <div className="text-xs" style={{ color: "#b45309" }}>Tambahkan dari tab Produksi</div>
@@ -4144,14 +4136,14 @@ function rateDocId(productType, model, process) {
         <div className="mx-4 mb-2 rounded-2xl px-4 py-3"
           style={{ background: "linear-gradient(135deg,#fff1f2,#fff7ed)", border: "1.5px solid #fb7185" }}>
           <div className="flex items-start gap-3">
-            <span className="text-xl">🔎</span>
+            <span className="text-xl">ðŸ”Ž</span>
             <div className="flex-1">
               <div className="text-xs font-black" style={{ color: "#be123c" }}>{stats.perluDicek} pesanan perlu dicek</div>
               <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Keterangan ini membantu admin baru memahami kenapa pesanan tidak masuk kategori normal.</div>
               <div className="mt-2 space-y-1">
                 {ordersPerluDicek.slice(0, 4).map((o) => (
                   <div key={o.id} className="rounded-xl bg-white px-3 py-2 text-[11px]" style={{ border: "1px solid #fecdd3" }}>
-                    <div className="font-bold" style={{ color: "#2d1b69" }}>{o.customer} · {o.invoice}</div>
+                    <div className="font-bold" style={{ color: "#2d1b69" }}>{o.customer} Â· {o.invoice}</div>
                     <div style={{ color: "#be123c" }}>{o.alasan}</div>
                   </div>
                 ))}
@@ -4173,13 +4165,13 @@ function rateDocId(productType, model, process) {
       )}
       <div className="sticky top-0 z-40 flex overflow-x-auto bg-white shadow-sm no-scrollbar" style={{ borderBottom: "2px solid #fbcfe8" }}>
         {[
-          { id: "dashboard", label: "Dashboard", icon: "🏠" },
-          { id: "pesanan", label: "Pesanan", icon: "📋", badge: stats.belum },
-          { id: "produksi", label: "Produksi", icon: "🧵" },
-          { id: "borongan", label: "Borongan", icon: "💪" },
-          { id: "kirim", label: "Kirim", icon: "🚚" },
-          { id: "rekap", label: "Rekap", icon: "📊" },
-          { id: "master", label: "Master", icon: "🗂️" },
+          { id: "dashboard", label: "Dashboard", icon: "ðŸ " },
+          { id: "pesanan", label: "Pesanan", icon: "ðŸ“‹", badge: stats.belum },
+          { id: "produksi", label: "Produksi", icon: "ðŸ§µ" },
+          { id: "borongan", label: "Borongan", icon: "ðŸ’ª" },
+          { id: "kirim", label: "Kirim", icon: "ðŸšš" },
+          { id: "rekap", label: "Rekap", icon: "ðŸ“Š" },
+          { id: "master", label: "Master", icon: "ðŸ—‚ï¸" },
         ].map((t) => {
           const isMasterTab = t.id === "master" && (tab === "kain" || tab === "tarif");
           const isActive = tab === t.id || isMasterTab;
@@ -4219,10 +4211,10 @@ function rateDocId(productType, model, process) {
           <div className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
             <div className="flex items-center justify-between mb-3">
               <div>
-                <div className="text-lg font-black" style={{ color: "#ec4899" }}>📌 Dashboard Produksi</div>
+                <div className="text-lg font-black" style={{ color: "#ec4899" }}>ðŸ“Œ Dashboard Produksi</div>
                 <div className="text-xs font-bold" style={{ color: "#64748b" }}>Ringkasan total keseluruhan dan periode berjalan</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#fdf2f8", color: "#ec4899" }}>Rekap ›</button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#fdf2f8", color: "#ec4899" }}>Rekap â€º</button>
             </div>
             <div className="grid grid-cols-2 gap-3">
               {[
@@ -4241,22 +4233,22 @@ function rateDocId(productType, model, process) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "💰", detail: "allTime" },
-              { label: "Produksi aktif", value: dashboardSummary.produksiAktif.toLocaleString(), color: "#a855f7", icon: "🧵", tab: "produksi" },
-              { label: "Borongan aktif", value: dashboardSummary.boronganAktif.toLocaleString(), color: "#f59e0b", icon: "💪", tab: "borongan" },
-              { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "⏳", tab: "produksi" },
-              { label: "Pcs pesanan", value: dashboardSummary.pesananPcs.toLocaleString(), color: "#6366f1", icon: "📋", tab: "pesanan" },
-              { label: "Pcs terkirim", value: dashboardSummary.terkirimPcs.toLocaleString(), color: "#0ea5e9", icon: "🚚", tab: "kirim" },
-              { label: "Pcs belum produksi", value: dashboardSummary.pcsBelumProduksi.toLocaleString(), color: dashboardSummary.pcsBelumProduksi > 0 ? "#d97706" : "#94a3b8", icon: "🧵", tab: "pesanan" },
-              { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "📦", tab: "kirim" },
-              { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "⚠️", tab: "kirim" },
-              { label: "Kurang kirim final", value: dashboardSummary.kurangKirimFinal.toLocaleString(), color: dashboardSummary.kurangKirimFinal > 0 ? "#b45309" : "#94a3b8", icon: "📌", tab: "kirim" },
-              { label: "Master data", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "🗂️", tab: "kain" },
+              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "ðŸ’°", detail: "allTime" },
+              { label: "Produksi aktif", value: dashboardSummary.produksiAktif.toLocaleString(), color: "#a855f7", icon: "ðŸ§µ", tab: "produksi" },
+              { label: "Borongan aktif", value: dashboardSummary.boronganAktif.toLocaleString(), color: "#f59e0b", icon: "ðŸ’ª", tab: "borongan" },
+              { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "â³", tab: "produksi" },
+              { label: "Pcs pesanan", value: dashboardSummary.pesananPcs.toLocaleString(), color: "#6366f1", icon: "ðŸ“‹", tab: "pesanan" },
+              { label: "Pcs terkirim", value: dashboardSummary.terkirimPcs.toLocaleString(), color: "#0ea5e9", icon: "ðŸšš", tab: "kirim" },
+              { label: "Pcs belum produksi", value: dashboardSummary.pcsBelumProduksi.toLocaleString(), color: dashboardSummary.pcsBelumProduksi > 0 ? "#d97706" : "#94a3b8", icon: "ðŸ§µ", tab: "pesanan" },
+              { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "ðŸ“¦", tab: "kirim" },
+              { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "âš ï¸", tab: "kirim" },
+              { label: "Kurang kirim final", value: dashboardSummary.kurangKirimFinal.toLocaleString(), color: dashboardSummary.kurangKirimFinal > 0 ? "#b45309" : "#94a3b8", icon: "ðŸ“Œ", tab: "kirim" },
+              { label: "Master data", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "ðŸ—‚ï¸", tab: "kain" },
             ].map((card) => (
               <button key={card.label} onClick={() => card.detail ? setRekapDetailModal(card.detail) : setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xl">{card.icon}</span>
-                  <span className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian ›</span>
+                  <span className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian â€º</span>
                 </div>
                 <div className="mt-2 text-xl font-black break-words" style={{ color: card.color }}>{card.value}</div>
                 <div className="text-xs font-semibold" style={{ color: "#64748b" }}>{card.label}</div>
@@ -4266,10 +4258,10 @@ function rateDocId(productType, model, process) {
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fed7aa", background: "linear-gradient(135deg,#fff7ed,#ffffff)" }}>
             <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-sm font-black" style={{ color: "#c2410c" }}>✅ Tugas Hari Ini</div>
+                <div className="text-sm font-black" style={{ color: "#c2410c" }}>âœ… Tugas Hari Ini</div>
                 <div className="text-[11px]" style={{ color: "#9a3412" }}>Ringkasan yang perlu dicek admin.</div>
               </div>
-              <button onClick={() => setTugasDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan ›</button>
+              <button onClick={() => setTugasDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan â€º</button>
             </div>
             <div className="grid grid-cols-3 gap-2">
               <button
@@ -4305,7 +4297,7 @@ function rateDocId(productType, model, process) {
                     onClick={() => { setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
-                    • {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})
+                    â€¢ {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})
                   </button>
                 ))}
                 {dashboardInsights.tugas.activeProduksi.slice(0, 1).map((item) => (
@@ -4314,7 +4306,7 @@ function rateDocId(productType, model, process) {
                     onClick={() => { setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
-                    • Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}
+                    â€¢ Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}
                   </button>
                 ))}
                 {dashboardInsights.tugas.kirimBelumLengkap.slice(0, 1).map(({ order, sisa }) => (
@@ -4323,7 +4315,7 @@ function rateDocId(productType, model, process) {
                     onClick={() => { setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
-                    • {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs
+                    â€¢ {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs
                   </button>
                 ))}
               </div>
@@ -4332,10 +4324,10 @@ function rateDocId(productType, model, process) {
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bbf7d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#15803d" }}>🏆 Top Pekerja Bulan Ini</div>
-                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.monthLabel} · berdasarkan pcs setor</div>
+                <div className="text-sm font-black" style={{ color: "#15803d" }}>ðŸ† Top Pekerja Bulan Ini</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.monthLabel} Â· berdasarkan pcs setor</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dcfce7", color: "#15803d" }}>Rekap ›</button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dcfce7", color: "#15803d" }}>Rekap â€º</button>
             </div>
             {dashboardInsights.topPekerja.length === 0 ? (
               <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada setor bulan ini.</div>
@@ -4359,10 +4351,10 @@ function rateDocId(productType, model, process) {
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #ddd6fe", background: "linear-gradient(135deg,#faf5ff,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#7c3aed" }}>📈 Grafik Mingguan</div>
+                <div className="text-sm font-black" style={{ color: "#7c3aed" }}>ðŸ“ˆ Grafik Mingguan</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>Pcs setor, reject, dan gaji per minggu.</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>Detail ›</button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>Detail â€º</button>
             </div>
             <div className="space-y-2">
               {dashboardInsights.weeklyRows.map((row) => {
@@ -4372,7 +4364,7 @@ function rateDocId(productType, model, process) {
                   <div key={row.key} className="space-y-1">
                     <div className="flex justify-between text-[10px]" style={{ color: "#64748b" }}>
                       <span>{row.dari.slice(5)} s/d {row.sampai.slice(5)}</span>
-                      <span>{fmtQty(row.pcsSetor)} setor · {fmtQty(row.pcsReject)} reject · {money(row.gaji)}</span>
+                      <span>{fmtQty(row.pcsSetor)} setor Â· {fmtQty(row.pcsReject)} reject Â· {money(row.gaji)}</span>
                     </div>
                     <div className="h-3 rounded-full overflow-hidden" style={{ background: "#f3e8ff" }}>
                       <div className="h-full rounded-full" style={{ width: `${width}%`, background: "linear-gradient(90deg,#a855f7,#ec4899)" }} />
@@ -4385,10 +4377,10 @@ function rateDocId(productType, model, process) {
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #a7f3d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#065f46" }}>💸 Riwayat Gajian</div>
+                <div className="text-sm font-black" style={{ color: "#065f46" }}>ðŸ’¸ Riwayat Gajian</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>{gajianHistory.length} catatan gajian tersimpan</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#d1fae5", color: "#065f46" }}>Input ›</button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#d1fae5", color: "#065f46" }}>Input â€º</button>
             </div>
             {gajianHistory.length === 0 ? (
               <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada riwayat gajian. Input data lama di menu Rekap.</div>
@@ -4402,7 +4394,7 @@ function rateDocId(productType, model, process) {
                       <div className="min-w-0">
                         <div className="text-xs font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
                         <div className="text-[10px]" style={{ color: "#64748b" }}>
-                          {g.tanggalGaji} · Periode {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                          {g.tanggalGaji} Â· Periode {g.periodeGajiDari} s/d {g.periodeGajiSampai}
                         </div>
                         {g.source === "input_manual_lama" && (
                           <div className="text-[9px] font-bold" style={{ color: "#a855f7" }}>input manual</div>
@@ -4423,10 +4415,10 @@ function rateDocId(productType, model, process) {
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bfdbfe", background: "linear-gradient(135deg,#eff6ff,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#1e40af" }}>📦 Riwayat Setor Terbaru</div>
+                <div className="text-sm font-black" style={{ color: "#1e40af" }}>ðŸ“¦ Riwayat Setor Terbaru</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>10 transaksi setor terakhir</div>
               </div>
-              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dbeafe", color: "#1e40af" }}>Borongan ›</button>
+              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dbeafe", color: "#1e40af" }}>Borongan â€º</button>
             </div>
             {(() => {
               const recentSetor = productionEntries
@@ -4454,7 +4446,7 @@ function rateDocId(productType, model, process) {
                     <div key={s.key} className="flex items-center justify-between gap-2 rounded-2xl p-2.5" style={{ background: "#f8fafc", border: "1px solid #bfdbfe" }}>
                       <div className="min-w-0">
                         <div className="text-xs font-black truncate" style={{ color: "#1e3a8a" }}>{s.nama}</div>
-                        <div className="text-[10px]" style={{ color: "#64748b" }}>{s.tanggalSetor} · {s.process} {s.model !== "-" ? `· ${s.model}` : ""}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>{s.tanggalSetor} Â· {s.process} {s.model !== "-" ? `Â· ${s.model}` : ""}</div>
                         {s.qtyReject > 0 && <div className="text-[10px]" style={{ color: "#ef4444" }}>reject: {fmtQty(s.qtyReject)} pcs</div>}
                       </div>
                       <div className="text-right shrink-0">
@@ -4471,10 +4463,10 @@ function rateDocId(productType, model, process) {
       )}
       {tab === "pesanan" && (
         <div className="space-y-3 p-4">
-          <InfoBox title="Sumber: Gallery Kerudung" subtitle="Data realtime dari collection orders" icon="🏪" />
+          <InfoBox title="Sumber: Gallery Kerudung" subtitle="Data realtime dari collection orders" icon="ðŸª" />
           {pesananOnlyNeedCheck && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fb7185" }}>
-              <span className="text-xl">🔎</span>
+              <span className="text-xl">ðŸ”Ž</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#be123c" }}>Hanya menampilkan pesanan yang perlu dicek</div>
                 <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Admin bisa langsung membuka pengiriman dari kartu ini. Pesanan lain disembunyikan sementara agar tidak membingungkan.</div>
@@ -4499,11 +4491,11 @@ function rateDocId(productType, model, process) {
               <div key={o.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: canStart ? "2px solid #fbbf24" : "1px solid #fce7f3" }}>
                 <div className="flex justify-between items-start">
                   <div className="flex-1 mr-2">
-                    <div className="font-bold text-base" style={{ color: "#2d1b69" }}>👤 {o.customer}</div>
-                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}>👗 <b>{o.item}</b></div>
-                    {o.invoice && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>🧾 {o.invoice}</div>}
-                    {o.createdAt && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>📅 {o.createdAt}</div>}
-                    {o.warna && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>🎨 {o.warna}</div>}
+                    <div className="font-bold text-base" style={{ color: "#2d1b69" }}>ðŸ‘¤ {o.customer}</div>
+                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}>ðŸ‘— <b>{o.item}</b></div>
+                    {o.invoice && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>ðŸ§¾ {o.invoice}</div>}
+                    {o.createdAt && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>ðŸ“… {o.createdAt}</div>}
+                    {o.warna && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>ðŸŽ¨ {o.warna}</div>}
                     <div className="mt-2 text-xs font-bold" style={{ color: small.color }}>{small.label}</div>
                   </div>
                   <div className="text-right">
@@ -4519,7 +4511,7 @@ function rateDocId(productType, model, process) {
                     <div className="mt-2">
                       {isMulti && (
                         <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>
-                          📦 {its.length} model
+                          ðŸ“¦ {its.length} model
                         </div>
                       )}
                       <div className="flex flex-wrap gap-1">
@@ -4536,14 +4528,14 @@ function rateDocId(productType, model, process) {
                 {prod && (
                   <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#ede9fe" }}>
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold" style={{ color: "#5b21b6" }}>🧵 Status produksi</span>
+                      <span className="text-xs font-bold" style={{ color: "#5b21b6" }}>ðŸ§µ Status produksi</span>
                       <StatusBadge status={prod.status} />
                     </div>
                     {(prod.workers || []).length > 0 && (
                       <div className="mt-2 space-y-1">
                         {(prod.workers || []).slice(-3).map((w, idx) => (
                           <div key={idx} className="text-xs" style={{ color: "#7c3aed" }}>
-                            👤 {displayWorkerName(w.employeeName)} · {w.process} · {w.qty} pcs
+                            ðŸ‘¤ {displayWorkerName(w.employeeName)} Â· {w.process} Â· {w.qty} pcs
                           </div>
                         ))}
                       </div>
@@ -4552,7 +4544,7 @@ function rateDocId(productType, model, process) {
                 )}
                 {needCheckInfo && (
                   <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#fff1f2", border: "1px solid #fecdd3" }}>
-                    <div className="text-xs font-black" style={{ color: "#be123c" }}>🔎 Perlu Dicek</div>
+                    <div className="text-xs font-black" style={{ color: "#be123c" }}>ðŸ”Ž Perlu Dicek</div>
                     <div className="text-xs mt-1" style={{ color: "#9f1239" }}>{needCheckInfo.alasan}</div>
                     <div className="grid grid-cols-2 gap-2 mt-2">
                       <Button
@@ -4561,7 +4553,7 @@ function rateDocId(productType, model, process) {
                         className="text-xs"
                         style={{ background: "linear-gradient(135deg,#0ea5e9,#2563eb)" }}
                       >
-                        🚚 Edit Pengiriman
+                        ðŸšš Edit Pengiriman
                       </Button>
                       <Button
                         type="button"
@@ -4628,7 +4620,7 @@ function rateDocId(productType, model, process) {
                     className="mt-3 w-full"
                     style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                   >
-                    🧵 Mulai Produksi
+                    ðŸ§µ Mulai Produksi
                   </Button>
                 )}
               </div>
@@ -4639,11 +4631,11 @@ function rateDocId(productType, model, process) {
       {tab === "produksi" && (
         <div className="space-y-3 p-4">
           <Button onClick={() => setModal("produksi")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
-            🧵 + Tambah ke Produksi
+            ðŸ§µ + Tambah ke Produksi
           </Button>
           {produksiOnlyBelumSelesai && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}>
-              <span className="text-xl">🧵</span>
+              <span className="text-xl">ðŸ§µ</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#5b21b6" }}>Hanya menampilkan produksi belum selesai</div>
                 <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Update status produksi di bawah ini.</div>
@@ -4668,9 +4660,9 @@ function rateDocId(productType, model, process) {
                 {displayedProduksi.map((p) => {
             const qtyPesanan = Number(p.qty || 0);
             const rekapProses = [
-              { label: "✂️ Potong", qty: processQtyForOrder(p.orderId, "Potong") },
-              { label: "🧵 Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
-              { label: "📦 Pengemasan QC", qty: processQtyForOrder(p.orderId, "Pengemasan QC") },
+              { label: "âœ‚ï¸ Potong", qty: processQtyForOrder(p.orderId, "Potong") },
+              { label: "ðŸ§µ Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
+              { label: "ðŸ“¦ Pengemasan QC", qty: processQtyForOrder(p.orderId, "Pengemasan QC") },
             ].filter((r) => r.qty > 0);
             return (
             <div key={p.id} className="rounded-2xl bg-white shadow-sm overflow-hidden" style={{ border: "1px solid #fce7f3" }}>
@@ -4698,7 +4690,7 @@ function rateDocId(productType, model, process) {
                 return (
                   <div className="px-4 pb-2">
                     <div className="text-xs font-bold mb-1.5" style={{ color: "#7c3aed" }}>
-                      📋 Rincian Model ({displayItems.length} model · {p.qty} pcs total):
+                      ðŸ“‹ Rincian Model ({displayItems.length} model Â· {p.qty} pcs total):
                     </div>
                     <div className="space-y-1.5">
                       {displayItems.map((it, i) => {
@@ -4718,18 +4710,18 @@ function rateDocId(productType, model, process) {
                           <div key={i} className="rounded-xl p-2.5" style={{ background: jahitDone ? "#dcfce7" : "#ede9fe", border: `1px solid ${jahitDone ? "#bbf7d0" : "#c4b5fd"}` }}>
                             <div className="flex justify-between items-center mb-1">
                               <div className="font-bold text-xs" style={{ color: jahitDone ? "#16a34a" : "#5b21b6" }}>
-                                {modelName} {jahitDone ? "✅" : ""}
+                                {modelName} {jahitDone ? "âœ…" : ""}
                               </div>
                               <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>{modelQty} pcs</div>
                             </div>
                             <div className="flex gap-2 text-xs">
                               {potongQty > 0 && (
                                 <span className="rounded-full px-2 py-0.5" style={{ background: "#dbeafe", color: "#1e40af" }}>
-                                  ✂️ {potongQty}/{modelQty}
+                                  âœ‚ï¸ {potongQty}/{modelQty}
                                 </span>
                               )}
                               <span className="rounded-full px-2 py-0.5" style={{ background: jahitDone ? "#bbf7d0" : "#fce7f3", color: jahitDone ? "#16a34a" : "#be185d" }}>
-                                🧵 {jahitQty}/{modelQty}
+                                ðŸ§µ {jahitQty}/{modelQty}
                               </span>
                             </div>
                           </div>
@@ -4779,11 +4771,11 @@ function rateDocId(productType, model, process) {
       {tab === "borongan" && (
         <div className="space-y-3 p-4">
           <Button onClick={() => setModal("borongan")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
-            💪 + Input Hasil Borongan
+            ðŸ’ª + Input Hasil Borongan
           </Button>
           {boronganOnlyBelumSetor && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fefce8", border: "1.5px solid #fbbf24" }}>
-              <span className="text-xl">🟡</span>
+              <span className="text-xl">ðŸŸ¡</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#92400e" }}>Hanya menampilkan yang belum setor</div>
                 <div className="text-xs mt-1" style={{ color: "#b45309" }}>Setor hasil kerjaan di bawah ini agar masuk rekap gaji.</div>
@@ -4800,10 +4792,10 @@ function rateDocId(productType, model, process) {
           )}
           {boronganOnlyOverSetor && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fecaca" }}>
-              <span className="text-xl">🚨</span>
+              <span className="text-xl">ðŸš¨</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#be123c" }}>Hanya menampilkan yang setor melebihi diberi</div>
-                <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Data ini perlu dicek — total setor + reject melebihi qty yang diberikan.</div>
+                <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Data ini perlu dicek â€” total setor + reject melebihi qty yang diberikan.</div>
               </div>
               <button
                 type="button"
@@ -4838,21 +4830,21 @@ function rateDocId(productType, model, process) {
             const statusSetorPanel = (sudahSetor || setorSebagian) ? (
               <div className="mt-3 rounded-2xl p-3 space-y-2" style={{ background: sudahSetor ? "#f0fdf4" : "#fff7ed", border: `1px solid ${sudahSetor ? "#bbf7d0" : "#fed7aa"}` }}>
                 <div className="text-xs font-bold" style={{ color: sudahSetor ? "#16a34a" : "#b45309" }}>
-                  {sudahSetor ? "✅ Sudah Setor" : "🟠 Setor Sebagian"} — terakhir {totals.tanggalSetor || "-"}
+                  {sudahSetor ? "âœ… Sudah Setor" : "ðŸŸ  Setor Sebagian"} â€” terakhir {totals.tanggalSetor || "-"}
                 </div>
                 <div className="flex flex-wrap gap-3 text-sm">
-                  <span>✔️ Setor: <strong>{qtySetor} pcs</strong></span>
-                  {qtyReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
-                  {selisih > 0 && <span>⚠️ Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
+                  <span>âœ”ï¸ Setor: <strong>{qtySetor} pcs</strong></span>
+                  {qtyReject > 0 && <span>âŒ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
+                  {selisih > 0 && <span>âš ï¸ Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
                 </div>
                 {totals.totalWageSetor > 0 && (
-                  <div className="text-sm font-bold" style={{ color: "#a855f7" }}>💰 Total gaji setor: {money(totals.totalWageSetor)}</div>
+                  <div className="text-sm font-bold" style={{ color: "#a855f7" }}>ðŸ’° Total gaji setor: {money(totals.totalWageSetor)}</div>
                 )}
                 {totals.history.length > 0 && (
                   <div className="space-y-1">
                     {totals.history.slice(-3).map((h, idx) => (
                       <div key={h.id || idx} className="rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,.75)", color: "#64748b", border: "1px solid #f3e8ff" }}>
-                        📅 {h.tanggalSetor} · Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? ` · Reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}
+                        ðŸ“… {h.tanggalSetor} Â· Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? ` Â· Reject ${Number(h.qtyReject || 0)} pcs` : ""} Â· {money(h.totalWageSetor || 0)}
                       </div>
                     ))}
                   </div>
@@ -4869,7 +4861,7 @@ function rateDocId(productType, model, process) {
               </div>
             ) : (
               <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
-                <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
+                <span className="text-xs font-bold" style={{ color: "#b45309" }}>ðŸŸ¡ Belum Setor</span>
                 <button
                   onClick={() => { const t = getEntrySetorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
                   className="rounded-xl px-3 py-1 text-xs font-bold text-white"
@@ -4883,15 +4875,15 @@ function rateDocId(productType, model, process) {
               <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
               <div className="flex justify-between">
                 <div>
-                  <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
-                  <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
-                  {e.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>🧾 {e.invoice}</div>}
+                  <div className="font-bold" style={{ color: "#2d1b69" }}>ðŸ‘¤ {displayWorkerName(e.employeeName)}</div>
+                  <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} Â· {e.process}{e.model ? ` Â· ${e.model}` : ""}</div>
+                  {e.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>ðŸ§¾ {e.invoice}</div>}
                   {!e.orderId && (
                     <div className="mt-1 flex flex-wrap gap-1.5">
-                      <span className="rounded-full px-2 py-0.5 text-[11px] font-black" style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}>⚠️ Tanpa Pesanan</span>
+                      <span className="rounded-full px-2 py-0.5 text-[11px] font-black" style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}>âš ï¸ Tanpa Pesanan</span>
                     </div>
                   )}
-                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>📅 {e.tanggal}</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>ðŸ“… {e.tanggal}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-2xl font-bold" style={{ color: "#10b981" }}>{e.qty}</div>
@@ -4905,7 +4897,7 @@ function rateDocId(productType, model, process) {
                   className="flex-1 rounded-2xl py-2 text-xs font-bold"
                   style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
                 >
-                  ✏️ Edit
+                  âœï¸ Edit
                 </button>
                 {!e.orderId && (
                   <button
@@ -4913,7 +4905,7 @@ function rateDocId(productType, model, process) {
                     className="flex-1 rounded-2xl py-2 text-xs font-bold"
                     style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}
                   >
-                    🔗 Kaitkan ke Pesanan
+                    ðŸ”— Kaitkan ke Pesanan
                   </button>
                 )}
                 <button
@@ -4921,7 +4913,7 @@ function rateDocId(productType, model, process) {
                   className="flex-1 rounded-2xl py-2 text-xs font-bold"
                   style={{ background: "#fff1f2", color: "#e11d48", border: "1px solid #fecaca" }}
                 >
-                  🗑️ Hapus
+                  ðŸ—‘ï¸ Hapus
                 </button>
               </div>
             </div>
@@ -5128,7 +5120,7 @@ function rateDocId(productType, model, process) {
         return (
           <div className="space-y-3 p-4">
             <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #e9d5ff" }}>
-              <div className="text-xs font-bold mb-3" style={{ color: "#7c3aed" }}>📅 Filter Periode</div>
+              <div className="text-xs font-bold mb-3" style={{ color: "#7c3aed" }}>ðŸ“… Filter Periode</div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
@@ -5155,7 +5147,7 @@ function rateDocId(productType, model, process) {
             </div>
             {!rekapPeriodReady && (
               <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-semibold" style={{ border: "1px solid #fde68a", color: "#92400e" }}>
-                📌 Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
+                ðŸ“Œ Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
               </div>
             )}
             <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
@@ -5164,8 +5156,8 @@ function rateDocId(productType, model, process) {
                 onClick={() => setShowFormGajianLama((v) => !v)}
                 className="w-full flex items-center justify-between"
               >
-                <div className="text-xs font-bold" style={{ color: "#065f46" }}>📝 Input Riwayat Gajian Lama</div>
-                <span className="text-xs font-bold" style={{ color: "#64748b" }}>{showFormGajianLama ? "▲ Tutup" : "▼ Buka"}</span>
+                <div className="text-xs font-bold" style={{ color: "#065f46" }}>ðŸ“ Input Riwayat Gajian Lama</div>
+                <span className="text-xs font-bold" style={{ color: "#64748b" }}>{showFormGajianLama ? "â–² Tutup" : "â–¼ Buka"}</span>
               </button>
               {showFormGajianLama && (
                 <div className="space-y-2 pt-1">
@@ -5218,7 +5210,7 @@ function rateDocId(productType, model, process) {
                     className="w-full rounded-xl py-2.5 text-sm font-bold text-white"
                     style={{ background: "linear-gradient(135deg,#065f46,#16a34a)" }}
                   >
-                    {isSaving ? "Menyimpan..." : "💾 Simpan Riwayat Gajian"}
+                    {isSaving ? "Menyimpan..." : "ðŸ’¾ Simpan Riwayat Gajian"}
                   </button>
                 </div>
               )}
@@ -5227,7 +5219,7 @@ function rateDocId(productType, model, process) {
               <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #a7f3d0" }}>
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-black" style={{ color: "#065f46" }}>📋 Semua Riwayat Gajian ({gajianHistory.length})</div>
+                    <div className="text-sm font-black" style={{ color: "#065f46" }}>ðŸ“‹ Semua Riwayat Gajian ({gajianHistory.length})</div>
                     <div className="text-xs" style={{ color: "#64748b" }}>Daftar bisa discroll agar halaman tidak terlalu panjang.</div>
                   </div>
                 </div>
@@ -5239,7 +5231,7 @@ function rateDocId(productType, model, process) {
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
                           <div className="text-xs leading-snug" style={{ color: "#64748b" }}>
-                            Digaji: {g.tanggalGaji} · Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                            Digaji: {g.tanggalGaji} Â· Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
                           </div>
                           {g.source === "input_manual_lama" && (
                             <div className="text-xs font-bold" style={{ color: "#a855f7" }}>input manual lama</div>
@@ -5278,19 +5270,19 @@ function rateDocId(productType, model, process) {
             {rekapPerkerja.length > 0 && (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>💰 Rekap Gajian Keseluruhan</div>
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>ðŸ’° Rekap Gajian Keseluruhan</div>
                   <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button type="button" onClick={() => setRekapDetailModal("sudah")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
                     <div className="text-xs font-bold" style={{ color: "#16a34a" }}>Sudah Gajian</div>
                     <div className="text-lg font-black" style={{ color: "#16a34a" }}>{money(rekapGajianKeseluruhan.totalSudahDibayar)}</div>
-                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.sudahGajian} pekerja</span><span>Rincian ›</span></div>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.sudahGajian} pekerja</span><span>Rincian â€º</span></div>
                   </button>
                   <button type="button" onClick={() => setRekapDetailModal("belum")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
                     <div className="text-xs font-bold" style={{ color: "#b45309" }}>Belum Gajian</div>
                     <div className="text-lg font-black" style={{ color: "#b45309" }}>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</div>
-                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.belumGajian} pekerja</span><span>Rincian ›</span></div>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.belumGajian} pekerja</span><span>Rincian â€º</span></div>
                   </button>
                 </div>
                 <div onClick={() => setRekapDetailModal("total")} className="w-full rounded-xl p-3 text-left active:scale-[0.99] transition-transform cursor-pointer" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", border: "1px solid #e9d5ff" }}>
@@ -5369,7 +5361,7 @@ function rateDocId(productType, model, process) {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-base font-black" style={{ color: "#2d1b69" }}>{titleMap[rekapDetailModal] || "Rincian Rekap"}</div>
-                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{isAllTimeDetail ? "Semua waktu" : (rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih")} · {filteredRows.length} pekerja</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{isAllTimeDetail ? "Semua waktu" : (rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih")} Â· {filteredRows.length} pekerja</div>
                         </div>
                         <button type="button" onClick={() => setRekapDetailModal(null)} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#f1f5f9", color: "#64748b" }}>Tutup</button>
                       </div>
@@ -5395,18 +5387,18 @@ function rateDocId(productType, model, process) {
                         <div key={nama} className="rounded-2xl p-3" style={{ border: "1px solid #e9d5ff", background: sudah ? "#f0fdf4" : "#fff7ed" }}>
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
+                              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {nama}</div>
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {isAllTimeDetail ? (
                                   <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#ecfdf5", color: "#047857" }}>
-                                    📚 Semua waktu · {Number(r.transaksi || 0).toLocaleString()} transaksi
+                                    ðŸ“š Semua waktu Â· {Number(r.transaksi || 0).toLocaleString()} transaksi
                                   </span>
                                 ) : (
                                   <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: sudah ? "#dcfce7" : "#fef3c7", color: sudah ? "#16a34a" : "#b45309" }}>
-                                    {sudah ? "✅ Sudah gajian" : "⏳ Belum gajian"}
+                                    {sudah ? "âœ… Sudah gajian" : "â³ Belum gajian"}
                                   </span>
                                 )}
-                                {Number(r.belumSetor || 0) > 0 && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#fffbeb", color: "#b45309" }}>⏳ {r.belumSetor} blm setor</span>}
+                                {Number(r.belumSetor || 0) > 0 && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#fffbeb", color: "#b45309" }}>â³ {r.belumSetor} blm setor</span>}
                               </div>
                             </div>
                             <div className="text-right">
@@ -5426,7 +5418,7 @@ function rateDocId(productType, model, process) {
                               className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
                               style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                             >
-                              👁️ Lihat Slip
+                              ðŸ‘ï¸ Lihat Slip
                             </button>
                           )}
                         </div>
@@ -5440,7 +5432,7 @@ function rateDocId(productType, model, process) {
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #fed7aa", background: "#fff7ed" }}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-xs font-bold" style={{ color: "#c2410c" }}>⚠️ Borongan Belum Masuk Rekap Gaji</div>
+                    <div className="text-xs font-bold" style={{ color: "#c2410c" }}>âš ï¸ Borongan Belum Masuk Rekap Gaji</div>
                     <div className="text-[11px] mt-1" style={{ color: "#9a3412" }}>
                       Data ini ada di Borongan, tapi belum menghasilkan gaji pada periode {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}.
                     </div>
@@ -5455,9 +5447,9 @@ function rateDocId(productType, model, process) {
                     <div key={e.id} className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid #fed7aa" }}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {e.employeeName || "Tidak diketahui"}</div>
+                          <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {e.employeeName || "Tidak diketahui"}</div>
                           <div className="text-xs mt-0.5" style={{ color: "#64748b" }}>
-                            {e.process || "-"} · {e.model || "-"} · {e.customer || "-"}{e.invoice ? ` · ${e.invoice}` : ""}
+                            {e.process || "-"} Â· {e.model || "-"} Â· {e.customer || "-"}{e.invoice ? ` Â· ${e.invoice}` : ""}
                           </div>
                           <div className="text-[11px] mt-1 font-semibold" style={{ color: "#c2410c" }}>{e.alasan}</div>
                         </div>
@@ -5485,7 +5477,7 @@ function rateDocId(productType, model, process) {
                         </div>
                       </div>
                       <div className="flex items-center justify-between mt-2 text-[11px]" style={{ color: "#94a3b8" }}>
-                        <span>📅 Diberikan: {e.tanggal || "-"}</span>
+                        <span>ðŸ“… Diberikan: {e.tanggal || "-"}</span>
                         <span>{e.tanggalSetorTerakhir ? `Setor terakhir: ${e.tanggalSetorTerakhir}` : "Belum ada setor"}</span>
                       </div>
                       {Number(e.sisaSetor || 0) > 0 && (
@@ -5500,7 +5492,7 @@ function rateDocId(productType, model, process) {
                           className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
                           style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}
                         >
-                          ✅ Setor Hasil / Masukkan ke Rekap
+                          âœ… Setor Hasil / Masukkan ke Rekap
                         </button>
                       )}
                     </div>
@@ -5510,10 +5502,10 @@ function rateDocId(productType, model, process) {
             )}
             {prosesKeys.length > 0 ? (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
-                <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📋 Per Proses</div>
+                <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>ðŸ“‹ Per Proses</div>
                 {prosesKeys.map((p) => {
                   const r = byProses[p];
-                  const icon = p === "Potong" ? "✂️" : p === "Jahit" ? "🧵" : sameProcess(p, "Pengemasan QC") ? "📦" : "🔧";
+                  const icon = p === "Potong" ? "âœ‚ï¸" : p === "Jahit" ? "ðŸ§µ" : sameProcess(p, "Pengemasan QC") ? "ðŸ“¦" : "ðŸ”§";
                   const reject = r.qtyReject;
                   return (
                     <div key={p} className="rounded-xl p-3" style={{ background: "#fdf4ff", border: "1px solid #f3e8ff" }}>
@@ -5545,7 +5537,7 @@ function rateDocId(productType, model, process) {
             {rekapPerkerja.length > 0 && (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📊 Rekap Gaji per Pekerja</div>
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>ðŸ“Š Rekap Gaji per Pekerja</div>
                   <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPerkerja.length} pekerja</div>
                 </div>
                 {rekapPerkerja.map(([nama, r]) => {
@@ -5560,25 +5552,25 @@ function rateDocId(productType, model, process) {
                   <div key={nama} className="rounded-xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
                     <div className="px-3 py-2" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)" }}>
                       <div className="flex justify-between items-start">
-                        <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
+                        <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {nama}</div>
                         <div className="text-sm font-bold" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
                       </div>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {sudahGajianPerkerja
-                          ? <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#dcfce7", color: "#16a34a" }}>✅ Sudah gajian</span>
-                          : <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>⏳ Belum gajian</span>}
+                          ? <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#dcfce7", color: "#16a34a" }}>âœ… Sudah gajian</span>
+                          : <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>â³ Belum gajian</span>}
                         {totalCarryOverPcs > 0 && (
                           <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fff1f2", color: "#e11d48" }}>
-                            ⚠️ {totalCarryOverPcs} pcs tanggungan minggu lalu
+                            âš ï¸ {totalCarryOverPcs} pcs tanggungan minggu lalu
                           </span>
                         )}
                       </div>
                     </div>
                     <div className="flex gap-3 px-3 py-1.5 text-xs border-b" style={{ color: "#64748b", borderColor: "#f3e8ff" }}>
-                      <span>📦 Diberi: <strong>{r.pcsAwal}</strong></span>
-                      <span>✅ Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
-                      {r.pcsReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
-                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}>⏳ <strong>{r.belumSetor}</strong> blm setor</span>}
+                      <span>ðŸ“¦ Diberi: <strong>{r.pcsAwal}</strong></span>
+                      <span>âœ… Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
+                      {r.pcsReject > 0 && <span>âŒ Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
+                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}>â³ <strong>{r.belumSetor}</strong> blm setor</span>}
                     </div>
                     <div className="px-3 py-2 space-y-1.5">
                       {r.detail.map((d, i) => (
@@ -5586,10 +5578,10 @@ function rateDocId(productType, model, process) {
                           style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
                           <div>
                             <div className="font-semibold" style={{ color: "#2d1b69" }}>
-                              👗 {d.model} — {d.process}
+                              ðŸ‘— {d.model} â€” {d.process}
                             </div>
                             <div style={{ color: "#94a3b8" }}>
-                              {d.customer}{d.invoice ? ` · ${d.invoice}` : ""}
+                              {d.customer}{d.invoice ? ` Â· ${d.invoice}` : ""}
                             </div>
                           </div>
                           <div className="text-right ml-2">
@@ -5599,7 +5591,7 @@ function rateDocId(productType, model, process) {
                             {d.sudahSetor && d.gaji > 0 && (
                               <div style={{ color: "#a855f7" }}>{money(d.gaji)}</div>
                             )}
-                            {!d.sudahSetor && <div style={{ color: "#b45309" }}>⏳ blm setor</div>}
+                            {!d.sudahSetor && <div style={{ color: "#b45309" }}>â³ blm setor</div>}
                           </div>
                         </div>
                       ))}
@@ -5610,7 +5602,7 @@ function rateDocId(productType, model, process) {
                         className="w-full rounded-xl py-2.5 text-xs font-bold text-white flex items-center justify-center gap-2"
                         style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                       >
-                        👁️ Lihat Slip Gaji · {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}
+                        ðŸ‘ï¸ Lihat Slip Gaji Â· {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}
                       </button>
                     </div>
                   </div>
@@ -5630,7 +5622,7 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-              🎨 Kain
+              ðŸŽ¨ Kain
             </button>
             <button
               type="button"
@@ -5638,14 +5630,14 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-              🏷️ Tarif
+              ðŸ·ï¸ Tarif
             </button>
           </div>
-          <InfoBox title="Data kain dari Gallery Kerudung" subtitle="Sumber data: collection materials. Gallery Produksi hanya melihat stok kain." icon="🎨" />
+          <InfoBox title="Data kain dari Gallery Kerudung" subtitle="Sumber data: collection materials. Gallery Produksi hanya melihat stok kain." icon="ðŸŽ¨" />
           {filteredMaterials.length === 0 && <Empty text="Tidak ada data kain/materials" />}
           {filteredMaterials.map((k) => (
             <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-lg" style={{ color: "#2d1b69" }}>🎨 {k.namaKain}</div>
+              <div className="font-bold text-lg" style={{ color: "#2d1b69" }}>ðŸŽ¨ {k.namaKain}</div>
               <div className="text-xs" style={{ color: "#a855f7" }}>Satuan: {k.satuan || "-"}</div>
               <div className="mt-3 space-y-2">
                 {(k.warnas || []).map((w, idx) => (
@@ -5666,11 +5658,11 @@ function rateDocId(productType, model, process) {
       {tab === "kirim" && (
         <div className="space-y-3 p-4">
           <Button onClick={() => setModal("kirim")} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
-            🚚 + Catat Pengiriman
+            ðŸšš + Catat Pengiriman
           </Button>
           {kirimOnlyBelumLengkap && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}>
-              <span className="text-xl">🚚</span>
+              <span className="text-xl">ðŸšš</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#1d4ed8" }}>Hanya menampilkan pengiriman belum lengkap</div>
                 <div className="text-xs mt-1" style={{ color: "#2563eb" }}>Catat sisa pengiriman untuk pesanan di bawah ini.</div>
@@ -5696,8 +5688,8 @@ function rateDocId(productType, model, process) {
             return displayed.map((k) => (
             <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               <div className="font-bold" style={{ color: "#2d1b69" }}>{k.customer || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.customer || "-"}</div>
-              <div className="text-xs" style={{ color: "#a855f7" }}>👗 {k.produk || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.item || "-"}</div>
-              <div className="text-xs font-bold" style={{ color: "#64748b" }}>🚚 {k.tanggalKirim || "-"} · {k.ekspedisi || "-"}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}>ðŸ‘— {k.produk || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.item || "-"}</div>
+              <div className="text-xs font-bold" style={{ color: "#64748b" }}>ðŸšš {k.tanggalKirim || "-"} Â· {k.ekspedisi || "-"}</div>
               <div className="mt-3 rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
                 {(k.items || []).map((item, i) => (
                   <div key={i} className="flex justify-between text-xs py-1">
@@ -5720,7 +5712,7 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-              🎨 Kain
+              ðŸŽ¨ Kain
             </button>
             <button
               type="button"
@@ -5728,17 +5720,17 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-              🏷️ Tarif
+              ðŸ·ï¸ Tarif
             </button>
           </div>
           <Button onClick={() => setModal("tarif")} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
-            🏷️ + Tambah Tarif Borongan
+            ðŸ·ï¸ + Tambah Tarif Borongan
           </Button>
           {workRates.map((r) => (
             <div key={r.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               <div className="flex justify-between items-start gap-3">
                 <div>
-                  <div className="font-bold" style={{ color: "#2d1b69" }}>{r.productType}{r.model ? ` · ${r.model}` : ""}</div>
+                  <div className="font-bold" style={{ color: "#2d1b69" }}>{r.productType}{r.model ? ` Â· ${r.model}` : ""}</div>
                   <div className="text-xs" style={{ color: "#a855f7" }}>{r.process}</div>
                 </div>
                 <div className="text-right">
@@ -5751,11 +5743,11 @@ function rateDocId(productType, model, process) {
         </div>
       )}
       {modal === "produksi" && (
-        <Modal title="🧵 Tambah ke Produksi" onClose={() => setModal(null)}>
+        <Modal title="ðŸ§µ Tambah ke Produksi" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <Select label="Pilih Pesanan" value={prodForm.orderId} onChange={(v) => setProdForm((f) => ({ ...f, orderId: v }))}>
               <option value="">-- Pilih Pesanan --</option>
-              {ordersBelumProduksi.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.item} · {o.qty} pcs</option>)}
+              {ordersBelumProduksi.map((o) => <option key={o.id} value={o.id}>{o.customer} Â· {o.item} Â· {o.qty} pcs</option>)}
             </Select>
             <Input label="Tanggal Mulai" type="date" value={prodForm.tanggalMulai} onChange={(v) => setProdForm((f) => ({ ...f, tanggalMulai: v }))} />
             <Input label="Catatan" value={prodForm.catatan} onChange={(v) => setProdForm((f) => ({ ...f, catatan: v }))} placeholder="Catatan produksi" />
@@ -5766,7 +5758,7 @@ function rateDocId(productType, model, process) {
         </Modal>
       )}
       {modal === "borongan" && (
-        <Modal title="💪 Input Hasil Borongan" onClose={() => setModal(null)}>
+        <Modal title="ðŸ’ª Input Hasil Borongan" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <div>
               <Input
@@ -5803,7 +5795,7 @@ function rateDocId(productType, model, process) {
               }}
             >
               <option value="">Tidak dikaitkan ke pesanan</option>
-              {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
+              {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} Â· {o.invoice || o.item} Â· {o.qty} pcs</option>)}
             </Select>
             <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
@@ -5834,44 +5826,44 @@ function rateDocId(productType, model, process) {
                   </Select>
                   {entryProcessRequiresOrder(entryForm.process) && !selectedOrder && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                      ⚠️ Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
+                      âš ï¸ Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
                     </div>
                   )}
                   {entryProcessWarnsWithoutOrder(entryForm.process) && !selectedOrder && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
-                      🟡 {entryForm.process} boleh tanpa pesanan, tapi nanti tidak ikut progress di Tab Produksi sampai dikaitkan lewat tombol “🔗 Kaitkan ke Pesanan”.
+                      ðŸŸ¡ {entryForm.process} boleh tanpa pesanan, tapi nanti tidak ikut progress di Tab Produksi sampai dikaitkan lewat tombol â€œðŸ”— Kaitkan ke Pesananâ€.
                     </div>
                   )}
                   {rateModels.length === 0 && (!isModelSpecificProcess(entryForm.process) || selectedOrder) && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                      ⚠️ {isModelSpecificProcess(entryForm.process)
+                      âš ï¸ {isModelSpecificProcess(entryForm.process)
                         ? `Pesanan terkait belum memiliki item/model untuk proses ${entryForm.process}.`
-                        : `Tarif belum ada di Master Tarif untuk ${entryForm.productType} · ${entryForm.process}. Silakan buat tarif baru di menu Master Tarif.`}
+                        : `Tarif belum ada di Master Tarif untuk ${entryForm.productType} Â· ${entryForm.process}. Silakan buat tarif baru di menu Master Tarif.`}
                     </div>
                   )}
                   {selectedPreview.status === "found" && (
                     <div className="rounded-2xl border p-3 text-xs" style={{ background: "#ecfdf5", borderColor: "#86efac", color: "#166534" }}>
-                      <div className="font-black">✅ Tarif yang dipakai</div>
-                      <div className="mt-1 font-bold">{entryForm.productType} · {entryForm.process} · {entryForm.model}</div>
+                      <div className="font-black">âœ… Tarif yang dipakai</div>
+                      <div className="mt-1 font-bold">{entryForm.productType} Â· {entryForm.process} Â· {entryForm.model}</div>
                       <div className="mt-1 text-base font-black">{money(selectedPreview.effectiveRate)} / pcs</div>
                       {normalizeWorkerNameKey(entryForm.employeeName).includes("konveksi") && (
-                        <div className="mt-1 text-[11px] font-semibold">Tarif Master {money(selectedPreview.baseRate)} / pcs · Tarif Konveksi {money(selectedPreview.effectiveRate)} / pcs</div>
+                        <div className="mt-1 text-[11px] font-semibold">Tarif Master {money(selectedPreview.baseRate)} / pcs Â· Tarif Konveksi {money(selectedPreview.effectiveRate)} / pcs</div>
                       )}
                     </div>
                   )}
                   {selectedPreview.status === "missing" && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
-                      ⚠️ Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.
+                      âš ï¸ Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.
                     </div>
                   )}
                   {selectedPreview.status === "invalid" && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
-                      ⚠️ Tarif Konveksi tidak valid. Silakan perbaiki tarif di Master Tarif.
+                      âš ï¸ Tarif Konveksi tidak valid. Silakan perbaiki tarif di Master Tarif.
                     </div>
                   )}
                   {selectedOrder && entryForm.model && limit > 0 && (
                     <div className="rounded-2xl px-3 py-2 text-xs font-semibold" style={{ background: "#f8fafc", color: "#475569", border: "1px solid #e2e8f0" }}>
-                      Batas {label}: {limit} pcs · sudah input {alreadyQty} pcs · sisa {sisaQty} pcs.
+                      Batas {label}: {limit} pcs Â· sudah input {alreadyQty} pcs Â· sisa {sisaQty} pcs.
                     </div>
                   )}
                 </div>
@@ -5893,11 +5885,11 @@ function rateDocId(productType, model, process) {
         const inputReject = Number(setorForm.qtyReject || 0);
         const sisaSetelahInput = Math.max(0, sisa - inputSetor - inputReject);
         return (
-        <Modal title="📦 Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
+        <Modal title="ðŸ“¦ Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
           <div className="space-y-3">
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(setorModal.employeeName)}</div>
-              <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType} · {setorModal.process}{setorModal.model ? ` · ${setorModal.model}` : ""}</div>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {displayWorkerName(setorModal.employeeName)}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType} Â· {setorModal.process}{setorModal.model ? ` Â· ${setorModal.model}` : ""}</div>
               <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
                 <div className="rounded-xl py-2" style={{ background: "#ede9fe", color: "#5b21b6" }}><strong>{setorModal.qty}</strong><br/>diberi</div>
                 <div className="rounded-xl py-2" style={{ background: "#dcfce7", color: "#16a34a" }}><strong>{modalTotals.qtySetor}</strong><br/>sudah setor</div>
@@ -5908,7 +5900,7 @@ function rateDocId(productType, model, process) {
               <div className="rounded-2xl p-3 text-xs space-y-1" style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#92400e" }}>
                 <div className="font-bold">Riwayat setor sebelumnya</div>
                 {modalTotals.history.map((h, idx) => (
-                  <div key={h.id || idx}>• {h.tanggalSetor}: setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `, reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}</div>
+                  <div key={h.id || idx}>â€¢ {h.tanggalSetor}: setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `, reject ${Number(h.qtyReject || 0)} pcs` : ""} Â· {money(h.totalWageSetor || 0)}</div>
                 ))}
               </div>
             )}
@@ -5920,7 +5912,7 @@ function rateDocId(productType, model, process) {
               placeholder={`Maks ${sisa} pcs`}
             />
             <Input
-              label="Qty Reject (pcs) — opsional"
+              label="Qty Reject (pcs) â€” opsional"
               type="number"
               value={setorForm.qtyReject}
               onChange={(v) => setSetorForm((f) => ({ ...f, qtyReject: v }))}
@@ -5928,18 +5920,18 @@ function rateDocId(productType, model, process) {
             />
             {inputSetor + inputReject > sisa && (
               <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fee2e2", color: "#b91c1c" }}>
-                ⚠️ Total input melebihi sisa {sisa} pcs.
+                âš ï¸ Total input melebihi sisa {sisa} pcs.
               </div>
             )}
             {inputSetor + inputReject > 0 && inputSetor + inputReject <= sisa && sisaSetelahInput > 0 && (
               <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>
-                ⚠️ Setelah setor ini masih tersisa {sisaSetelahInput} pcs.
+                âš ï¸ Setelah setor ini masih tersisa {sisaSetelahInput} pcs.
               </div>
             )}
             {inputSetor > 0 && Number(setorModal.rate) > 0 && (
               <div className="rounded-xl px-3 py-2 text-sm font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>
-                💰 Gaji transaksi ini: {money(inputSetor * Number(setorModal.rate))}
-                <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs × {money(setorModal.rate)})</span>
+                ðŸ’° Gaji transaksi ini: {money(inputSetor * Number(setorModal.rate))}
+                <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs Ã— {money(setorModal.rate)})</span>
               </div>
             )}
             <Input
@@ -5962,7 +5954,7 @@ function rateDocId(productType, model, process) {
         );
       })()}
       {modal === "tarif" && (
-        <Modal title="🏷️ Tambah Tarif Borongan" onClose={() => setModal(null)}>
+        <Modal title="ðŸ·ï¸ Tambah Tarif Borongan" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <Select label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
@@ -5999,7 +5991,7 @@ function rateDocId(productType, model, process) {
         </Modal>
       )}
       {modal === "kirim" && (
-        <Modal title="🚚 Catat Pengiriman" onClose={() => setModal(null)}>
+        <Modal title="ðŸšš Catat Pengiriman" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <Select
               label="Pilih Customer"
@@ -6037,7 +6029,7 @@ function rateDocId(productType, model, process) {
               }}
             >
               <option value="">-- Pilih Customer --</option>
-              {shipmentCustomerOptions.map((c) => <option key={c.key} value={c.key}>{c.name} · {c.count} pesanan siap/sisa kirim</option>)}
+              {shipmentCustomerOptions.map((c) => <option key={c.key} value={c.key}>{c.name} Â· {c.count} pesanan siap/sisa kirim</option>)}
             </Select>
             {kirimForm.customerKey && (
               <div className="rounded-2xl border p-3 text-xs space-y-2" style={{ background: "#f8fafc", borderColor: "#e2e8f0", color: "#475569" }}>
@@ -6072,7 +6064,7 @@ function rateDocId(productType, model, process) {
                           setKirimForm((f) => ({ ...f, orderIds: nextIds, pesananId: nextIds[0] || "", items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }] }));
                         }}
                       />
-                      <span className="flex-1"><b>{o.invoice || o.item}</b> · {o.item} · {o.qty} pcs</span>
+                      <span className="flex-1"><b>{o.invoice || o.item}</b> Â· {o.item} Â· {o.qty} pcs</span>
                     </label>
                   );
                 })}
@@ -6083,7 +6075,7 @@ function rateDocId(productType, model, process) {
             <Input label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
             {kirimForm.items.map((item, idx) => (
               <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
-                {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"} · {item.customer || kirimForm.penerima}</div>}
+                {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"} Â· {item.customer || kirimForm.penerima}</div>}
                 <Input
                   label="Item"
                   value={item.nama}
@@ -6117,7 +6109,7 @@ function rateDocId(productType, model, process) {
               if (lebih > 0) {
                 return (
                   <div className="rounded-2xl border p-3 text-xs" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                    <div className="font-bold mb-1">⚠️ Kelebihan kirim {lebih.toLocaleString("id-ID")} pcs</div>
+                    <div className="font-bold mb-1">âš ï¸ Kelebihan kirim {lebih.toLocaleString("id-ID")} pcs</div>
                     <div>Qty kirim lebih besar dari pesanan. Kelebihan ini akan ikut menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim.</div>
                   </div>
                 );
@@ -6125,8 +6117,8 @@ function rateDocId(productType, model, process) {
               return (
                 <div className="rounded-2xl border p-3 text-xs space-y-3" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
                   <div>
-                    <div className="font-bold mb-1">⚠️ Pengiriman kurang dari pesanan</div>
-                    <div>Pesanan {totalPesan.toLocaleString("id-ID")} pcs · dikirim {totalKirim.toLocaleString("id-ID")} pcs · sisa {sisa.toLocaleString("id-ID")} pcs.</div>
+                    <div className="font-bold mb-1">âš ï¸ Pengiriman kurang dari pesanan</div>
+                    <div>Pesanan {totalPesan.toLocaleString("id-ID")} pcs Â· dikirim {totalKirim.toLocaleString("id-ID")} pcs Â· sisa {sisa.toLocaleString("id-ID")} pcs.</div>
                   </div>
                   <div className="grid gap-2">
                     <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
@@ -6157,7 +6149,7 @@ function rateDocId(productType, model, process) {
               if (unlinkedCount <= 0) return null;
               return (
                 <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
-                  🟡 Ada {unlinkedCount} entry borongan sudah setor tapi masih Tanpa Pesanan. Cek Tab Borongan dan kaitkan dulu kalau entry itu milik pesanan yang akan dikirim.
+                  ðŸŸ¡ Ada {unlinkedCount} entry borongan sudah setor tapi masih Tanpa Pesanan. Cek Tab Borongan dan kaitkan dulu kalau entry itu milik pesanan yang akan dikirim.
                 </div>
               );
             })()}
@@ -6174,11 +6166,11 @@ function rateDocId(productType, model, process) {
             {confirmDelete.step === 1 ? (
               <>
                 <div className="text-center mb-4">
-                  <div className="text-4xl mb-2">🗑️</div>
+                  <div className="text-4xl mb-2">ðŸ—‘ï¸</div>
                   <div className="text-lg font-bold" style={{ color: "#1e293b" }}>Hapus Data?</div>
                   <div className="text-sm mt-1" style={{ color: "#64748b" }}>
                     {confirmDelete.entry
-                      ? `Entry borongan ${displayWorkerName(confirmDelete.entry.employeeName)} — ${confirmDelete.entry.model || confirmDelete.entry.process} · ${confirmDelete.entry.qty} pcs`
+                      ? `Entry borongan ${displayWorkerName(confirmDelete.entry.employeeName)} â€” ${confirmDelete.entry.model || confirmDelete.entry.process} Â· ${confirmDelete.entry.qty} pcs`
                       : "Data ini akan dihapus."
                     }
                   </div>
@@ -6199,7 +6191,7 @@ function rateDocId(productType, model, process) {
             ) : (
               <>
                 <div className="text-center mb-4">
-                  <div className="text-4xl mb-2">⚠️</div>
+                  <div className="text-4xl mb-2">âš ï¸</div>
                   <div className="text-lg font-bold" style={{ color: "#e11d48" }}>Yakin Hapus Permanen?</div>
                   <div className="text-sm mt-2 rounded-xl px-3 py-2" style={{ background: "#fff1f2", color: "#b91c1c" }}>
                     Data yang dihapus <strong>tidak bisa dikembalikan</strong>. Termasuk data payroll terkait.
@@ -6214,7 +6206,7 @@ function rateDocId(productType, model, process) {
                   <button onClick={confirmDeleteAction}
                     className="flex-1 rounded-2xl py-3 font-semibold text-white"
                     style={{ background: "#e11d48" }}>
-                    🗑️ Hapus Sekarang
+                    ðŸ—‘ï¸ Hapus Sekarang
                   </button>
                 </div>
               </>
@@ -6223,16 +6215,16 @@ function rateDocId(productType, model, process) {
         </div>
       )}
       {editEntryModal && (
-        <Modal title="✏️ Edit Entry Borongan" onClose={() => setEditEntryModal(null)}>
+        <Modal title="âœï¸ Edit Entry Borongan" onClose={() => setEditEntryModal(null)}>
           <div className="space-y-3">
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(editEntryModal.employeeName)}</div>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {displayWorkerName(editEntryModal.employeeName)}</div>
               <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
-                {editEntryModal.productType} · {editEntryModal.process}
-                {editEntryModal.customer ? ` · ${editEntryModal.customer}` : ""}
+                {editEntryModal.productType} Â· {editEntryModal.process}
+                {editEntryModal.customer ? ` Â· ${editEntryModal.customer}` : ""}
               </div>
               <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
-                ⚠️ Nama pekerja & proses tidak bisa diubah di sini
+                âš ï¸ Nama pekerja & proses tidak bisa diubah di sini
               </div>
             </div>
             {!editEntryModal.orderId && (
@@ -6242,7 +6234,7 @@ function rateDocId(productType, model, process) {
                 onChange={(v) => setEditEntryForm(f => ({ ...f, orderId: v, model: v ? "" : f.model }))}
               >
                 <option value="">Belum dikaitkan</option>
-                {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
+                {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} Â· {o.invoice || o.item} Â· {o.qty} pcs</option>)}
               </Select>
             )}
             {!isGeneralRateProcess(editEntryModal.process) && (
@@ -6274,12 +6266,12 @@ function rateDocId(productType, model, process) {
             />
             {setorTotals(editEntryModal).statusSetor !== "belum_setor" && (
               <div className="rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#fef3c7", color: "#b45309" }}>
-                ⚠️ Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
+                âš ï¸ Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
               </div>
             )}
             <Button onClick={saveEditEntry} disabled={isSaving} className="w-full"
               style={{ background: "linear-gradient(135deg,#2563eb,#7c3aed)" }}>
-              💾 Simpan Perubahan
+              ðŸ’¾ Simpan Perubahan
             </Button>
           </div>
         </Modal>
@@ -6295,12 +6287,12 @@ function rateDocId(productType, model, process) {
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-3">
                     <img src="/logo-gk.png" alt="Gallery Kerudung" className="h-12 w-12 rounded-2xl bg-white object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-                    <div className="text-white font-extrabold text-lg">🧾 Slip Pendapatan Borongan</div>
+                    <div className="text-white font-extrabold text-lg">ðŸ§¾ Slip Pendapatan Borongan</div>
                   </div>
                   <button onClick={() => setSlipPreview(null)}
                     className="rounded-full px-4 py-1.5 text-sm font-bold"
                     style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
-                    ✕ Tutup
+                    âœ• Tutup
                   </button>
                 </div>
                 <div className="text-white text-sm opacity-90">Gallery Kerudung</div>
@@ -6309,11 +6301,11 @@ function rateDocId(productType, model, process) {
                 <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fdf4ff", border: "1px solid #e9d5ff" }}>
                   <div className="flex justify-between text-sm">
                     <span style={{ color: "#94a3b8" }}>Nama Pekerja</span>
-                    <strong style={{ color: "#2d1b69" }}>👤 {nama}</strong>
+                    <strong style={{ color: "#2d1b69" }}>ðŸ‘¤ {nama}</strong>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span style={{ color: "#94a3b8" }}>Periode</span>
-                    <strong style={{ color: "#2d1b69" }}>📅 {dari} s/d {sampai}</strong>
+                    <strong style={{ color: "#2d1b69" }}>ðŸ“… {dari} s/d {sampai}</strong>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span style={{ color: "#94a3b8" }}>Tanggal Cetak</span>
@@ -6344,17 +6336,17 @@ function rateDocId(productType, model, process) {
                         style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
                         <div className="flex-1 mr-2">
                           <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>
-                            {d.process}{d.model && d.model !== "-" ? " · " + d.model : ""}
+                            {d.process}{d.model && d.model !== "-" ? " Â· " + d.model : ""}
                           </div>
                           <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
                             {d.customer}{d.invoice ? " / " + d.invoice : ""}
                           </div>
                           <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
-                            📅 {d.tanggalSetor || d.tanggal || "-"}
+                            ðŸ“… {d.tanggalSetor || d.tanggal || "-"}
                           </div>
                           {d.rate > 0 && (
                             <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
-                              {fmt(d.rate)}/pcs × {d.sudahSetor ? d.qtySetor : d.qty} pcs
+                              {fmt(d.rate)}/pcs Ã— {d.sudahSetor ? d.qtySetor : d.qty} pcs
                             </div>
                           )}
                         </div>
@@ -6362,13 +6354,13 @@ function rateDocId(productType, model, process) {
                           {d.sudahSetor ? (
                             <>
                               <div className="text-xs font-bold" style={{ color: "#16a34a" }}>{d.qtySetor} pcs</div>
-                              {d.qtyReject > 0 && <div className="text-xs" style={{ color: "#ef4444" }}>❌ {d.qtyReject} reject</div>}
+                              {d.qtyReject > 0 && <div className="text-xs" style={{ color: "#ef4444" }}>âŒ {d.qtyReject} reject</div>}
                               <div className="text-sm font-bold mt-0.5" style={{ color: "#7c3aed" }}>{fmt(d.gaji)}</div>
                             </>
                           ) : (
                             <>
                               <div className="text-xs font-bold" style={{ color: "#b45309" }}>{d.qty} pcs</div>
-                              <div className="text-xs mt-0.5" style={{ color: "#b45309" }}>⏳ Blm setor</div>
+                              <div className="text-xs mt-0.5" style={{ color: "#b45309" }}>â³ Blm setor</div>
                             </>
                           )}
                         </div>
@@ -6378,7 +6370,7 @@ function rateDocId(productType, model, process) {
                 </div>
                 {r.belumSetor > 0 && (
                   <div className="rounded-xl px-4 py-3 text-xs font-semibold" style={{ background: "#fefce8", border: "1px solid #fde68a", color: "#b45309" }}>
-                    ⚠️ Masih ada <strong>{r.belumSetor} pcs</strong> belum disetor, belum termasuk total di bawah.
+                    âš ï¸ Masih ada <strong>{r.belumSetor} pcs</strong> belum disetor, belum termasuk total di bawah.
                   </div>
                 )}
                 <div className="rounded-2xl p-4" style={{ background: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "1.5px solid #bbf7d0" }}>
@@ -6393,10 +6385,10 @@ function rateDocId(productType, model, process) {
                   const diterima = Number(r.gaji || 0) - potongan;
                   return (
                     <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}>
-                      <div className="text-xs font-black" style={{ color: "#92400e" }}>💰 Kasbon Aktif — akan dipotong saat gajian</div>
+                      <div className="text-xs font-black" style={{ color: "#92400e" }}>ðŸ’° Kasbon Aktif â€” akan dipotong saat gajian</div>
                       {kasbonAktif.map((k) => (
                         <div key={k.id} className="flex justify-between text-xs" style={{ color: "#78716c" }}>
-                          <span>📅 {k.tanggal}{k.keterangan ? ` · ${k.keterangan}` : ""}</span>
+                          <span>ðŸ“… {k.tanggal}{k.keterangan ? ` Â· ${k.keterangan}` : ""}</span>
                           <span className="font-bold text-amber-700">{money(k.sisaKasbon)} sisa</span>
                         </div>
                       ))}
@@ -6417,7 +6409,7 @@ function rateDocId(productType, model, process) {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-xs font-bold" style={{ color: slipSudahGajian ? "#16a34a" : "#b45309" }}>
-                        {slipSudahGajian ? "✅ Sudah gajian" : "⏳ Belum gajian"}
+                        {slipSudahGajian ? "âœ… Sudah gajian" : "â³ Belum gajian"}
                       </div>
                       <div className="mt-1 text-xs" style={{ color: "#64748b" }}>
                         Status ini hanya untuk periode {dari} s/d {sampai}.
@@ -6447,7 +6439,7 @@ function rateDocId(productType, model, process) {
                 {carryOver.length > 0 && (
                   <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fff7ed", border: "1.5px solid #fed7aa" }}>
                     <div className="text-xs font-bold" style={{ color: "#b45309" }}>
-                      ⚠️ Tanggungan Minggu Lalu (Belum Disetor)
+                      âš ï¸ Tanggungan Minggu Lalu (Belum Disetor)
                     </div>
                     <div className="text-xs" style={{ color: "#92400e" }}>
                       Pekerjaan berikut belum disetor dan <strong>akan masuk gaji minggu depan</strong> setelah disetor:
@@ -6459,16 +6451,16 @@ function rateDocId(productType, model, process) {
                       return (
                         <div key={i} className="rounded-xl px-3 py-2 text-xs" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
                           <div className="font-semibold" style={{ color: "#2d1b69" }}>
-                            🧵 {e.process}{namaModel !== "-" ? ` · ${namaModel}` : ""}
+                            ðŸ§µ {e.process}{namaModel !== "-" ? ` Â· ${namaModel}` : ""}
                           </div>
                           {(e.customer || entryOrder?.customer) && (
-                            <div style={{ color: "#94a3b8" }}>{e.customer || entryOrder?.customer}{e.invoice ? ` · ${e.invoice}` : ""}</div>
+                            <div style={{ color: "#94a3b8" }}>{e.customer || entryOrder?.customer}{e.invoice ? ` Â· ${e.invoice}` : ""}</div>
                           )}
                           <div className="flex justify-between mt-1">
                             <span style={{ color: "#b45309" }}>
-                              📅 {periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : e.tanggal}
+                              ðŸ“… {periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : e.tanggal}
                             </span>
-                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(getEntrySetorTotals(e).sisaSetor || 0)} pcs · belum disetor</span>
+                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(getEntrySetorTotals(e).sisaSetor || 0)} pcs Â· belum disetor</span>
                           </div>
                         </div>
                       );
@@ -6483,7 +6475,7 @@ function rateDocId(productType, model, process) {
                   className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
                   style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                 >
-                  🖨️ Download / Cetak Slip PDF
+                  ðŸ–¨ï¸ Download / Cetak Slip PDF
                 </button>
                 <button
                   onClick={() => shareSlipGajiAsImage(nama, r, dari, sampai, carryOver)}
@@ -6508,7 +6500,7 @@ function rateDocId(productType, model, process) {
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-black" style={{ color: "#c2410c" }}>✅ Tugas Hari Ini</h2>
+                <h2 className="text-lg font-black" style={{ color: "#c2410c" }}>âœ… Tugas Hari Ini</h2>
                 <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>Ketuk item untuk langsung ke datanya</div>
               </div>
               <button
@@ -6522,7 +6514,7 @@ function rateDocId(productType, model, process) {
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-black" style={{ color: "#c2410c" }}>
-                  💪 Borongan Belum Setor
+                  ðŸ’ª Borongan Belum Setor
                   <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
                     {dashboardInsights.tugas.boronganBelumSetor}
                   </span>
@@ -6532,11 +6524,11 @@ function rateDocId(productType, model, process) {
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
-                  Lihat Semua ›
+                  Lihat Semua â€º
                 </button>
               </div>
               {dashboardInsights.tugas.activeBorongan.length === 0 ? (
-                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua sudah setor</div>
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>âœ… Semua sudah setor</div>
               ) : (
                 <div className="space-y-2">
                   {dashboardInsights.tugas.activeBorongan.map(({ entry, totals }) => (
@@ -6546,10 +6538,10 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}
                     >
-                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(entry.employeeName)}</div>
-                      <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>{entry.process || "-"}{entry.model && entry.model !== "-" ? ` · ${displayModelName(entry.model)}` : ""}</div>
-                      {entry.customer && <div className="text-xs font-bold" style={{ color: "#64748b" }}>{entry.customer}{entry.invoice ? ` · ${entry.invoice}` : ""}</div>}
-                      <div className="mt-1 text-sm font-black" style={{ color: "#c2410c" }}>⏳ Sisa {fmtQty(totals.sisaSetor)} pcs belum setor</div>
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {displayWorkerName(entry.employeeName)}</div>
+                      <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>{entry.process || "-"}{entry.model && entry.model !== "-" ? ` Â· ${displayModelName(entry.model)}` : ""}</div>
+                      {entry.customer && <div className="text-xs font-bold" style={{ color: "#64748b" }}>{entry.customer}{entry.invoice ? ` Â· ${entry.invoice}` : ""}</div>}
+                      <div className="mt-1 text-sm font-black" style={{ color: "#c2410c" }}>â³ Sisa {fmtQty(totals.sisaSetor)} pcs belum setor</div>
                     </button>
                   ))}
                   {dashboardInsights.tugas.boronganBelumSetor > dashboardInsights.tugas.activeBorongan.length && (
@@ -6558,7 +6550,7 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#ffedd5", color: "#c2410c" }}
                     >
-                      + {dashboardInsights.tugas.boronganBelumSetor - dashboardInsights.tugas.activeBorongan.length} lainnya → Lihat semua borongan belum setor
+                      + {dashboardInsights.tugas.boronganBelumSetor - dashboardInsights.tugas.activeBorongan.length} lainnya â†’ Lihat semua borongan belum setor
                     </button>
                   )}
                 </div>
@@ -6567,7 +6559,7 @@ function rateDocId(productType, model, process) {
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-black" style={{ color: "#c2410c" }}>
-                  🧵 Produksi Belum Selesai
+                  ðŸ§µ Produksi Belum Selesai
                   <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
                     {dashboardInsights.tugas.produksiBelumSelesai}
                   </span>
@@ -6577,11 +6569,11 @@ function rateDocId(productType, model, process) {
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
-                  Lihat Semua ›
+                  Lihat Semua â€º
                 </button>
               </div>
               {dashboardInsights.tugas.activeProduksi.length === 0 ? (
-                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua produksi selesai</div>
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>âœ… Semua produksi selesai</div>
               ) : (
                 <div className="space-y-2">
                   {dashboardInsights.tugas.activeProduksi.map((item) => (
@@ -6591,8 +6583,8 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}
                     >
-                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {item.customer || item.orderCustomer || "-"}</div>
-                      {item.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>🧾 {item.invoice}</div>}
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {item.customer || item.orderCustomer || "-"}</div>
+                      {item.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>ðŸ§¾ {item.invoice}</div>}
                       <div className="mt-1 text-sm font-black" style={{ color: "#7c3aed" }}>
                         Status: {item.status || "Antri"}
                       </div>
@@ -6604,7 +6596,7 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#ede9fe", color: "#7c3aed" }}
                     >
-                      + {dashboardInsights.tugas.produksiBelumSelesai - dashboardInsights.tugas.activeProduksi.length} lainnya → Lihat semua produksi
+                      + {dashboardInsights.tugas.produksiBelumSelesai - dashboardInsights.tugas.activeProduksi.length} lainnya â†’ Lihat semua produksi
                     </button>
                   )}
                 </div>
@@ -6613,7 +6605,7 @@ function rateDocId(productType, model, process) {
             <div className="mb-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-black" style={{ color: "#c2410c" }}>
-                  🚚 Kirim Belum Lengkap
+                  ðŸšš Kirim Belum Lengkap
                   <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
                     {dashboardInsights.tugas.kirimanBelumLengkap}
                   </span>
@@ -6623,11 +6615,11 @@ function rateDocId(productType, model, process) {
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
-                  Lihat Semua ›
+                  Lihat Semua â€º
                 </button>
               </div>
               {dashboardInsights.tugas.kirimBelumLengkap.length === 0 ? (
-                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua pengiriman lengkap</div>
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>âœ… Semua pengiriman lengkap</div>
               ) : (
                 <div className="space-y-2">
                   {dashboardInsights.tugas.kirimBelumLengkap.map(({ order, sisa }) => (
@@ -6637,9 +6629,9 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}
                     >
-                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {order.customer || "-"}</div>
-                      {order.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>🧾 {order.invoice}</div>}
-                      <div className="mt-1 text-sm font-black" style={{ color: "#1d4ed8" }}>⏳ Sisa kirim {fmtQty(sisa)} pcs</div>
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>ðŸ‘¤ {order.customer || "-"}</div>
+                      {order.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>ðŸ§¾ {order.invoice}</div>}
+                      <div className="mt-1 text-sm font-black" style={{ color: "#1d4ed8" }}>â³ Sisa kirim {fmtQty(sisa)} pcs</div>
                     </button>
                   ))}
                   {dashboardInsights.tugas.kirimanBelumLengkap > dashboardInsights.tugas.kirimBelumLengkap.length && (
@@ -6648,7 +6640,7 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#dbeafe", color: "#1d4ed8" }}
                     >
-                      + {dashboardInsights.tugas.kirimanBelumLengkap - dashboardInsights.tugas.kirimBelumLengkap.length} lainnya → Lihat semua pengiriman
+                      + {dashboardInsights.tugas.kirimanBelumLengkap - dashboardInsights.tugas.kirimBelumLengkap.length} lainnya â†’ Lihat semua pengiriman
                     </button>
                   )}
                 </div>
@@ -6667,7 +6659,7 @@ function rateDocId(productType, model, process) {
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-black" style={{ color: "#be123c" }}>🚨 Data Bermasalah</h2>
+                <h2 className="text-lg font-black" style={{ color: "#be123c" }}>ðŸš¨ Data Bermasalah</h2>
                 <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
               </div>
               <button
@@ -6680,7 +6672,7 @@ function rateDocId(productType, model, process) {
             </div>
             {dashboardInsights.alerts.length === 0 ? (
               <div className="rounded-2xl p-6 text-center text-sm font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>
-                ✅ Tidak ada data bermasalah saat ini.
+                âœ… Tidak ada data bermasalah saat ini.
               </div>
             ) : (
               <div className="space-y-3">
@@ -6706,7 +6698,7 @@ function rateDocId(productType, model, process) {
                         className="rounded-xl px-4 py-2 text-xs font-bold text-white"
                         style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
                       >
-                        Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
+                        Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} â€º
                       </button>
                       {alert.type === "Produksi duplikat" && (
                         <button
@@ -6750,7 +6742,7 @@ function InfoBox({ title, subtitle, icon }) {
         <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>{title}</div>
         <div className="text-xs" style={{ color: "#a855f7" }}>{subtitle}</div>
       </div>
-      <span className="ml-auto text-green-500 text-lg">●</span>
+      <span className="ml-auto text-green-500 text-lg">â—</span>
     </div>
   );
 }
@@ -6765,3 +6757,4 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
