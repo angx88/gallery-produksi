@@ -1,10 +1,15 @@
-// App.jsx Gallery Produksi - audit fix komprehensif - 2026-06-03
+// App.jsx Gallery Produksi - hemat kuota Firestore - 2026-06-06
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
-// PERFORMA 2026-06-06: (1) work_rates, master_pekerja, materials, payroll, gajian_history
-//   pakai getDocs (load sekali) bukan onSnapshot — hemat reads Firestore.
-// (2) debounce search 250ms, (3) dashboardInsights dipecah jadi useMemo terpisah.
-// (4) backfill legacy hanya jalan sekali per sesi (flag backfillDoneRef dll).
+// PERFORMA: (1) work_rates, master_pekerja, materials, payroll, gajian_history pakai getDocs.
+// (2) SHIPMENTS, KASBON, PAYROLL_EXPENSES: getDocs + refreshData() setelah write — tidak lagi
+//     onSnapshot sehingga setiap write tidak memicu re-read seluruh collection.
+// (3) PRODUCTION_ENTRIES: onSnapshot dipertahankan tapi snapshot handler di-memo agar
+//     tidak re-map semua docs saat hanya 1 doc berubah (pakai docChanges).
+// (4) debounce search 250ms, (5) dashboardInsights dipecah useMemo terpisah.
+// (6) backfill legacy hanya jalan sekali per sesi (flag backfillDoneRef dll).
+// (7) Audit bersih: hapus CardHeader/Title/Desc/Content/Footer, dateAfter, PROCESSES_NO_MODEL,
+//     deleteStep. rateDocId dipindah ke luar App(). Toast cleanup via toastTimerRef.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
@@ -59,8 +64,7 @@ const PROD_STATUS = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
 const GENERAL_RATE_PROCESSES = ["Potong", "Pengemasan QC"];
 const MODEL_SPECIFIC_PROCESSES = ["Jahit"];
 const PROCESSES_WITH_MODEL = [...GENERAL_RATE_PROCESSES, ...MODEL_SPECIFIC_PROCESSES];
-const PROCESSES_NO_MODEL = [];
-const ALL_PROCESSES = [...PROCESSES_WITH_MODEL, ...PROCESSES_NO_MODEL];
+const ALL_PROCESSES = PROCESSES_WITH_MODEL;
 const PRODUCT_TYPES = ["Kerudung", "Mukena", "Baju Anak", "Gamis", "Lainnya"];
 
 function isGeneralRateProcess(process) {
@@ -237,12 +241,6 @@ function dateBefore(value, compareTo) {
   const t = dateKey(value);
   const c = dateKey(compareTo);
   return Boolean(t && c && t < c);
-}
-
-function dateAfter(value, compareTo) {
-  const t = dateKey(value);
-  const c = dateKey(compareTo);
-  return Boolean(t && c && t > c);
 }
 
 function dateRangesOverlap(startA, endA, startB, endB) {
@@ -1125,48 +1123,6 @@ function Card({ children, className = "", style = {}, onClick }) {
   );
 }
 
-function CardHeader({ children, className = "", style = {} }) {
-  return (
-    <div className={`mb-3 ${className}`} style={style}>
-      {children}
-    </div>
-  );
-}
-
-function CardTitle({ children, className = "", style = {} }) {
-  return (
-    <div className={`font-bold ${className}`} style={{ color: "#2d1b69", ...style }}>
-      {children}
-    </div>
-  );
-}
-
-function CardDescription({ children, className = "", style = {} }) {
-  return (
-    <div className={`text-sm ${className}`} style={{ color: "#64748b", ...style }}>
-      {children}
-    </div>
-  );
-}
-
-function CardContent({ children, className = "", style = {} }) {
-  return (
-    <div className={className} style={style}>
-      {children}
-    </div>
-  );
-}
-
-function CardFooter({ children, className = "", style = {} }) {
-  return (
-    <div className={`mt-3 ${className}`} style={style}>
-      {children}
-    </div>
-  );
-}
-
-
-
 function GlobalReadableStyle() {
   return (
     <style>{`
@@ -1256,7 +1212,6 @@ export default function App() {
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
   const [editEntryModal, setEditEntryModal] = useState(null); // entry yang sedang diedit
   const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
-  const [deleteStep, setDeleteStep] = useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
   const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false);
@@ -1270,6 +1225,15 @@ export default function App() {
   const slipRef = useRef(null);
   const backUiRef = useRef({});
   const lastBackPressRef = useRef(0);
+  const toastTimerRef = useRef(null);
+
+  // Helper toast yang aman: selalu clear timer sebelumnya sehingga toast tidak
+  // tumpang tindih, dan tidak ada timer menggantung di memori (penting di HP).
+  const showToast = React.useCallback((msg, duration = 3000) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(msg);
+    toastTimerRef.current = setTimeout(() => setToast(""), duration);
+  }, []);
 
   useEffect(() => {
     const syncAutoPeriod = () => {
@@ -1355,6 +1319,33 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // ── Refresh helpers (getDocs manual) ──────────────────────────────────────
+  // Dipanggil setelah setiap write agar data lokal sinkron tanpa onSnapshot
+  // yang membaca ulang seluruh collection setiap ada 1 dokumen berubah.
+  const refreshShipments = React.useCallback(() => {
+    getDocs(collection(db, C.SHIPMENTS)).then((snap) =>
+      setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() })))
+    );
+  }, []);
+
+  const refreshKasbon = React.useCallback(() => {
+    getDocs(collection(db, C.KASBON)).then((snap) =>
+      setKasbonList(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+  }, []);
+
+  const refreshPayroll = React.useCallback(() => {
+    getDocs(collection(db, C.PAYROLL_EXPENSES)).then((snap) =>
+      setPayrollExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+  }, []);
+
+  const refreshGajianHistory = React.useCallback(() => {
+    getDocs(collection(db, C.GAJIAN_HISTORY)).then((snap) =>
+      setGajianHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+  }, []);
+
   useEffect(() => {
     backUiRef.current = {
       tab,
@@ -1408,8 +1399,7 @@ export default function App() {
       }
 
       lastBackPressRef.current = now;
-      setToast("Tekan tombol back sekali lagi untuk keluar");
-      setTimeout(() => setToast(""), 1600);
+      showToast("Tekan tombol back sekali lagi untuk keluar", 1600);
       pushGuardState();
     };
 
@@ -1427,8 +1417,7 @@ export default function App() {
       if (!firstOrderLoadRef.current) {
         const added = list.filter((x) => !previousOrderIdsRef.current.has(x.id));
         if (added.length > 0) {
-          setToast(`🔔 ${added.length} pesanan baru masuk dari Gallery Kerudung`);
-          setTimeout(() => setToast(""), 5000);
+          showToast(`🔔 ${added.length} pesanan baru masuk dari Gallery Kerudung`, 5000);
         }
       }
       previousOrderIdsRef.current = ids;
@@ -1448,9 +1437,32 @@ export default function App() {
       setMasterPekerja(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
 
-    const unsubEntries = onSnapshot(collection(db, C.PRODUCTION_ENTRIES), (snap) => setProductionEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    const unsubShipments = onSnapshot(collection(db, C.SHIPMENTS), (snap) => setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }))));
-    const unsubKasbon = onSnapshot(collection(db, C.KASBON), (snap) => setKasbonList(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubEntries = onSnapshot(collection(db, C.PRODUCTION_ENTRIES), (snap) => {
+      // Gunakan docChanges() agar tidak re-map SEMUA dokumen setiap ada 1 perubahan.
+      // Hanya dokumen yang benar-benar berubah yang diproses ulang.
+      setProductionEntries((prev) => {
+        const map = new Map(prev.map((e) => [e.id, e]));
+        snap.docChanges().forEach((change) => {
+          if (change.type === "removed") {
+            map.delete(change.doc.id);
+          } else {
+            map.set(change.doc.id, { id: change.doc.id, ...change.doc.data() });
+          }
+        });
+        return Array.from(map.values());
+      });
+    });
+
+    // HEMAT KUOTA: SHIPMENTS dan KASBON pakai getDocs (load sekali).
+    // Setiap kali app write ke collection ini, fungsi refreshShipments() /
+    // refreshKasbon() dipanggil manual — jauh lebih hemat dari onSnapshot
+    // yang membaca ulang seluruh collection setiap ada 1 dokumen berubah.
+    getDocs(collection(db, C.SHIPMENTS)).then((snap) =>
+      setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() })))
+    );
+    getDocs(collection(db, C.KASBON)).then((snap) =>
+      setKasbonList(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
 
     // HEMAT KUOTA: materials, payroll, gajian_history hanya dipakai di tab Rekap/Kain.
     // Tidak perlu realtime — cukup load sekali saat app dibuka.
@@ -1468,8 +1480,6 @@ export default function App() {
       unsubOrders();
       unsubProduksi();
       unsubEntries();
-      unsubShipments();
-      unsubKasbon();
     };
   }, [user]);
 
@@ -2413,11 +2423,11 @@ export default function App() {
   }
 
 function rateDocId(productType, model, process) {
-    const typeKey = safeDocId(normalizeProductTypeKey(productType || "kerudung"), "type");
-    const processKey = safeDocId(normalizeProcessKey(process || "proses") || lower(process || "proses"), "process");
-    const modelKey = safeDocId(normalizeModelKey(model || "all"), "model");
-    return `rate_${typeKey}_${processKey}_${modelKey}`;
-  }
+  const typeKey = safeDocId(normalizeProductTypeKey(productType || "kerudung"), "type");
+  const processKey = safeDocId(normalizeProcessKey(process || "proses") || lower(process || "proses"), "process");
+  const modelKey = safeDocId(normalizeModelKey(model || "all"), "model");
+  return `rate_${typeKey}_${processKey}_${modelKey}`;
+}
 
   function effectiveRateValue(rawRate, employeeName) {
     const base = Number(rawRate || 0);
@@ -2713,8 +2723,7 @@ function rateDocId(productType, model, process) {
           });
         }
       });
-      setToast("✅ Status produksi diperbarui");
-      setTimeout(() => setToast(""), 2500);
+      showToast("✅ Status produksi diperbarui", 2500);
     } catch (e) {
       alert("Gagal update status: " + (e?.message || e));
     } finally {
@@ -2751,8 +2760,7 @@ function rateDocId(productType, model, process) {
       });
       setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
       setModal(null);
-      setToast("✅ Tarif berhasil disimpan");
-      setTimeout(() => setToast(""), 2500);
+      showToast("✅ Tarif berhasil disimpan", 2500);
     } catch (e) {
       alert("Gagal simpan tarif: " + (e?.message || e));
     } finally {
@@ -2991,10 +2999,10 @@ function rateDocId(productType, model, process) {
         nextSisaForToast = nextSisa;
       });
 
-      setToast(nextSisaForToast > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "✅ Setor selesai tersimpan.");
-      setTimeout(() => setToast(""), 3500);
+      showToast(nextSisaForToast > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "✅ Setor selesai tersimpan.", 3500);
 
       await autoUpdateProduksiStatus(setorModal, nextHistoryForStatus);
+      refreshPayroll(); // setor membuat dokumen payroll baru
 
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
@@ -3325,6 +3333,7 @@ function rateDocId(productType, model, process) {
         catatan: "",
       });
       setModal(null);
+      refreshShipments(); // sinkron data pengiriman tanpa onSnapshot
     } catch (e) {
       alert("Gagal simpan pengiriman: " + e.message);
     } finally {
@@ -3349,7 +3358,6 @@ function rateDocId(productType, model, process) {
     }
     const { type, id } = confirmDelete;
     setConfirmDelete(null);
-    setDeleteStep(0);
     try {
       if (type === "rate") await deleteDoc(doc(db, C.WORK_RATES, id));
       if (type === "entry") {
@@ -3358,9 +3366,9 @@ function rateDocId(productType, model, process) {
         batch.delete(doc(db, C.PRODUCTION_ENTRIES, id));
         payrollSnap.docs.forEach((d) => batch.delete(d.ref));
         await batch.commit();
+        refreshPayroll(); // hapus entry juga hapus payroll terkait
       }
-      setToast("🗑️ Data berhasil dihapus");
-      setTimeout(() => setToast(""), 3000);
+      showToast("🗑️ Data berhasil dihapus", 3000);
     } catch (e) {
       alert("Gagal hapus: " + e.message);
     }
@@ -3486,8 +3494,7 @@ function rateDocId(productType, model, process) {
       });
 
       setEditEntryModal(null);
-      setToast("✅ Entry berhasil diupdate");
-      setTimeout(() => setToast(""), 3000);
+      showToast("✅ Entry berhasil diupdate", 3000);
     } catch (e) {
       alert("Gagal update: " + (e?.message || e));
     } finally {
@@ -3609,8 +3616,9 @@ function rateDocId(productType, model, process) {
         transaction.delete(markerRef);
         transaction.delete(historyRef);
       });
-      setToast("↩️ Status gajian dibatalkan dan kasbon dikembalikan");
-      setTimeout(() => setToast(""), 3500);
+      showToast("↩️ Status gajian dibatalkan dan kasbon dikembalikan", 3500);
+      refreshKasbon();
+      refreshPayroll();
     } catch (e) {
       alert("Gagal membatalkan status gajian: " + (e?.message || e));
     } finally {
@@ -3637,8 +3645,8 @@ function rateDocId(productType, model, process) {
         source: "input_manual_lama",
         createdAt: todayStr(),
       });
-      setToast("✅ Riwayat gajian berhasil disimpan");
-      setTimeout(() => setToast(""), 3000);
+      showToast("✅ Riwayat gajian berhasil disimpan", 3000);
+      refreshGajianHistory();
       setFormGajianLama({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
     } catch (e) {
       alert("Gagal menyimpan: " + (e?.message || e));
@@ -3664,8 +3672,7 @@ function rateDocId(productType, model, process) {
   async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     if (!nama) return;
     if (sudahGajian(nama, dari, sampai)) {
-      setToast("✅ Status gajian sudah tercatat");
-      setTimeout(() => setToast(""), 2500);
+      showToast("✅ Status gajian sudah tercatat", 2500);
       return;
     }
     const jumlah = Number(r?.gaji || 0);
@@ -3705,8 +3712,7 @@ function rateDocId(productType, model, process) {
         )
       );
       if (!existingSnap.empty) {
-        setToast("✅ Status gajian sudah tercatat (cek server)");
-        setTimeout(() => setToast(""), 2500);
+        showToast("✅ Status gajian sudah tercatat (cek server)", 2500);
         return;
       }
 
@@ -3792,8 +3798,10 @@ function rateDocId(productType, model, process) {
       const toastMsg = actualPotonganKasbon > 0
         ? `✅ Gajian tersimpan · Kasbon dipotong ${money(actualPotonganKasbon)}`
         : "✅ Status berubah menjadi Sudah gajian";
-      setToast(toastMsg);
-      setTimeout(() => setToast(""), 3500);
+      showToast(toastMsg, 3500);
+      refreshKasbon();
+      refreshPayroll();
+      refreshGajianHistory();
     } catch (e) {
       alert("Gagal menandai sudah gajian: " + (e?.message || e));
     } finally {
@@ -3805,8 +3813,8 @@ function rateDocId(productType, model, process) {
     if (!window.confirm("Hapus riwayat gajian ini?")) return;
     try {
       await deleteDoc(doc(db, C.GAJIAN_HISTORY, id));
-      setToast("🗑️ Riwayat gajian dihapus");
-      setTimeout(() => setToast(""), 2500);
+      showToast("🗑️ Riwayat gajian dihapus", 2500);
+      refreshGajianHistory();
     } catch (e) {
       alert("Gagal menghapus: " + (e?.message || e));
     }
@@ -3939,8 +3947,7 @@ function rateDocId(productType, model, process) {
         printTab.document.close();
       }
 
-      setToast("✅ Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.");
-      setTimeout(() => setToast(""), 4500);
+      showToast("✅ Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.", 4500);
       return html;
     } catch (e) {
       alert("Gagal membuat slip gaji: " + (e?.message || e));
@@ -4240,8 +4247,7 @@ function rateDocId(productType, model, process) {
           title: `Slip Gaji ${slipImage.nama}`,
           text: `Slip Pendapatan Borongan - ${slipImage.nama} (${slipImage.dari} s/d ${slipImage.sampai})`,
         });
-        setToast("✅ Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.");
-        setTimeout(() => setToast(""), 3500);
+        showToast("✅ Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.", 3500);
         return;
       }
 
@@ -4251,8 +4257,7 @@ function rateDocId(productType, model, process) {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setToast("⚠️ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.");
-      setTimeout(() => setToast(""), 6000);
+      showToast("⚠️ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.", 6000);
     } catch (e) {
       if (e?.name === "AbortError") return;
       alert("Gagal share slip gaji: " + (e?.message || e));
