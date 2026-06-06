@@ -4,6 +4,7 @@ import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
 import { safeDocId } from "./utils/idUtils";
+import { normalizeInvoice } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -674,9 +675,6 @@ function chooseBetterProduction(current, candidate) {
     ? candidate
     : current;
 }
-function normalizedInvoice(value) {
-  return String(value || "").trim();
-}
 function buildProductionItemsFromOrder(order, fallbackProd = null) {
   const parsedItems = (order?.items || [])
     .filter((it) => it && it.name && it.name !== "-" && Number(it.qty || 0) > 0)
@@ -695,11 +693,11 @@ function buildProductionItemsFromOrder(order, fallbackProd = null) {
 }
 function entriesForProductionOrder(entries, prod, order) {
   const orderId = String(order?.id || prod?.orderId || prod?.pesananId || "").trim();
-  const invoice = normalizedInvoice(order?.invoice || prod?.invoice || order?.raw?.invoice);
+  const invoice = normalizeInvoice(order?.invoice || prod?.invoice || order?.raw?.invoice);
   const prodId = String(prod?.id || "").trim();
   return (entries || []).filter((entry) => {
     const entryOrderId = String(entry?.orderId || entry?.pesananId || "").trim();
-    const entryInvoice = normalizedInvoice(entry?.invoice || entry?.orderInvoice);
+    const entryInvoice = normalizeInvoice(entry?.invoice || entry?.orderInvoice);
     const entryProdId = String(entry?.produksiId || entry?.productionId || "").trim();
     return (orderId && entryOrderId === orderId) || (invoice && entryInvoice === invoice) || (prodId && entryProdId === prodId);
   });
@@ -1432,11 +1430,11 @@ export default function App() {
     const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
     const needsMigration = produksi.filter((p) => {
-      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
+      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizeInvoice(p.invoice));
       if (!order) return false;
       if (!Array.isArray(p.items) || p.items.length === 0) return true;
       if (p.items.length === 1 && Number(p.items[0].qty) === Number(p.qty)) {
@@ -1447,7 +1445,7 @@ export default function App() {
     if (needsMigration.length === 0) { itemsMigrationDoneRef.current = true; return; }
     (async () => {
       for (const p of needsMigration.slice(0, 8)) {
-        const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
+        const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizeInvoice(p.invoice));
         if (!order) continue;
         const key = `items-${p.id}`;
         if (productionBackfillSyncingRef.current.has(key)) continue;
@@ -1485,7 +1483,7 @@ export default function App() {
   const produksiByOrderId = useMemo(() => {
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
     const map = new Map();
@@ -1493,7 +1491,7 @@ export default function App() {
       const matchedOrderIds = new Set();
       const directId = String(p.orderId || p.pesananId || "").trim();
       if (directId) matchedOrderIds.add(directId);
-      const byInvoice = orderByInvoice.get(normalizedInvoice(p.invoice || p.orderInvoice || p.kode || p.code));
+      const byInvoice = orderByInvoice.get(normalizeInvoice(p.invoice || p.orderInvoice || p.kode || p.code));
       if (byInvoice?.id) matchedOrderIds.add(byInvoice.id);
       matchedOrderIds.forEach((orderId) => {
         map.set(orderId, chooseBetterProduction(map.get(orderId), p));
@@ -1505,7 +1503,7 @@ export default function App() {
     const orderById = new Map(orders.map((o) => [o.id, o]));
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
     const map = new Map();
@@ -1554,13 +1552,13 @@ export default function App() {
     const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
     const tasks = [];
     produksi.forEach((prod) => {
       const directOrder = orderById.get(String(prod.orderId || prod.pesananId || "").trim());
-      const invoiceOrder = orderByInvoice.get(normalizedInvoice(prod.invoice || prod.orderInvoice || prod.kode || prod.code));
+      const invoiceOrder = orderByInvoice.get(normalizeInvoice(prod.invoice || prod.orderInvoice || prod.kode || prod.code));
       const order = directOrder || invoiceOrder;
       if (!order) return;
       const inferredStatus = inferProductionStatusFromReality(prod, order, productionEntries, shipmentByOrderId);
@@ -2050,10 +2048,10 @@ export default function App() {
     return { topPekerja, monthLabel };
   }, [productionEntries]);
   const cleanDuplicateProduksi = React.useCallback(async (duplicateKey) => {
-    const key = normalizedInvoice(duplicateKey);
+    const key = normalizeInvoice(duplicateKey);
     if (!key) return showToast("Data produksi duplikat tidak punya kode order yang jelas.", 3500);
     const rows = (produksi || []).filter((prod) => {
-      const prodKey = normalizedInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
+      const prodKey = normalizeInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
       return prodKey === key;
     });
     if (rows.length <= 1) {
@@ -2120,7 +2118,7 @@ export default function App() {
     const alerts = [];
     const productionDuplicateMap = new Map();
     (produksi || []).forEach((prod) => {
-      const key = normalizedInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
+      const key = normalizeInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
       if (!key) return;
       const arr = productionDuplicateMap.get(key) || [];
       arr.push(prod);
@@ -2129,7 +2127,7 @@ export default function App() {
     productionDuplicateMap.forEach((rows) => {
       if (rows.length <= 1) return;
       const sample = rows[0] || {};
-      const duplicateKey = normalizedInvoice(sample.invoice || sample.orderInvoice || sample.orderId || sample.pesananId || sample.id);
+      const duplicateKey = normalizeInvoice(sample.invoice || sample.orderInvoice || sample.orderId || sample.pesananId || sample.id);
       alerts.push({
         type: "Produksi duplikat",
         text: `${sample.customer || "Customer"} Â· ${sample.invoice || sample.orderId || sample.id || "-"} Â· ${rows.length} data produksi ditemukan`,
@@ -6750,6 +6748,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
