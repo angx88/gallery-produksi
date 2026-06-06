@@ -1,4 +1,4 @@
-// App.jsx Gallery Produksi - mode hemat kuota Firestore - 2026-06-06
+// App.jsx Gallery Produksi - tahap 3: tampilan HD + hemat kuota Firestore - 2026-06-06
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
 // PERFORMA: (1) work_rates, master_pekerja, materials, payroll, gajian_history pakai getDocs.
@@ -12,6 +12,7 @@
 //     deleteStep. rateDocId dipindah ke luar App(). Toast cleanup via toastTimerRef.
 // (8) Tahap 2: cache setorTotals per render, workerNameOptions tidak lagi membaca payrollExpenses,
 //     loadedDataRef reset saat logout, dan guard refresh pakai ref agar tidak memicu rebuild callback.
+// (9) Tahap 3: tampilan HD HP, tap target lebih besar, kontras lebih kuat, dan badge lebih terbaca.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
@@ -1068,8 +1069,8 @@ function Button({ children, onClick, className = "", style = {}, disabled }) {
       type="button"
       disabled={Boolean(disabled)}
       onClick={onClick}
-      className={`px-4 py-3 text-white transition-all active:scale-95 shadow-sm ${className}`}
-      style={{ borderRadius: 16, fontWeight: 800, opacity: disabled ? 0.55 : 1, ...style }}
+      className={`px-5 py-3.5 text-white transition-all active:scale-95 shadow-sm ${className}`}
+      style={{ borderRadius: 18, fontWeight: 900, minHeight: 48, letterSpacing: 0.1, opacity: disabled ? 0.55 : 1, ...style }}
     >
       {children}
     </button>
@@ -1079,19 +1080,20 @@ function Button({ children, onClick, className = "", style = {}, disabled }) {
 function Input({ label, value, onChange, placeholder, type = "text", readOnly = false }) {
   return (
     <div className="space-y-1">
-      <label className="text-sm font-bold" style={{ color: "#9333ea" }}>{label}</label>
+      <label className="text-sm font-black" style={{ color: "#7e22ce" }}>{label}</label>
       <input
         value={value}
         type={type}
         readOnly={readOnly}
         placeholder={placeholder}
         onChange={(e) => onChange?.(e.target.value)}
-        className="w-full px-4 py-3 outline-none text-base"
+        className="w-full px-4 py-3.5 outline-none text-base font-semibold"
         style={{
-          borderRadius: 14,
-          border: "1.5px solid #f9a8d4",
-          background: readOnly ? "#f1f5f9" : "#fdf2f8",
-          color: readOnly ? "#64748b" : "#2d1b69",
+          borderRadius: 16,
+          border: "1.7px solid #f0abfc",
+          background: readOnly ? "#f1f5f9" : "#fff7fb",
+          color: readOnly ? "#475569" : "#1e1b4b",
+          minHeight: 50,
         }}
       />
     </div>
@@ -1101,16 +1103,17 @@ function Input({ label, value, onChange, placeholder, type = "text", readOnly = 
 function Select({ label, value, onChange, children }) {
   return (
     <div className="space-y-1">
-      <label className="text-sm font-bold" style={{ color: "#9333ea" }}>{label}</label>
+      <label className="text-sm font-black" style={{ color: "#7e22ce" }}>{label}</label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-4 py-3 outline-none text-base"
+        className="w-full px-4 py-3.5 outline-none text-base font-semibold"
         style={{
-          borderRadius: 14,
-          border: "1.5px solid #f9a8d4",
-          background: "#fdf2f8",
-          color: "#2d1b69",
+          borderRadius: 16,
+          border: "1.7px solid #f0abfc",
+          background: "#fff7fb",
+          color: "#1e1b4b",
+          minHeight: 50,
         }}
       >
         {children}
@@ -1125,15 +1128,15 @@ function Modal({ title, children, onClose }) {
       <motion.div
         initial={{ y: 80 }}
         animate={{ y: 0 }}
-        className="max-h-[92vh] w-full overflow-auto p-5"
-        style={{ background: "white", borderRadius: "32px 32px 0 0", borderTop: "3px solid #f9a8d4" }}
+        className="max-h-[92vh] w-full overflow-auto p-5 sm:p-6"
+        style={{ background: "white", borderRadius: "32px 32px 0 0", borderTop: "4px solid #f472b6" }}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-bold" style={{ color: "#ec4899" }}>{title}</h2>
+          <h2 className="text-2xl font-black leading-tight" style={{ color: "#db2777" }}>{title}</h2>
           <button
             onClick={onClose}
-            className="rounded-2xl px-4 py-2 text-base font-semibold"
-            style={{ background: "#fdf2f8", color: "#ec4899" }}
+            className="rounded-2xl px-5 py-3 text-base font-black"
+            style={{ background: "#fdf2f8", color: "#db2777", minHeight: 44 }}
           >
             Tutup
           </button>
@@ -1150,7 +1153,7 @@ function Card({ children, className = "", style = {}, onClick }) {
     <div
       onClick={onClick}
       className={`rounded-3xl bg-white p-4 shadow-sm ${className}`}
-      style={{ border: "1px solid #fce7f3", ...style }}
+      style={{ border: "1.3px solid #fbcfe8", boxShadow: "0 8px 24px rgba(148, 163, 184, 0.16)", ...style }}
     >
       {children}
     </div>
@@ -1161,14 +1164,25 @@ function GlobalReadableStyle() {
   return (
     <style>{`
       html { -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; }
-      body { color: #0f172a; }
-      button, input, select, textarea { font-size: 16px; }
+      body { color: #0f172a; background: #fdf2f8; }
+      * { -webkit-tap-highlight-color: rgba(236,72,153,.12); }
+      button, input, select, textarea { font-size: 16px; touch-action: manipulation; }
+      button { min-height: 44px; }
       input::placeholder, textarea::placeholder { color: #64748b; opacity: 1; }
-      .text-\[10px\] { font-size: 12px !important; line-height: 1.35 !important; }
-      .text-\[11px\] { font-size: 12.5px !important; line-height: 1.4 !important; }
-      .text-xs { font-size: 13px !important; line-height: 1.45 !important; }
-      .text-sm { font-size: 15px !important; line-height: 1.5 !important; }
-      .shadow-sm { box-shadow: 0 6px 18px rgba(148, 163, 184, 0.14) !important; }
+      .text-\[10px\] { font-size: 12.5px !important; line-height: 1.45 !important; }
+      .text-\[11px\] { font-size: 13px !important; line-height: 1.45 !important; }
+      .text-xs { font-size: 13.5px !important; line-height: 1.5 !important; }
+      .text-sm { font-size: 15.5px !important; line-height: 1.55 !important; }
+      .leading-tight { line-height: 1.16 !important; }
+      .shadow-sm { box-shadow: 0 8px 24px rgba(148, 163, 184, 0.16) !important; }
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      @media (max-width: 430px) {
+        .hd-header-title { font-size: 34px !important; }
+        .hd-stat-grid { gap: 8px !important; padding: 14px !important; }
+        .hd-stat-card { padding: 10px 6px !important; }
+        .hd-tab-button { min-width: 82px !important; padding-top: 12px !important; padding-bottom: 12px !important; }
+      }
     `}</style>
   );
 }
@@ -1176,7 +1190,7 @@ function GlobalReadableStyle() {
 function StatusBadge({ status }) {
   const s = PROD_COLORS[status] || { bg: "#f1f5f9", text: "#64748b", icon: "❓" };
   return (
-    <span className="rounded-full px-3 py-1 text-xs font-bold inline-flex items-center gap-1" style={{ background: s.bg, color: s.text }}>
+    <span className="rounded-full px-3.5 py-1.5 text-xs font-black inline-flex items-center gap-1.5" style={{ background: s.bg, color: s.text, border: "1px solid rgba(15,23,42,0.06)" }}>
       {s.icon} {status || "Antri"}
     </span>
   );
@@ -4642,7 +4656,7 @@ function rateDocId(productType, model, process) {
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-md" style={{ background: "#fdf2f8" }}>
+    <div className="mx-auto min-h-screen max-w-md" style={{ background: "linear-gradient(180deg,#fff7fb 0%,#fdf2f8 45%,#faf5ff 100%)" }}>
       <GlobalReadableStyle />
       {toast && (
         <div className="fixed left-4 right-4 top-4 z-[60] rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-xl"
@@ -4651,11 +4665,11 @@ function rateDocId(productType, model, process) {
         </div>
       )}
 
-      <div className="p-6 text-white relative overflow-hidden" style={{ background: "linear-gradient(135deg,#ec4899 0%,#a855f7 100%)" }}>
+      <div className="p-6 text-white relative overflow-hidden" style={{ background: "linear-gradient(135deg,#db2777 0%,#7c3aed 100%)" }}>
         <div className="flex items-start justify-between relative z-10">
           <div>
-            <div className="text-4xl font-extrabold leading-tight">Gallery Produksi</div>
-            <div className="mt-2 text-lg opacity-90">💕 made by order ✨</div>
+            <div className="hd-header-title text-4xl font-black leading-tight">Gallery Produksi</div>
+            <div className="mt-2 text-lg font-bold opacity-95">💕 made by order ✨</div>
           </div>
           <div className="flex flex-col items-center gap-3">
             <img
@@ -4665,24 +4679,24 @@ function rateDocId(productType, model, process) {
               onError={(e) => { e.currentTarget.style.display = "none"; }}
               style={{ background: "rgba(255,255,255,0.14)", border: "3px solid rgba(255,255,255,0.35)" }}
             />
-            <button onClick={() => signOut(auth)} className="rounded-full px-6 py-2 text-sm font-bold" style={{ background: "rgba(255,255,255,0.25)" }}>
+            <button onClick={() => signOut(auth)} className="rounded-full px-6 py-3 text-sm font-black" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.28)" }}>
               Keluar
             </button>
           </div>
         </div>
-        <div className="mt-7 rounded-3xl px-5 py-4 flex items-center gap-4 relative z-10" style={{ background: "rgba(255,255,255,0.22)" }}>
+        <div className="mt-7 rounded-3xl px-5 py-4 flex items-center gap-4 relative z-10" style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.25)" }}>
           <span className="text-2xl">🔍</span>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Cari pesanan, produksi, kain, pengiriman..."
-            className="bg-transparent outline-none flex-1 text-white placeholder-pink-100 text-base"
+            className="bg-transparent outline-none flex-1 text-white placeholder-pink-100 text-base font-semibold min-w-0"
           />
           <button
             type="button"
             onClick={refreshDataSaatIni}
             disabled={refreshingDataUi}
-            className="rounded-full px-4 py-2 text-xs font-black text-white shrink-0 disabled:opacity-60 flex items-center gap-1.5"
+            className="rounded-full px-4 py-2.5 text-xs font-black text-white shrink-0 disabled:opacity-60 flex items-center gap-1.5"
             style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.35)" }}
             title="Refresh data"
           >
@@ -4693,7 +4707,7 @@ function rateDocId(productType, model, process) {
         </div>
       </div>
 
-      <div className="grid grid-cols-5 gap-2 p-4">
+      <div className="hd-stat-grid grid grid-cols-5 gap-2 p-4">
         {[
           { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋" },
           { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "⏳" },
@@ -4701,10 +4715,10 @@ function rateDocId(productType, model, process) {
           { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "✅" },
           { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "🔎" },
         ].map((s) => (
-          <div key={s.label} className="rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+          <div key={s.label} className="hd-stat-card rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1.2px solid #fbcfe8" }}>
             <div className="text-base">{s.icon}</div>
-            <div className="text-lg font-bold" style={{ color: s.color }}>{s.value}</div>
-            <div className="text-xs" style={{ color: "#94a3b8" }}>{s.label}</div>
+            <div className="text-xl font-black" style={{ color: s.color }}>{s.value}</div>
+            <div className="text-xs font-bold" style={{ color: "#64748b" }}>{s.label}</div>
           </div>
         ))}
       </div>
@@ -4802,7 +4816,7 @@ function rateDocId(productType, model, process) {
         </div>
       )}
 
-      <div className="sticky top-0 z-40 flex overflow-x-auto bg-white shadow-sm no-scrollbar" style={{ borderBottom: "2px solid #fce7f3" }}>
+      <div className="sticky top-0 z-40 flex overflow-x-auto bg-white shadow-sm no-scrollbar" style={{ borderBottom: "2px solid #fbcfe8" }}>
         {[
           { id: "dashboard", label: "Dashboard", icon: "🏠" },
           { id: "pesanan", label: "Pesanan", icon: "📋", badge: stats.belum },
@@ -4826,11 +4840,11 @@ function rateDocId(productType, model, process) {
               if (nextTab !== "kirim") setKirimOnlyBelumLengkap(false);
               setTab(nextTab);
             }}
-            className="flex-none min-w-[76px] px-2 py-3 text-[11px] font-bold flex flex-col items-center gap-1 relative"
+            className="hd-tab-button flex-none min-w-[82px] px-2 py-3 text-[11px] font-black flex flex-col items-center gap-1 relative"
             style={{
-              color: isActive ? "#ec4899" : "#64748b",
-              borderBottom: isActive ? "3px solid #ec4899" : "3px solid transparent",
-              background: isActive ? "#fdf2f8" : "white",
+              color: isActive ? "#db2777" : "#475569",
+              borderBottom: isActive ? "3px solid #db2777" : "3px solid transparent",
+              background: isActive ? "#fff1f8" : "white",
             }}
           >
             <span className="text-base">{t.icon}</span>
@@ -4852,7 +4866,7 @@ function rateDocId(productType, model, process) {
             <div className="flex items-center justify-between mb-3">
               <div>
                 <div className="text-lg font-black" style={{ color: "#ec4899" }}>📌 Dashboard Produksi</div>
-                <div className="text-xs" style={{ color: "#94a3b8" }}>Ringkasan total keseluruhan dan periode berjalan</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>Ringkasan total keseluruhan dan periode berjalan</div>
               </div>
               <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#fdf2f8", color: "#ec4899" }}>Rekap ›</button>
             </div>
@@ -5151,7 +5165,7 @@ function rateDocId(productType, model, process) {
                   </div>
                   <div className="text-right">
                     <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{o.qty}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>total pcs</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>total pcs</div>
                   </div>
                 </div>
 
@@ -5334,7 +5348,7 @@ function rateDocId(productType, model, process) {
                 <div className="flex items-center gap-2 ml-2">
                   <div className="text-right">
                     <div className="text-lg font-bold" style={{ color: "#ec4899" }}>{p.qty}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>pcs</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs</div>
                   </div>
                   <StatusBadge status={p.status} />
                 </div>
@@ -5407,7 +5421,7 @@ function rateDocId(productType, model, process) {
                     return (
                       <div key={r.label} className="rounded-xl p-2 text-center" style={{ background: sesuai ? "#dcfce7" : "#fef3c7" }}>
                         <div className="text-xs font-bold" style={{ color: sesuai ? "#16a34a" : "#b45309" }}>{r.qty}</div>
-                        <div className="text-xs" style={{ color: "#94a3b8" }}>{r.label}</div>
+                        <div className="text-xs font-bold" style={{ color: "#64748b" }}>{r.label}</div>
                       </div>
                     );
                   })}
@@ -5485,7 +5499,7 @@ function rateDocId(productType, model, process) {
           <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #fce7f3" }}>
             <div className="text-xs font-bold" style={{ color: "#a855f7" }}>Total hasil borongan</div>
             <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{stats.boronganPcs} pcs</div>
-            <div className="text-xs" style={{ color: "#94a3b8" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
+            <div className="text-xs font-bold" style={{ color: "#64748b" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
           </div>
 
 
@@ -5554,17 +5568,17 @@ function rateDocId(productType, model, process) {
                 <div>
                   <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
                   <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
-                  {e.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {e.invoice}</div>}
+                  {e.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>🧾 {e.invoice}</div>}
                   {!e.orderId && (
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       <span className="rounded-full px-2 py-0.5 text-[11px] font-black" style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}>⚠️ Tanpa Pesanan</span>
                     </div>
                   )}
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>📅 {e.tanggal}</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>📅 {e.tanggal}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-2xl font-bold" style={{ color: "#10b981" }}>{e.qty}</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs diberikan</div>
                 </div>
               </div>
 
@@ -5867,7 +5881,7 @@ function rateDocId(productType, model, process) {
                 className="w-full flex items-center justify-between"
               >
                 <div className="text-xs font-bold" style={{ color: "#065f46" }}>📝 Input Riwayat Gajian Lama</div>
-                <span className="text-xs" style={{ color: "#94a3b8" }}>{showFormGajianLama ? "▲ Tutup" : "▼ Buka"}</span>
+                <span className="text-xs font-bold" style={{ color: "#64748b" }}>{showFormGajianLama ? "▲ Tutup" : "▼ Buka"}</span>
               </button>
               {showFormGajianLama && (
                 <div className="space-y-2 pt-1">
@@ -5966,19 +5980,19 @@ function rateDocId(productType, model, process) {
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fce7f3" }}>
                 <div className="text-xl font-bold" style={{ color: "#ec4899" }}>{totalQty.toLocaleString()}</div>
-                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs diberikan</div>
               </div>
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #bbf7d0" }}>
                 <div className="text-xl font-bold" style={{ color: "#16a34a" }}>{totalSetor.toLocaleString()}</div>
-                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs disetor</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs disetor</div>
               </div>
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fde68a" }}>
                 <div className="text-xl font-bold" style={{ color: "#d97706" }}>{totalReject.toLocaleString()}</div>
-                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs reject</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs reject</div>
               </div>
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="text-base font-bold" style={{ color: "#7c3aed" }}>{money(totalGaji)}</div>
-                <div className="text-xs" style={{ color: "#94a3b8" }}>total gaji</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>total gaji</div>
               </div>
             </div>
 
@@ -5986,7 +6000,7 @@ function rateDocId(productType, model, process) {
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>💰 Rekap Gajian Keseluruhan</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button type="button" onClick={() => setRekapDetailModal("sudah")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
@@ -6261,7 +6275,7 @@ function rateDocId(productType, model, process) {
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📊 Rekap Gaji per Pekerja</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapPerkerja.length} pekerja</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPerkerja.length} pekerja</div>
                 </div>
                 {rekapPerkerja.map(([nama, r]) => {
                   const sudahGajianPerkerja = sudahGajian(nama, rekapDari, rekapSampai);
@@ -6421,7 +6435,7 @@ function rateDocId(productType, model, process) {
             <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               <div className="font-bold" style={{ color: "#2d1b69" }}>{k.customer || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.customer || "-"}</div>
               <div className="text-xs" style={{ color: "#a855f7" }}>👗 {k.produk || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.item || "-"}</div>
-              <div className="text-xs" style={{ color: "#94a3b8" }}>🚚 {k.tanggalKirim || "-"} · {k.ekspedisi || "-"}</div>
+              <div className="text-xs font-bold" style={{ color: "#64748b" }}>🚚 {k.tanggalKirim || "-"} · {k.ekspedisi || "-"}</div>
               <div className="mt-3 rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
                 {(k.items || []).map((item, i) => (
                   <div key={i} className="flex justify-between text-xs py-1">
@@ -7062,15 +7076,15 @@ function rateDocId(productType, model, process) {
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="rounded-xl p-2" style={{ background: "#ede9fe" }}>
                     <div className="font-bold text-base" style={{ color: "#5b21b6" }}>{r.pcsAwal}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>Diberikan</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Diberikan</div>
                   </div>
                   <div className="rounded-xl p-2" style={{ background: "#dcfce7" }}>
                     <div className="font-bold text-base" style={{ color: "#16a34a" }}>{r.pcsSetor}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>Disetor</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Disetor</div>
                   </div>
                   <div className="rounded-xl p-2" style={{ background: r.pcsReject > 0 ? "#fee2e2" : "#f1f5f9" }}>
                     <div className="font-bold text-base" style={{ color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" }}>{r.pcsReject}</div>
-                    <div className="text-xs" style={{ color: "#94a3b8" }}>Reject</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Reject</div>
                   </div>
                 </div>
 
@@ -7307,7 +7321,7 @@ function rateDocId(productType, model, process) {
                     >
                       <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(entry.employeeName)}</div>
                       <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>{entry.process || "-"}{entry.model && entry.model !== "-" ? ` · ${displayModelName(entry.model)}` : ""}</div>
-                      {entry.customer && <div className="text-xs" style={{ color: "#94a3b8" }}>{entry.customer}{entry.invoice ? ` · ${entry.invoice}` : ""}</div>}
+                      {entry.customer && <div className="text-xs font-bold" style={{ color: "#64748b" }}>{entry.customer}{entry.invoice ? ` · ${entry.invoice}` : ""}</div>}
                       <div className="mt-1 text-sm font-black" style={{ color: "#c2410c" }}>⏳ Sisa {fmtQty(totals.sisaSetor)} pcs belum setor</div>
                     </button>
                   ))}
@@ -7353,7 +7367,7 @@ function rateDocId(productType, model, process) {
                       style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}
                     >
                       <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {item.customer || item.orderCustomer || "-"}</div>
-                      {item.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {item.invoice}</div>}
+                      {item.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>🧾 {item.invoice}</div>}
                       <div className="mt-1 text-sm font-black" style={{ color: "#7c3aed" }}>
                         Status: {item.status || "Antri"}
                       </div>
@@ -7401,7 +7415,7 @@ function rateDocId(productType, model, process) {
                       style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}
                     >
                       <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {order.customer || "-"}</div>
-                      {order.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {order.invoice}</div>}
+                      {order.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}>🧾 {order.invoice}</div>}
                       <div className="mt-1 text-sm font-black" style={{ color: "#1d4ed8" }}>⏳ Sisa kirim {fmtQty(sisa)} pcs</div>
                     </button>
                   ))}
