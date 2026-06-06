@@ -20,3 +20,7 @@ export function normalizeInvoice(value) {
 export function normalizeProcessKey(value) {
   return normalizeCompactKey(value);
 }
+
+export function normalizeWorkerNameKey(name) {
+  return normalizeKey(name);
+}
