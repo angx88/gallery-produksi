@@ -10,6 +10,8 @@
 // (6) backfill legacy hanya jalan sekali per sesi (flag backfillDoneRef dll).
 // (7) Audit bersih: hapus CardHeader/Title/Desc/Content/Footer, dateAfter, PROCESSES_NO_MODEL,
 //     deleteStep. rateDocId dipindah ke luar App(). Toast cleanup via toastTimerRef.
+// (8) Tahap 2: cache setorTotals per render, workerNameOptions tidak lagi membaca payrollExpenses,
+//     loadedDataRef reset saat logout, dan guard refresh pakai ref agar tidak memicu rebuild callback.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
@@ -1239,7 +1241,7 @@ export default function App() {
   const rekapManualPeriodRef = useRef(false);
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [isRefreshingData, setIsRefreshingData] = useState(false);
+  const [refreshingDataUi, setRefreshingDataUi] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
@@ -1326,6 +1328,7 @@ export default function App() {
   const legacyDeliverySyncingRef = useRef(new Set());
   const productionBackfillSyncingRef = useRef(new Set());
   const loadedDataRef = useRef(new Set()); // penanda koleksi yang sudah dimuat per sesi/tab
+  const isRefreshingDataRef = useRef(false); // guard refresh tanpa dependency state
   // HEMAT KUOTA: flag agar backfill hanya jalan sekali per sesi.
   const legacySyncDoneRef = useRef(false);
   const itemsMigrationDoneRef = useRef(false);
@@ -1364,6 +1367,16 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (user) return;
+    loadedDataRef.current.clear();
+    isRefreshingDataRef.current = false;
+    setRefreshingDataUi(false);
+    legacySyncDoneRef.current = false;
+    itemsMigrationDoneRef.current = false;
+    backfillDoneRef.current = false;
+  }, [user]);
 
   // ── Refresh helpers (getDocs manual) ──────────────────────────────────────
   // HEMAT KUOTA: tidak memakai onSnapshot realtime untuk collection besar.
@@ -1460,8 +1473,9 @@ export default function App() {
   }, []);
 
   const refreshDataSaatIni = React.useCallback(async () => {
-    if (!user || isRefreshingData) return;
-    setIsRefreshingData(true);
+    if (!user || isRefreshingDataRef.current) return;
+    isRefreshingDataRef.current = true;
+    setRefreshingDataUi(true);
 
     const forceRefresh = async (key, loader) => {
       const result = await loader();
@@ -1506,12 +1520,12 @@ export default function App() {
       console.warn("Gagal refresh data:", e);
       showToast("⚠️ Gagal refresh data. Coba lagi.", 3500);
     } finally {
-      setIsRefreshingData(false);
+      isRefreshingDataRef.current = false;
+      setRefreshingDataUi(false);
     }
   }, [
     user,
     tab,
-    isRefreshingData,
     refreshOrders,
     refreshProduksi,
     refreshProductionEntries,
@@ -1734,6 +1748,20 @@ export default function App() {
     return () => clearTimeout(t);
   }, [search]);
   const q = debouncedSearch.toLowerCase();
+
+  // PERFORMA TAHAP 2: setorTotals() cukup dihitung sekali per productionEntries.
+  // Banyak panel memakai total yang sama untuk status, sisa setor, reject, dan gaji.
+  const entrySetorTotalsMap = useMemo(() => {
+    const map = new Map();
+    (productionEntries || []).forEach((entry) => {
+      map.set(entry, setorTotals(entry));
+    });
+    return map;
+  }, [productionEntries]);
+
+  const getEntrySetorTotals = React.useCallback((entry) => {
+    return entrySetorTotalsMap.get(entry) || setorTotals(entry);
+  }, [entrySetorTotalsMap]);
 
   const produksiByOrderId = useMemo(() => {
     // Matching produksi harus tahan data lama: orderId, pesananId, dan invoice.
@@ -2058,7 +2086,7 @@ export default function App() {
 
   const filteredEntries = useMemo(() => {
     const statusPriority = (e) => {
-      const s = setorTotals(e).statusSetor;
+      const s = getEntrySetorTotals(e).statusSetor;
       if (s === "belum_setor") return 0;
       if (s === "setor_sebagian") return 1;
       return 2; // sudah_setor
@@ -2074,7 +2102,7 @@ export default function App() {
         const txt = `${e.employeeName} ${e.productType} ${e.model} ${e.process} ${e.invoice}`.toLowerCase();
         return q === "" || txt.includes(q);
       });
-  }, [productionEntries, q]);
+  }, [productionEntries, q, getEntrySetorTotals]);
 
 
   const materialUsageByName = useMemo(() => {
@@ -2300,7 +2328,7 @@ export default function App() {
   }, [orders, productionEntries, payrollExpenses, ordersPerluDicekIds, produksiByOrderId, shipmentByOrderId]);
 
   const dashboardSummary = useMemo(() => {
-    const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
+    const entryTotals = (productionEntries || []).map((e) => getEntrySetorTotals(e));
     const totalDiberi = (productionEntries || []).reduce((sum, e) => sum + Number(e.qty || 0), 0);
     const totalSetor = entryTotals.reduce((sum, t) => sum + Number(t.qtySetor || 0), 0);
     const totalReject = entryTotals.reduce((sum, t) => sum + Number(t.qtyReject || 0), 0);
@@ -2355,7 +2383,7 @@ export default function App() {
       kurangKirimFinal: orderQtySummary.kurangKirimFinal,
       bahanTotal, shipmentTotal,
     };
-  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId]);
+  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId, getEntrySetorTotals]);
 
   // PERFORMA: dashboardInsights dipecah jadi 3 useMemo terpisah dengan
   // dependencies yang lebih sempit — sehingga tidak semua bagian
@@ -2468,7 +2496,7 @@ export default function App() {
   // (C) Tugas hari ini & alerts — butuh orders, produksi, productionEntries
   const dashboardInsights = useMemo(() => {
     const activeBorongan = (productionEntries || [])
-      .map((entry) => ({ entry, totals: setorTotals(entry) }))
+      .map((entry) => ({ entry, totals: getEntrySetorTotals(entry) }))
       .filter(({ totals }) => Number(totals.sisaSetor || 0) > 0)
       .sort((a, b) => Number(b.totals.sisaSetor || 0) - Number(a.totals.sisaSetor || 0));
 
@@ -2511,7 +2539,7 @@ export default function App() {
     });
 
     (productionEntries || []).forEach((entry) => {
-      const totals = setorTotals(entry);
+      const totals = getEntrySetorTotals(entry);
       const totalAktivitas = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
       const diberi = Number(entry.qty || 0);
       if (diberi > 0 && totalAktivitas > diberi) {
@@ -2573,7 +2601,7 @@ export default function App() {
       maxWeeklyPcs: dashboardWeeklyRows.maxWeeklyPcs,
       monthLabel: dashboardTopPekerja.monthLabel,
     };
-  }, [orders, produksi, productionEntries, dashboardWeeklyRows, dashboardTopPekerja]);
+  }, [orders, produksi, productionEntries, dashboardWeeklyRows, dashboardTopPekerja, getEntrySetorTotals]);
 
   const workerNameOptions = useMemo(() => {
     const map = new Map();
@@ -2587,9 +2615,8 @@ export default function App() {
     masterPekerja.forEach((p) => p.nama && addName(p.nama)); // dari master daftar pekerja Gallery Kerudung
     productionEntries.forEach((e) => addName(e.employeeName));
     produksi.forEach((p) => (p.workers || []).forEach((w) => addName(w.employeeName)));
-    payrollExpenses.forEach((p) => addName(p.employeeName));
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
-  }, [masterPekerja, productionEntries, produksi, payrollExpenses]);
+  }, [masterPekerja, productionEntries, produksi]);
 
   const modelNameOptions = useMemo(() => {
     const map = new Map();
@@ -4654,13 +4681,13 @@ function rateDocId(productType, model, process) {
           <button
             type="button"
             onClick={refreshDataSaatIni}
-            disabled={isRefreshingData}
+            disabled={refreshingDataUi}
             className="rounded-full px-4 py-2 text-xs font-black text-white shrink-0 disabled:opacity-60 flex items-center gap-1.5"
             style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.35)" }}
             title="Refresh data"
           >
-            <span>{isRefreshingData ? "..." : "↻"}</span>
-            <span>{isRefreshingData ? "Memuat" : "Refresh"}</span>
+            <span>{refreshingDataUi ? "..." : "↻"}</span>
+            <span>{refreshingDataUi ? "Memuat" : "Refresh"}</span>
           </button>
           {search && <button type="button" onClick={() => setSearch("")} className="text-pink-100 font-bold">✕</button>}
         </div>
@@ -5463,15 +5490,15 @@ function rateDocId(productType, model, process) {
 
 
           {(boronganOnlyBelumSetor
-            ? filteredEntries.filter((e) => setorTotals(e).statusSetor !== "sudah_setor")
+            ? filteredEntries.filter((e) => getEntrySetorTotals(e).statusSetor !== "sudah_setor")
             : boronganOnlyOverSetor
               ? filteredEntries.filter((e) => {
-                  const totals = setorTotals(e);
+                  const totals = getEntrySetorTotals(e);
                   return (Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0)) > Number(e.qty || 0);
                 })
               : filteredEntries
           ).map((e) => {
-            const totals = setorTotals(e);
+            const totals = getEntrySetorTotals(e);
             const sudahSetor = totals.statusSetor === "sudah_setor";
             const setorSebagian = totals.statusSetor === "setor_sebagian";
             const qtyReject = Number(totals.qtyReject || 0);
@@ -5587,7 +5614,7 @@ function rateDocId(productType, model, process) {
         const byProses = {};
         filtered.forEach((e) => {
           const p = e.process || "Lainnya";
-          const allTotals = setorTotals(e);
+          const allTotals = getEntrySetorTotals(e);
           const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
           const inputInRange = inRange(e.tanggal);
           // Basis "Diberi" di Rekap tidak boleh hanya melihat tanggal pemberian.
@@ -5636,7 +5663,7 @@ function rateDocId(productType, model, process) {
           const inputInRange = inRange(e.tanggal);
           const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
           const rangeTotals = setorTotalsFromHistory(rangeHistory);
-          const allTotals = setorTotals(e);
+          const allTotals = getEntrySetorTotals(e);
           if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
           // Basis "Diberi" per pekerja: pekerjaan yang diberi dalam periode + pekerjaan lama yang disetor/reject dalam periode.
           // Jadi angka Diberi tidak lebih kecil dari Setor karena carry-over minggu sebelumnya.
