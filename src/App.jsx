@@ -2313,6 +2313,65 @@ export default function App() {
     return { topPekerja, monthLabel };
   }, [productionEntries]);
 
+  const cleanDuplicateProduksi = React.useCallback(async (duplicateKey) => {
+    const key = normalizedInvoice(duplicateKey);
+    if (!key) return showToast("Data produksi duplikat tidak punya kode order yang jelas.", 3500);
+
+    const rows = (produksi || []).filter((prod) => {
+      const prodKey = normalizedInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
+      return prodKey === key;
+    });
+
+    if (rows.length <= 1) {
+      await refreshProduksi();
+      return showToast("Duplikat sudah tidak ditemukan.", 3000);
+    }
+
+    const rowsWithUsage = rows.map((row) => ({
+      row,
+      relatedEntries: entriesForProductionOrder(productionEntries || [], row, null),
+    }));
+
+    const usedRows = rowsWithUsage.filter(({ relatedEntries }) => relatedEntries.length > 0);
+    if (usedRows.length > 1) {
+      setSearch(key);
+      setTab("produksi");
+      return showToast("Ada lebih dari 1 data produksi yang sudah dipakai borongan/setor. Cek manual, tidak dihapus otomatis.", 6000);
+    }
+
+    const keepRow = usedRows[0]?.row || rows.reduce((best, row) => chooseBetterProduction(best, row), null);
+    const deletableRows = rowsWithUsage
+      .filter(({ row, relatedEntries }) => row.id !== keepRow?.id && relatedEntries.length === 0)
+      .map(({ row }) => row);
+
+    if (deletableRows.length === 0) {
+      setSearch(key);
+      setTab("produksi");
+      return showToast("Tidak ada duplikat yang aman dihapus otomatis.", 4500);
+    }
+
+    const ok = window.confirm(
+      `Bersihkan ${deletableRows.length} data produksi duplikat yang belum punya borongan/setor?\n\n` +
+      `Data yang sudah dipakai borongan/setor tidak akan dihapus.`
+    );
+    if (!ok) return;
+
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      deletableRows.forEach((row) => batch.delete(doc(db, C.PRODUKSI, row.id)));
+      await batch.commit();
+      setProduksi((prev) => (prev || []).filter((row) => !deletableRows.some((del) => del.id === row.id)));
+      await refreshProduksi();
+      showToast(`✅ ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
+    } catch (e) {
+      console.error(e);
+      alert(`Gagal membersihkan duplikat: ${e.message || e}`);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [produksi, productionEntries, refreshProduksi, showToast]);
+
   // (C) Tugas hari ini & alerts — butuh orders, produksi, productionEntries
   const dashboardInsights = useMemo(() => {
     const activeBorongan = (productionEntries || [])
@@ -2348,11 +2407,13 @@ export default function App() {
     productionDuplicateMap.forEach((rows) => {
       if (rows.length <= 1) return;
       const sample = rows[0] || {};
+      const duplicateKey = normalizedInvoice(sample.invoice || sample.orderInvoice || sample.orderId || sample.pesananId || sample.id);
       alerts.push({
         type: "Produksi duplikat",
         text: `${sample.customer || "Customer"} · ${sample.invoice || sample.orderId || sample.id || "-"} · ${rows.length} data produksi ditemukan`,
         tab: "produksi",
         search: sample.invoice || sample.orderId || sample.customer || "",
+        duplicateKey,
       });
     });
 
@@ -7159,25 +7220,37 @@ function rateDocId(productType, model, process) {
                   <div key={`alert-modal-${alert.type}-${idx}`} className="rounded-2xl p-4" style={{ background: "#fff7f7", border: "1.5px solid #fecaca" }}>
                     <div className="font-black text-sm mb-1" style={{ color: "#be123c" }}>{alert.type}</div>
                     <div className="text-xs" style={{ color: "#64748b" }}>{alert.text}</div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAlertDetailModal(false);
-                        setSearch(alert.search || "");
-                        if (alert.type === "Setor melebihi diberi") {
-                          setBoronganOnlyOverSetor(true);
-                          setBoronganOnlyBelumSetor(false);
-                        } else {
-                          setBoronganOnlyOverSetor(false);
-                        }
-                        if (alert.tab === "pesanan") setPesananOnlyNeedCheck(true);
-                        setTab(alert.tab);
-                      }}
-                      className="mt-3 rounded-xl px-4 py-2 text-xs font-bold text-white"
-                      style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
-                    >
-                      Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
-                    </button>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAlertDetailModal(false);
+                          setSearch(alert.search || "");
+                          if (alert.type === "Setor melebihi diberi") {
+                            setBoronganOnlyOverSetor(true);
+                            setBoronganOnlyBelumSetor(false);
+                          } else {
+                            setBoronganOnlyOverSetor(false);
+                          }
+                          if (alert.tab === "pesanan") setPesananOnlyNeedCheck(true);
+                          setTab(alert.tab);
+                        }}
+                        className="rounded-xl px-4 py-2 text-xs font-bold text-white"
+                        style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
+                      >
+                        Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
+                      </button>
+                      {alert.type === "Produksi duplikat" && (
+                        <button
+                          type="button"
+                          onClick={() => cleanDuplicateProduksi(alert.duplicateKey || alert.search)}
+                          className="rounded-xl px-4 py-2 text-xs font-bold"
+                          style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac" }}
+                        >
+                          Bersihkan Duplikat Aman
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
                 {dashboardInsights.alertCount > dashboardInsights.alerts.length && (
