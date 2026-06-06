@@ -4,7 +4,7 @@ import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
 import { safeDocId } from "./utils/idUtils";
-import { normalizeInvoice, normalizeKey } from "./utils/normalizers";
+import { normalizeInvoice, normalizeKey, normalizeCompactKey } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -227,9 +227,6 @@ function normalizeMasterKey(value) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-function normalizeCompactKey(value) {
-  return normalizeMasterKey(value).replace(/\s+/g, "");
 }
 function normalizeProcessKey(value) {
   const key = normalizeMasterKey(value);
@@ -6745,6 +6742,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
