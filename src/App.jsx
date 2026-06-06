@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
-import { safeDocId } from "./utils/idUtils";
+import { safeDocId, safeFileName } from "./utils/idUtils";
 import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey, normalizeMasterKey } from "./utils/normalizers";
 import {
   collection,
@@ -3523,12 +3523,6 @@ function rateDocId(productType, model, process) {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
-  function safeFileName(value) {
-    return String(value || "SlipGaji")
-      .trim()
-      .replace(/[^a-zA-Z0-9-_]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "SlipGaji";
-  }
   function buildSlipHtml(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     const fmt = (v) => new Intl.NumberFormat("id-ID", {
       style: "currency",
@@ -6703,6 +6697,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
