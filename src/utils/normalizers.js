@@ -24,3 +24,7 @@ export function normalizeProcessKey(value) {
 export function normalizeWorkerNameKey(name) {
   return normalizeKey(name);
 }
+
+export function normalizeModelKey(name) {
+  return normalizeCompactKey(name);
+}
