@@ -4,7 +4,7 @@ import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
 import { safeDocId } from "./utils/idUtils";
-import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey } from "./utils/normalizers";
+import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -241,13 +241,6 @@ const WORKER_PROCESS_WORDS = new Set([
 ]);
 const WORKER_TITLE_WORDS = new Set(["teh", "ibu", "mbak", "mba", "pak"]);
 const WORKER_NOISE_WORDS = new Set([...WORKER_PROCESS_WORDS, ...WORKER_TITLE_WORDS]);
-function normalizeWorkerNameKey(name) {
-  const words = normalizeMasterKey(name)
-    .split(" ")
-    .filter(Boolean)
-    .filter((w) => !WORKER_NOISE_WORDS.has(w));
-  return words.join(" ") || normalizeMasterKey(name);
-}
 function displayWorkerName(name) {
   const words = cleanMasterText(name)
     .split(" ")
@@ -6723,6 +6716,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
