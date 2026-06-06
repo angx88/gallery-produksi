@@ -28,3 +28,7 @@ export function normalizeWorkerNameKey(name) {
 export function normalizeModelKey(name) {
   return normalizeCompactKey(name);
 }
+
+export function normalizeProductTypeKey(name) {
+  return normalizeCompactKey(name);
+}
