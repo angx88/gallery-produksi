@@ -7,3 +7,12 @@
     .replace(/^-|-$/g, "");
   return cleaned || `${fallback}-${Date.now()}`;
 }
+
+export function safeFileName(value) {
+  return String(value || "file")
+    .trim()
+    .replace(/[\/\\#?%*:|"<>]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "file";
+}
