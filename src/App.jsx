@@ -4,7 +4,7 @@ import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
 import { safeDocId } from "./utils/idUtils";
-import { normalizeInvoice, normalizeKey, normalizeCompactKey } from "./utils/normalizers";
+import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -227,25 +227,6 @@ function normalizeMasterKey(value) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-function normalizeProcessKey(value) {
-  const key = normalizeMasterKey(value);
-  const compact = normalizeCompactKey(value);
-  if (!key) return "";
-  if (key.includes("potong")) return "potong";
-  if (key.includes("jahit")) return "jahit";
-  const isPackingQc =
-    compact === "qcpacking" ||
-    compact === "packingqc" ||
-    compact === "pengemasanqc" ||
-    compact === "qcpengemasan" ||
-    key.includes("qc packing") ||
-    key.includes("packing qc") ||
-    key.includes("pengemasan qc") ||
-    key.includes("qc pengemasan") ||
-    ((key.includes("qc") || key.includes("quality control")) && (key.includes("packing") || key.includes("pengemasan")));
-  if (isPackingQc) return "pengemasan qc";
-  return key;
 }
 function displayProcessName(value) {
   const key = normalizeProcessKey(value);
@@ -6742,6 +6723,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
