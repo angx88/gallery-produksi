@@ -2653,6 +2653,14 @@ function rateDocId(productType, model, process) {
 
     setIsSaving(true);
     try {
+      // Pengaman tambahan: cek langsung ke Firestore, bukan hanya state lokal.
+      // Ini mencegah duplikat kalau data lokal belum refresh atau pernah ada dokumen produksi lama dengan ID berbeda.
+      const existingProduksiSnap = await getDocs(query(collection(db, C.PRODUKSI), where("orderId", "==", order.id)));
+      if (!existingProduksiSnap.empty) {
+        await refreshProduksi();
+        throw new Error("Pesanan ini sudah masuk produksi. Data produksi tidak dibuat dobel.");
+      }
+
       await runTransaction(db, async (transaction) => {
         const prodSnap = await transaction.get(prodRef);
         if (prodSnap.exists()) throw new Error("Pesanan ini sudah masuk produksi.");
