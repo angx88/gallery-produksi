@@ -1,11 +1,11 @@
-// App.jsx Gallery Produksi - hemat kuota Firestore - 2026-06-06
+// App.jsx Gallery Produksi - mode hemat kuota Firestore - 2026-06-06
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
 // PERFORMA: (1) work_rates, master_pekerja, materials, payroll, gajian_history pakai getDocs.
 // (2) SHIPMENTS, KASBON, PAYROLL_EXPENSES: getDocs + refreshData() setelah write — tidak lagi
 //     onSnapshot sehingga setiap write tidak memicu re-read seluruh collection.
-// (3) PRODUCTION_ENTRIES: onSnapshot dipertahankan tapi snapshot handler di-memo agar
-//     tidak re-map semua docs saat hanya 1 doc berubah (pakai docChanges).
+// (3) ORDERS, PRODUKSI, dan PRODUCTION_ENTRIES tidak lagi realtime onSnapshot;
+//     dimuat manual dan di-refresh setelah simpan agar hemat reads.
 // (4) debounce search 250ms, (5) dashboardInsights dipecah useMemo terpisah.
 // (6) backfill legacy hanya jalan sekali per sesi (flag backfillDoneRef dll).
 // (7) Audit bersih: hapus CardHeader/Title/Desc/Content/Footer, dateAfter, PROCESSES_NO_MODEL,
@@ -17,7 +17,6 @@ import {
   collection,
   addDoc,
   getDocs,
-  onSnapshot,
   updateDoc,
   deleteDoc,
   doc,
@@ -59,6 +58,12 @@ const C = {
   GAJIAN_HISTORY: "gajian_history",
   KASBON: "kasbon_pegawai",
 };
+
+// HEMAT KUOTA FIRESTORE:
+// Background backfill/migrasi otomatis dimatikan agar app tidak menulis/membaca data lama
+// setiap kali dibuka. Jalankan perbaikan data lama secara manual saja bila memang diperlukan.
+const ENABLE_AUTO_BACKFILL = false;
+
 
 const PROD_STATUS = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
 const GENERAL_RATE_PROCESSES = ["Potong", "Pengemasan QC"];
@@ -1293,6 +1298,7 @@ export default function App() {
   const firstOrderLoadRef = useRef(true);
   const legacyDeliverySyncingRef = useRef(new Set());
   const productionBackfillSyncingRef = useRef(new Set());
+  const loadedDataRef = useRef(new Set()); // penanda koleksi yang sudah dimuat per sesi/tab
   // HEMAT KUOTA: flag agar backfill hanya jalan sekali per sesi.
   const legacySyncDoneRef = useRef(false);
   const itemsMigrationDoneRef = useRef(false);
@@ -1333,30 +1339,97 @@ export default function App() {
   }, []);
 
   // ── Refresh helpers (getDocs manual) ──────────────────────────────────────
-  // Dipanggil setelah setiap write agar data lokal sinkron tanpa onSnapshot
-  // yang membaca ulang seluruh collection setiap ada 1 dokumen berubah.
+  // HEMAT KUOTA: tidak memakai onSnapshot realtime untuk collection besar.
+  // Data dimuat sekali saat app dibuka / saat tab terkait dibuka, lalu di-refresh manual setelah write.
+  const refreshOrders = React.useCallback(() => {
+    return getDocs(collection(db, C.ORDERS)).then((snap) => {
+      const list = snap.docs.map((d) => safeOrder({ id: d.id, ...d.data() }));
+      setOrders(list);
+      previousOrderIdsRef.current = new Set(list.map((x) => x.id));
+      firstOrderLoadRef.current = false;
+      return list;
+    });
+  }, []);
+
+  const refreshProduksi = React.useCallback(() => {
+    return getDocs(collection(db, C.PRODUKSI)).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setProduksi(list);
+      return list;
+    });
+  }, []);
+
+  const refreshProductionEntries = React.useCallback(() => {
+    return getDocs(collection(db, C.PRODUCTION_ENTRIES)).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setProductionEntries(list);
+      return list;
+    });
+  }, []);
+
+  const refreshWorkRates = React.useCallback(() => {
+    return getDocs(collection(db, C.WORK_RATES)).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setWorkRates(list);
+      return list;
+    });
+  }, []);
+
+  const refreshMasterPekerja = React.useCallback(() => {
+    return getDocs(collection(db, "master_pekerja")).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setMasterPekerja(list);
+      return list;
+    });
+  }, []);
+
   const refreshShipments = React.useCallback(() => {
-    getDocs(collection(db, C.SHIPMENTS)).then((snap) =>
-      setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() })))
-    );
+    return getDocs(collection(db, C.SHIPMENTS)).then((snap) => {
+      const list = snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }));
+      setShipments(list);
+      return list;
+    });
   }, []);
 
   const refreshKasbon = React.useCallback(() => {
-    getDocs(collection(db, C.KASBON)).then((snap) =>
-      setKasbonList(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+    return getDocs(collection(db, C.KASBON)).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setKasbonList(list);
+      return list;
+    });
+  }, []);
+
+  const refreshMaterials = React.useCallback(() => {
+    return getDocs(collection(db, C.MATERIALS)).then((snap) => {
+      const list = snap.docs.map((d) => safeMaterial({ id: d.id, ...d.data() }));
+      setMaterials(list);
+      return list;
+    });
   }, []);
 
   const refreshPayroll = React.useCallback(() => {
-    getDocs(collection(db, C.PAYROLL_EXPENSES)).then((snap) =>
-      setPayrollExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+    return getDocs(collection(db, C.PAYROLL_EXPENSES)).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setPayrollExpenses(list);
+      return list;
+    });
   }, []);
 
   const refreshGajianHistory = React.useCallback(() => {
-    getDocs(collection(db, C.GAJIAN_HISTORY)).then((snap) =>
-      setGajianHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+    return getDocs(collection(db, C.GAJIAN_HISTORY)).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setGajianHistory(list);
+      return list;
+    });
+  }, []);
+
+  const loadOnce = React.useCallback((key, loader) => {
+    if (loadedDataRef.current.has(key)) return Promise.resolve();
+    loadedDataRef.current.add(key);
+    return Promise.resolve(loader()).catch((e) => {
+      loadedDataRef.current.delete(key);
+      throw e;
+    });
   }, []);
 
   useEffect(() => {
@@ -1422,84 +1495,62 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
+    let cancelled = false;
 
-    const unsubOrders = onSnapshot(collection(db, C.ORDERS), (snap) => {
-      const list = snap.docs.map((d) => safeOrder({ id: d.id, ...d.data() }));
-
-      const ids = new Set(list.map((x) => x.id));
-      if (!firstOrderLoadRef.current) {
-        const added = list.filter((x) => !previousOrderIdsRef.current.has(x.id));
-        if (added.length > 0) {
-          showToast(`🔔 ${added.length} pesanan baru masuk dari Gallery Kerudung`, 5000);
+    (async () => {
+      try {
+        // Core data yang dibutuhkan agar dashboard/menu utama tetap berjalan.
+        // Semua getDocs sekali jalan, tidak realtime listener, supaya tidak boros reads.
+        await Promise.all([
+          loadOnce("orders", refreshOrders),
+          loadOnce("produksi", refreshProduksi),
+          loadOnce("production_entries", refreshProductionEntries),
+          loadOnce("work_rates", refreshWorkRates),
+          loadOnce("master_pekerja", refreshMasterPekerja),
+          loadOnce("shipments", refreshShipments),
+        ]);
+      } catch (e) {
+        if (!cancelled) {
+          console.warn("Gagal memuat data awal:", e);
+          showToast("⚠️ Gagal memuat sebagian data. Coba refresh aplikasi.", 4000);
         }
       }
-      previousOrderIdsRef.current = ids;
-      firstOrderLoadRef.current = false;
-      setOrders(list);
-    });
+    })();
 
-    const unsubProduksi = onSnapshot(collection(db, C.PRODUKSI), (snap) => setProduksi(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    // work_rates: data tarif jarang berubah, cukup load sekali (getDocs)
-    // agar tidak memicu re-render setiap ada perubahan collection lain.
-    getDocs(collection(db, C.WORK_RATES)).then((snap) =>
-      setWorkRates(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+    return () => { cancelled = true; };
+  }, [user, loadOnce, refreshOrders, refreshProduksi, refreshProductionEntries, refreshWorkRates, refreshMasterPekerja, refreshShipments, showToast]);
 
-    // master_pekerja: data read-only dari Gallery Kerudung, jarang berubah.
-    getDocs(collection(db, "master_pekerja")).then((snap) =>
-      setMasterPekerja(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+  useEffect(() => {
+    if (!user) return;
 
-    const unsubEntries = onSnapshot(collection(db, C.PRODUCTION_ENTRIES), (snap) => {
-      // Gunakan docChanges() agar tidak re-map SEMUA dokumen setiap ada 1 perubahan.
-      // Hanya dokumen yang benar-benar berubah yang diproses ulang.
-      setProductionEntries((prev) => {
-        const map = new Map(prev.map((e) => [e.id, e]));
-        snap.docChanges().forEach((change) => {
-          if (change.type === "removed") {
-            map.delete(change.doc.id);
-          } else {
-            map.set(change.doc.id, { id: change.doc.id, ...change.doc.data() });
-          }
-        });
-        return Array.from(map.values());
-      });
-    });
+    // Lazy load: data berat hanya dimuat ketika tab yang membutuhkan dibuka.
+    if (tab === "kain" || tab === "tarif") {
+      loadOnce("materials", refreshMaterials).catch((e) => console.warn("Gagal memuat kain:", e));
+      loadOnce("work_rates", refreshWorkRates).catch((e) => console.warn("Gagal memuat tarif:", e));
+    }
 
-    // HEMAT KUOTA: SHIPMENTS dan KASBON pakai getDocs (load sekali).
-    // Setiap kali app write ke collection ini, fungsi refreshShipments() /
-    // refreshKasbon() dipanggil manual — jauh lebih hemat dari onSnapshot
-    // yang membaca ulang seluruh collection setiap ada 1 dokumen berubah.
-    getDocs(collection(db, C.SHIPMENTS)).then((snap) =>
-      setShipments(snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() })))
-    );
-    getDocs(collection(db, C.KASBON)).then((snap) =>
-      setKasbonList(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+    if (tab === "borongan") {
+      loadOnce("work_rates", refreshWorkRates).catch((e) => console.warn("Gagal memuat tarif:", e));
+      loadOnce("master_pekerja", refreshMasterPekerja).catch((e) => console.warn("Gagal memuat pekerja:", e));
+    }
 
-    // HEMAT KUOTA: materials, payroll, gajian_history hanya dipakai di tab Rekap/Kain.
-    // Tidak perlu realtime — cukup load sekali saat app dibuka.
-    getDocs(collection(db, C.MATERIALS)).then((snap) =>
-      setMaterials(snap.docs.map((d) => safeMaterial({ id: d.id, ...d.data() })))
-    );
-    getDocs(collection(db, C.PAYROLL_EXPENSES)).then((snap) =>
-      setPayrollExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
-    getDocs(collection(db, C.GAJIAN_HISTORY)).then((snap) =>
-      setGajianHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+    if (tab === "kirim") {
+      loadOnce("shipments", refreshShipments).catch((e) => console.warn("Gagal memuat pengiriman:", e));
+    }
 
-    return () => {
-      unsubOrders();
-      unsubProduksi();
-      unsubEntries();
-    };
-  }, [user]);
+    if (tab === "rekap") {
+      loadOnce("payroll_expenses", refreshPayroll).catch((e) => console.warn("Gagal memuat payroll:", e));
+      loadOnce("gajian_history", refreshGajianHistory).catch((e) => console.warn("Gagal memuat gajian:", e));
+      loadOnce("kasbon", refreshKasbon).catch((e) => console.warn("Gagal memuat kasbon:", e));
+      loadOnce("materials", refreshMaterials).catch((e) => console.warn("Gagal memuat kain:", e));
+    }
+  }, [user, tab, loadOnce, refreshMaterials, refreshWorkRates, refreshMasterPekerja, refreshShipments, refreshPayroll, refreshGajianHistory, refreshKasbon]);
 
   // Auto sinkron data lama yang aman: hanya order lama yang benar-benar sudah dikirim/terkirim
   // tetapi belum punya deliveries/shippedItems akan dianggap terkirim penuh.
   // Ini mencegah pesanan lama muncul lagi sebagai belum dikirim / belum produksi.
   useEffect(() => {
+    if (!ENABLE_AUTO_BACKFILL) return;
     if (!user || orders.length === 0) return;
     // HEMAT KUOTA: sudah selesai di sesi ini, skip.
     if (legacySyncDoneRef.current) return;
@@ -1507,7 +1558,7 @@ export default function App() {
     if (candidates.length === 0) { legacySyncDoneRef.current = true; return; }
 
     // Proses secara sequential (bukan paralel forEach async) agar tidak membanjiri Firestore quota.
-    // Batasi 5 per run — sisanya akan diproses di run berikutnya saat onSnapshot menyala lagi.
+    // Batasi 5 per run jika backfill manual dinyalakan lagi.
     (async () => {
       const batch = candidates.slice(0, 5);
       for (const order of batch) {
@@ -1538,6 +1589,7 @@ export default function App() {
   // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total.
   // Matching tidak hanya lewat orderId, tapi juga invoice agar data manual lama tetap tersambung.
   useEffect(() => {
+    if (!ENABLE_AUTO_BACKFILL) return;
     if (produksi.length === 0 || orders.length === 0) return;
     // HEMAT KUOTA: sudah selesai di sesi ini, skip.
     if (itemsMigrationDoneRef.current) return;
@@ -1676,9 +1728,10 @@ export default function App() {
   // - Pesanan lama tanpa dokumen produksi dibuatkan otomatis.
   // - Status produksi dihitung dari kondisi nyata: pengiriman, potong, jahit, QC/setor.
   useEffect(() => {
+    if (!ENABLE_AUTO_BACKFILL) return;
     if (!user || orders.length === 0) return;
     // HEMAT KUOTA: backfill besar hanya jalan sekali per sesi.
-    // Tanpa ini, setiap write Firestore → onSnapshot → state update → effect jalan lagi → loop boros kuota.
+    // Tanpa ini, backfill lama bisa memicu baca/tulis besar dan boros kuota.
     if (backfillDoneRef.current) return;
 
     const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
@@ -1819,7 +1872,7 @@ export default function App() {
   // SENGAJA: produksiByOrderId dan shipmentByOrderId tidak masuk dependency.
   // Keduanya adalah useMemo derivasi dari produksi/orders yang sudah ada di atas.
   // Jika dimasukkan, setiap kali Map dibuat ulang (setiap render) effect akan re-run
-  // → memicu write Firestore → onSnapshot update → state berubah → loop tak berujung.
+  // → memicu write Firestore → state berubah → loop tak berujung.
 
   function orderSmallStatus(order) {
     const kirim = shipmentByOrderId.get(order.id);
@@ -2572,6 +2625,7 @@ function rateDocId(productType, model, process) {
         });
       });
 
+      await Promise.all([refreshOrders(), refreshProduksi()]);
       setProdForm({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
       setModal(null);
     } catch (e) {
@@ -2676,6 +2730,7 @@ function rateDocId(productType, model, process) {
           });
         } catch (_) {}
       }
+      await Promise.all([refreshProduksi(), refreshOrders()]);
     } catch (e) {
       console.warn("Auto-update status produksi gagal:", e);
     }
@@ -2771,6 +2826,7 @@ function rateDocId(productType, model, process) {
           updatedAt: new Date().toISOString(),
         }, { merge: true });
       });
+      await refreshWorkRates();
       setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
       setModal(null);
       showToast("✅ Tarif berhasil disimpan", 2500);
@@ -2906,6 +2962,7 @@ function rateDocId(productType, model, process) {
         }
       });
 
+      await Promise.all([refreshProductionEntries(), refreshProduksi()]);
       setEntryForm({
         employeeName: "",
         orderId: "",
@@ -3015,7 +3072,7 @@ function rateDocId(productType, model, process) {
       showToast(nextSisaForToast > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "✅ Setor selesai tersimpan.", 3500);
 
       await autoUpdateProduksiStatus(setorModal, nextHistoryForStatus);
-      refreshPayroll(); // setor membuat dokumen payroll baru
+      await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi(), refreshOrders()]); // setor membuat dokumen payroll baru dan bisa mengubah status produksi
 
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
@@ -3346,7 +3403,7 @@ function rateDocId(productType, model, process) {
         catatan: "",
       });
       setModal(null);
-      refreshShipments(); // sinkron data pengiriman tanpa onSnapshot
+      await Promise.all([refreshShipments(), refreshOrders(), refreshProduksi()]); // sinkron data pengiriman tanpa onSnapshot
     } catch (e) {
       alert("Gagal simpan pengiriman: " + e.message);
     } finally {
@@ -3372,13 +3429,14 @@ function rateDocId(productType, model, process) {
     const { type, id } = confirmDelete;
     setConfirmDelete(null);
     try {
-      if (type === "rate") await deleteDoc(doc(db, C.WORK_RATES, id));
+      if (type === "rate") { await deleteDoc(doc(db, C.WORK_RATES, id)); await refreshWorkRates(); }
       if (type === "entry") {
         const payrollSnap = await getDocs(query(collection(db, C.PAYROLL_EXPENSES), where("entryId", "==", id)));
         const batch = writeBatch(db);
         batch.delete(doc(db, C.PRODUCTION_ENTRIES, id));
         payrollSnap.docs.forEach((d) => batch.delete(d.ref));
         await batch.commit();
+        await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi()]);
         refreshPayroll(); // hapus entry juga hapus payroll terkait
       }
       showToast("🗑️ Data berhasil dihapus", 3000);
@@ -3826,6 +3884,7 @@ function rateDocId(productType, model, process) {
     if (!window.confirm("Hapus riwayat gajian ini?")) return;
     try {
       await deleteDoc(doc(db, C.GAJIAN_HISTORY, id));
+      await refreshGajianHistory();
       showToast("🗑️ Riwayat gajian dihapus", 2500);
       refreshGajianHistory();
     } catch (e) {
