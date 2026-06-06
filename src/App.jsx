@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
+import { safeDocId } from "./utils/idUtils";
 import {
   collection,
   addDoc,
@@ -90,16 +91,6 @@ function isShortShipmentClosed(order) {
     || raw.deliveryStatus === "Ditutup Kurang Kirim"
     || raw.shippingStatus === "Kurang Kirim Final"
     || raw.status === "Ditutup Kurang Kirim";
-}
-function safeDocId(value, fallback = "doc") {
-  const raw = String(value || "").trim().toLowerCase();
-  const clean = raw
-    .normalize("NFD")
-    .replace(/[Ì€-Í¯]/g, "")
-    .replace(/[^a-z0-9_-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 120);
-  return clean || fallback;
 }
 function getDeliveryArray(orderLike) {
   if (Array.isArray(orderLike?.raw?.deliveries)) return orderLike.raw.deliveries;
@@ -6759,6 +6750,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
