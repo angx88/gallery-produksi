@@ -2,6 +2,7 @@
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
+import { Badge } from "./components/ui";
 import {
   collection,
   addDoc,
@@ -6758,5 +6759,6 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
