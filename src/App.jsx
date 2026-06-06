@@ -64,6 +64,32 @@ const C = {
 // setiap kali dibuka. Jalankan perbaikan data lama secara manual saja bila memang diperlukan.
 const ENABLE_AUTO_BACKFILL = false;
 
+function friendlyErrorMessage(action, error) {
+  const raw = String(error?.code || error?.message || error || "").toLowerCase();
+
+  if (raw.includes("quota") || raw.includes("resource-exhausted")) {
+    return `${action} gagal. Kuota Firebase/Firestore sedang penuh. Coba lagi nanti, cek Usage Firebase, atau kurangi pemakaian data.`;
+  }
+
+  if (raw.includes("permission-denied") || raw.includes("missing or insufficient permissions")) {
+    return `${action} gagal. Akses database ditolak. Cek login dan aturan Firestore.`;
+  }
+
+  if (raw.includes("unavailable") || raw.includes("deadline-exceeded") || raw.includes("network") || raw.includes("offline")) {
+    return `${action} gagal. Koneksi internet/server sedang bermasalah. Coba ulang beberapa saat lagi.`;
+  }
+
+  if (raw.includes("already-exists")) {
+    return `${action} gagal. Data yang sama sudah ada.`;
+  }
+
+  if (raw.includes("failed-precondition")) {
+    return `${action} gagal. Ada syarat database yang belum terpenuhi. Coba refresh data lalu ulangi.`;
+  }
+
+  return `${action} gagal. ${error?.message || error || "Silakan coba ulang."}`;
+}
+
 
 const PROD_STATUS = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
 const GENERAL_RATE_PROCESSES = ["Potong", "Pengemasan QC"];
@@ -2433,7 +2459,7 @@ export default function App() {
       showToast(`✅ ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
     } catch (e) {
       console.error(e);
-      alert(`Gagal membersihkan duplikat: ${e.message || e}`);
+      alert(friendlyErrorMessage("Membersihkan duplikat", e));
     } finally {
       setIsSaving(false);
     }
@@ -2765,7 +2791,7 @@ function rateDocId(productType, model, process) {
       setProdForm({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
       setModal(null);
     } catch (e) {
-      alert("Gagal menyimpan produksi: " + e.message);
+      alert(friendlyErrorMessage("Menyimpan produksi", e));
     } finally {
       setIsSaving(false);
     }
@@ -2929,7 +2955,7 @@ function rateDocId(productType, model, process) {
       });
       showToast("✅ Status produksi diperbarui", 2500);
     } catch (e) {
-      alert("Gagal update status: " + (e?.message || e));
+      alert(friendlyErrorMessage("Update status", e));
     } finally {
       setIsSaving(false);
     }
@@ -2967,7 +2993,7 @@ function rateDocId(productType, model, process) {
       setModal(null);
       showToast("✅ Tarif berhasil disimpan", 2500);
     } catch (e) {
-      alert("Gagal simpan tarif: " + (e?.message || e));
+      alert(friendlyErrorMessage("Simpan tarif", e));
     } finally {
       setIsSaving(false);
     }
@@ -3111,7 +3137,7 @@ function rateDocId(productType, model, process) {
       });
       setModal(null);
     } catch (e) {
-      alert("Gagal simpan borongan: " + e.message);
+      alert(friendlyErrorMessage("Simpan borongan", e));
     } finally {
       setIsSaving(false);
     }
@@ -3213,7 +3239,7 @@ function rateDocId(productType, model, process) {
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
     } catch (e) {
-      alert("Gagal simpan setor: " + e.message);
+      alert(friendlyErrorMessage("Simpan setor", e));
     } finally {
       setIsSaving(false);
     }
@@ -3541,7 +3567,7 @@ function rateDocId(productType, model, process) {
       setModal(null);
       await Promise.all([refreshShipments(), refreshOrders(), refreshProduksi()]); // sinkron data pengiriman tanpa onSnapshot
     } catch (e) {
-      alert("Gagal simpan pengiriman: " + e.message);
+      alert(friendlyErrorMessage("Simpan pengiriman", e));
     } finally {
       setIsSaving(false);
     }
@@ -3577,7 +3603,7 @@ function rateDocId(productType, model, process) {
       }
       showToast("🗑️ Data berhasil dihapus", 3000);
     } catch (e) {
-      alert("Gagal hapus: " + e.message);
+      alert(friendlyErrorMessage("Hapus data", e));
     }
   }
 
@@ -3703,7 +3729,7 @@ function rateDocId(productType, model, process) {
       setEditEntryModal(null);
       showToast("✅ Entry berhasil diupdate", 3000);
     } catch (e) {
-      alert("Gagal update: " + (e?.message || e));
+      alert(friendlyErrorMessage("Update data", e));
     } finally {
       setIsSaving(false);
     }
@@ -3827,7 +3853,7 @@ function rateDocId(productType, model, process) {
       refreshKasbon();
       refreshPayroll();
     } catch (e) {
-      alert("Gagal membatalkan status gajian: " + (e?.message || e));
+      alert(friendlyErrorMessage("Membatalkan status gajian", e));
     } finally {
       setIsSaving(false);
     }
@@ -3856,7 +3882,7 @@ function rateDocId(productType, model, process) {
       refreshGajianHistory();
       setFormGajianLama({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
     } catch (e) {
-      alert("Gagal menyimpan: " + (e?.message || e));
+      alert(friendlyErrorMessage("Menyimpan data", e));
     } finally {
       setIsSaving(false);
     }
@@ -4010,7 +4036,7 @@ function rateDocId(productType, model, process) {
       refreshPayroll();
       refreshGajianHistory();
     } catch (e) {
-      alert("Gagal menandai sudah gajian: " + (e?.message || e));
+      alert(friendlyErrorMessage("Menandai sudah gajian", e));
     } finally {
       setIsSaving(false);
     }
@@ -4024,7 +4050,7 @@ function rateDocId(productType, model, process) {
       showToast("🗑️ Riwayat gajian dihapus", 2500);
       refreshGajianHistory();
     } catch (e) {
-      alert("Gagal menghapus: " + (e?.message || e));
+      alert(friendlyErrorMessage("Menghapus data", e));
     }
   }
 
@@ -4158,7 +4184,7 @@ function rateDocId(productType, model, process) {
       showToast("✅ Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.", 4500);
       return html;
     } catch (e) {
-      alert("Gagal membuat slip gaji: " + (e?.message || e));
+      alert(friendlyErrorMessage("Membuat slip gaji", e));
       return "";
     }
   }
@@ -4439,7 +4465,7 @@ function rateDocId(productType, model, process) {
       const file = new File([blob], filename, { type: "image/png" });
       return { imgUrl, file, filename, nama, dari, sampai, total: fmt(r?.gaji) };
     } catch (e) {
-      alert("Gagal membuat gambar slip gaji: " + (e?.message || e));
+      alert(friendlyErrorMessage("Membuat gambar slip gaji", e));
       return null;
     }
   }
@@ -4468,7 +4494,7 @@ function rateDocId(productType, model, process) {
       showToast("⚠️ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.", 6000);
     } catch (e) {
       if (e?.name === "AbortError") return;
-      alert("Gagal share slip gaji: " + (e?.message || e));
+      alert(friendlyErrorMessage("Share slip gaji", e));
     }
   }
 
@@ -4507,7 +4533,7 @@ function rateDocId(productType, model, process) {
           <button
             onClick={() => {
               setAuthError("");
-              signInWithPopup(auth, provider).catch((e) => setAuthError("Login gagal: " + e.message));
+              signInWithPopup(auth, provider).catch((e) => setAuthError(friendlyErrorMessage("Login", e)));
             }}
             className="w-full rounded-2xl px-6 py-4 font-bold text-white"
             style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
@@ -4560,11 +4586,12 @@ function rateDocId(productType, model, process) {
             type="button"
             onClick={refreshDataSaatIni}
             disabled={isRefreshingData}
-            className="rounded-full px-3 py-1.5 text-xs font-black text-white shrink-0 disabled:opacity-60"
+            className="rounded-full px-4 py-2 text-xs font-black text-white shrink-0 disabled:opacity-60 flex items-center gap-1.5"
             style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.35)" }}
             title="Refresh data"
           >
-            {isRefreshingData ? "..." : "↻"}
+            <span>{isRefreshingData ? "..." : "↻"}</span>
+            <span>{isRefreshingData ? "Memuat" : "Refresh"}</span>
           </button>
           {search && <button type="button" onClick={() => setSearch("")} className="text-pink-100 font-bold">✕</button>}
         </div>
