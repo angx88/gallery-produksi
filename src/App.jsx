@@ -1213,6 +1213,7 @@ export default function App() {
   const rekapManualPeriodRef = useRef(false);
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
@@ -1431,6 +1432,72 @@ export default function App() {
       throw e;
     });
   }, []);
+
+  const refreshDataSaatIni = React.useCallback(async () => {
+    if (!user || isRefreshingData) return;
+    setIsRefreshingData(true);
+
+    const forceRefresh = async (key, loader) => {
+      const result = await loader();
+      loadedDataRef.current.add(key);
+      return result;
+    };
+
+    try {
+      const jobs = [
+        forceRefresh("orders", refreshOrders),
+        forceRefresh("produksi", refreshProduksi),
+        forceRefresh("production_entries", refreshProductionEntries),
+      ];
+
+      if (["dashboard", "pesanan", "produksi", "kirim"].includes(tab)) {
+        jobs.push(forceRefresh("shipments", refreshShipments));
+      }
+
+      if (["borongan", "tarif"].includes(tab)) {
+        jobs.push(forceRefresh("work_rates", refreshWorkRates));
+      }
+
+      if (tab === "borongan") {
+        jobs.push(forceRefresh("master_pekerja", refreshMasterPekerja));
+      }
+
+      if (["kain", "tarif", "rekap"].includes(tab)) {
+        jobs.push(forceRefresh("materials", refreshMaterials));
+      }
+
+      if (tab === "rekap") {
+        jobs.push(
+          forceRefresh("payroll_expenses", refreshPayroll),
+          forceRefresh("gajian_history", refreshGajianHistory),
+          forceRefresh("kasbon", refreshKasbon)
+        );
+      }
+
+      await Promise.all(jobs);
+      showToast("✅ Data sudah diperbarui", 2200);
+    } catch (e) {
+      console.warn("Gagal refresh data:", e);
+      showToast("⚠️ Gagal refresh data. Coba lagi.", 3500);
+    } finally {
+      setIsRefreshingData(false);
+    }
+  }, [
+    user,
+    tab,
+    isRefreshingData,
+    refreshOrders,
+    refreshProduksi,
+    refreshProductionEntries,
+    refreshShipments,
+    refreshWorkRates,
+    refreshMasterPekerja,
+    refreshMaterials,
+    refreshPayroll,
+    refreshGajianHistory,
+    refreshKasbon,
+    showToast,
+  ]);
 
   useEffect(() => {
     backUiRef.current = {
@@ -4489,7 +4556,17 @@ function rateDocId(productType, model, process) {
             placeholder="Cari pesanan, produksi, kain, pengiriman..."
             className="bg-transparent outline-none flex-1 text-white placeholder-pink-100 text-base"
           />
-          {search && <button onClick={() => setSearch("")} className="text-pink-100 font-bold">✕</button>}
+          <button
+            type="button"
+            onClick={refreshDataSaatIni}
+            disabled={isRefreshingData}
+            className="rounded-full px-3 py-1.5 text-xs font-black text-white shrink-0 disabled:opacity-60"
+            style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.35)" }}
+            title="Refresh data"
+          >
+            {isRefreshingData ? "..." : "↻"}
+          </button>
+          {search && <button type="button" onClick={() => setSearch("")} className="text-pink-100 font-bold">✕</button>}
         </div>
       </div>
 
