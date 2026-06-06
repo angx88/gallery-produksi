@@ -16,3 +16,7 @@ export function normalizeKey(value) {
 export function normalizeInvoice(value) {
   return String(value || "").trim().toUpperCase();
 }
+
+export function normalizeProcessKey(value) {
+  return normalizeCompactKey(value);
+}
