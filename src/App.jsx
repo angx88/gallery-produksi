@@ -4,7 +4,7 @@ import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
 import { safeDocId } from "./utils/idUtils";
-import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey } from "./utils/normalizers";
+import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey, normalizeMasterKey } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -218,13 +218,6 @@ function cleanMasterText(value) {
   return stripDiacritics(value)
     .replace(/[â€™`]/g, "'")
     .replace(/[._\-/\\]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-function normalizeMasterKey(value) {
-  return cleanMasterText(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -6710,6 +6703,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
