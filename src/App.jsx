@@ -5845,7 +5845,14 @@ function rateDocId(productType, model, process) {
                       {Number(e.sisaSetor || 0) > 0 && (
                         <button
                           type="button"
-                          onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(e.sisaSetor || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                          onClick={() => {
+                            // Selalu pakai entry asli dari productionEntries agar setorTotals
+                            // tidak membaca field derived (qtySetor, statusSetor, dll) sebagai legacy data.
+                            const rawEntry = productionEntries.find((pe) => pe.id === e.id) || e;
+                            const t = setorTotals(rawEntry);
+                            setSetorModal(rawEntry);
+                            setSetorForm({ qtySetor: String(t.sisaSetor || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
+                          }}
                           className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
                           style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}
                         >
