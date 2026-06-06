@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
+import { formatNumber } from "./utils/formatters";
 import {
   collection,
   addDoc,
@@ -6109,7 +6110,7 @@ function rateDocId(productType, model, process) {
               if (lebih > 0) {
                 return (
                   <div className="rounded-2xl border p-3 text-xs" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                    <div className="font-bold mb-1">âš ï¸ Kelebihan kirim {lebih.toLocaleString("id-ID")} pcs</div>
+                    <div className="font-bold mb-1">âš ï¸ Kelebihan kirim {formatNumber(lebih)} pcs</div>
                     <div>Qty kirim lebih besar dari pesanan. Kelebihan ini akan ikut menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim.</div>
                   </div>
                 );
@@ -6118,7 +6119,7 @@ function rateDocId(productType, model, process) {
                 <div className="rounded-2xl border p-3 text-xs space-y-3" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
                   <div>
                     <div className="font-bold mb-1">âš ï¸ Pengiriman kurang dari pesanan</div>
-                    <div>Pesanan {totalPesan.toLocaleString("id-ID")} pcs Â· dikirim {totalKirim.toLocaleString("id-ID")} pcs Â· sisa {sisa.toLocaleString("id-ID")} pcs.</div>
+                    <div>Pesanan {formatNumber(totalPesan)} pcs Â· dikirim {formatNumber(totalKirim)} pcs Â· sisa {formatNumber(sisa)} pcs.</div>
                   </div>
                   <div className="grid gap-2">
                     <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
@@ -6757,4 +6758,5 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
