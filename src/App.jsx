@@ -4,7 +4,7 @@ import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
 import { Badge, Button as UiButton } from "./components/ui";
 import { safeDocId } from "./utils/idUtils";
-import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey } from "./utils/normalizers";
+import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -258,9 +258,6 @@ function workerDisplayScore(name) {
 function displayModelName(name) {
   const clean = cleanMasterText(name);
   return clean ? toTitleCase(clean) : "-";
-}
-function normalizeProductTypeKey(name) {
-  return normalizeMasterKey(name);
 }
 function displayProductTypeName(name) {
   const key = normalizeProductTypeKey(name);
@@ -6713,6 +6710,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
