@@ -1346,6 +1346,10 @@ export default function App() {
   const [boronganLinkTarget, setBoronganLinkTarget] = useState(null); // target pesanan dari tombol Produksi > Kaitkan Borongan
   const [produksiOnlyBelumSelesai, setProduksiOnlyBelumSelesai] = useState(false); // filter tab produksi hanya belum selesai
   const [kirimOnlyBelumLengkap, setKirimOnlyBelumLengkap] = useState(false); // filter tab kirim hanya belum lengkap
+  const [focusedPesananId, setFocusedPesananId] = useState(""); // dashboard: buka tepat 1 pesanan bermasalah
+  const [focusedBoronganEntryId, setFocusedBoronganEntryId] = useState(""); // dashboard: buka tepat 1 borongan bermasalah
+  const [focusedProduksiId, setFocusedProduksiId] = useState(""); // dashboard: buka tepat 1 produksi bermasalah
+  const [focusedKirimOrderId, setFocusedKirimOrderId] = useState(""); // dashboard: buka tepat 1 order/kiriman bermasalah
   const [alertDetailModal, setAlertDetailModal] = useState(false); // modal popup alert bermasalah dari dashboard
   const [tugasDetailModal, setTugasDetailModal] = useState(false); // modal popup semua tugas hari ini
   const [kaitkanModal, setKaitkanModal] = useState(null); // entry borongan lama/tanpa pesanan yang akan dikaitkan
@@ -1361,6 +1365,47 @@ export default function App() {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast(msg);
     toastTimerRef.current = setTimeout(() => setToast(""), duration);
+  }, []);
+
+  const openFocusedPesanan = React.useCallback((orderId) => {
+    const id = String(orderId || "");
+    setFocusedPesananId(id);
+    setNeedCheckContextId(id);
+    setPesananOnlyNeedCheck(false);
+    setSearch("");
+    setTab("pesanan");
+  }, []);
+
+  const openFocusedBorongan = React.useCallback((entryId) => {
+    setFocusedBoronganEntryId(String(entryId || ""));
+    setBoronganOnlyBelumSetor(false);
+    setBoronganOnlyOverSetor(false);
+    setBoronganOnlyTanpaPesanan(false);
+    setBoronganLinkTarget(null);
+    setSearch("");
+    setTab("borongan");
+  }, []);
+
+  const openFocusedProduksi = React.useCallback((produksiId) => {
+    setFocusedProduksiId(String(produksiId || ""));
+    setProduksiOnlyBelumSelesai(false);
+    setSearch("");
+    setTab("produksi");
+  }, []);
+
+  const openFocusedKirim = React.useCallback((orderId) => {
+    const id = String(orderId || "");
+    setFocusedKirimOrderId(id);
+    setKirimOnlyBelumLengkap(false);
+    setSearch("");
+    setTab("kirim");
+  }, []);
+
+  const clearFocusedData = React.useCallback(() => {
+    setFocusedPesananId("");
+    setFocusedBoronganEntryId("");
+    setFocusedProduksiId("");
+    setFocusedKirimOrderId("");
   }, []);
 
   // Pengaman khusus tombol Simpan:
@@ -2581,6 +2626,53 @@ export default function App() {
     return { byId, byInvoice };
   }, [orders]);
 
+
+  function findRelatedOrderForShipmentRow(k) {
+    const byDirectId =
+      orderLookupForCards.byId.get(String(k?.orderId || k?.pesananId || "").trim()) ||
+      orderLookupForCards.byId.get(String(k?.pesananId || k?.orderId || "").trim()) ||
+      null;
+    if (byDirectId) return byDirectId;
+
+    const byInvoice = orderLookupForCards.byInvoice.get(normalizedInvoice(k?.invoice || ""));
+    if (byInvoice) return byInvoice;
+
+    const customerKey = normalizeKey(k?.customer || k?.penerima || "");
+    const itemKeys = (k?.items || [])
+      .map((item) => normalizeModelKey(item?.nama || item?.name || item?.model || ""))
+      .filter(Boolean);
+    const produkKey = normalizeModelKey(k?.produk || "");
+    const wantedKeys = itemKeys.length ? itemKeys : (produkKey ? [produkKey] : []);
+
+    if (!customerKey || wantedKeys.length === 0) return null;
+
+    const candidates = (orders || []).filter((order) => normalizeKey(order?.customer || order?.raw?.customer || "") === customerKey);
+
+    const scored = candidates
+      .map((order) => {
+        const orderItems = orderBaseItems(order || {});
+        const orderKeys = orderItems
+          .map((item) => normalizeModelKey(item?.name || item?.item || order?.item || ""))
+          .filter(Boolean);
+        const matchesModel = wantedKeys.some((key) => orderKeys.includes(key) || orderKeys.some((ok) => ok.includes(key) || key.includes(ok)));
+        if (!matchesModel) return null;
+
+        const ordered = dashboardTotalOrderedQty(order);
+        const shipped = dashboardTotalShippedQty(order);
+        const remaining = Math.max(0, ordered - shipped);
+        const isIssue = ordered > 0 && shipped !== ordered;
+        const dateScore = String(order?.raw?.createdAt || order?.createdAt || order?.raw?.date || "");
+        return { order, score: (isIssue ? 1000 : 0) + remaining, dateScore };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return b.dateScore.localeCompare(a.dateScore);
+      });
+
+    return scored[0]?.order || null;
+  }
+
   const ordersPerluDicek = useMemo(() => {
     return (orders || [])
       .map((order) => {
@@ -2623,9 +2715,10 @@ export default function App() {
   const ordersPerluDicekIds = useMemo(() => new Set(ordersPerluDicek.map((o) => o.id)), [ordersPerluDicek]);
 
   const visiblePesananOrders = useMemo(() => {
+    if (focusedPesananId) return orders.filter((o) => String(o.id || "") === String(focusedPesananId));
     if (!pesananOnlyNeedCheck) return filteredOrders;
     return filteredOrders.filter((o) => ordersPerluDicekIds.has(o.id));
-  }, [filteredOrders, pesananOnlyNeedCheck, ordersPerluDicekIds]);
+  }, [orders, filteredOrders, pesananOnlyNeedCheck, ordersPerluDicekIds, focusedPesananId]);
 
   function shipmentProgressForOrder(order) {
     const baseItems = orderBaseItems(order || {});
@@ -2973,6 +3066,7 @@ export default function App() {
         tab: "produksi",
         search: sample.invoice || sample.orderId || sample.customer || "",
         duplicateKey,
+        produksiId: sample.id || "",
       });
     });
 
@@ -2986,6 +3080,7 @@ export default function App() {
           text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
           tab: "borongan",
           search: displayWorkerName(entry.employeeName),
+          entryId: entry.id || "",
         });
       }
       if (Number(entry.rate || 0) <= 0) {
@@ -2994,6 +3089,7 @@ export default function App() {
           text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")}`,
           tab: "tarif",
           search: displayModelName(entry.model || ""),
+          entryId: entry.id || "",
         });
       }
     });
@@ -3005,6 +3101,7 @@ export default function App() {
           text: `${order.customer || order.raw?.customer || "Tanpa nama"} · ${order.invoice || order.raw?.invoice || order.id}`,
           tab: "pesanan",
           search: order.invoice || order.customer || "",
+          orderId: order.id || "",
         });
       }
       const deliveries = Array.isArray(order.raw?.deliveries) ? order.raw.deliveries : [];
@@ -3017,6 +3114,7 @@ export default function App() {
               text: `${order.customer || "Tanpa nama"} · ${order.invoice || order.id} · kirim ${dIdx + 1}.${iIdx + 1}`,
               tab: "kirim",
               search: order.invoice || order.customer || "",
+              orderId: order.id || "",
             });
           }
         });
@@ -5477,6 +5575,11 @@ function rateDocId(productType, model, process) {
                   <button
                     key={`${alert.type}-${idx}`}
                     onClick={() => {
+                      if (alert.produksiId) { openFocusedProduksi(alert.produksiId); return; }
+                      if (alert.entryId && alert.tab === "borongan") { openFocusedBorongan(alert.entryId); return; }
+                      if (alert.orderId && alert.tab === "pesanan") { openFocusedPesanan(alert.orderId); return; }
+                      if (alert.orderId && alert.tab === "kirim") { openFocusedKirim(alert.orderId); return; }
+                      clearFocusedData();
                       setSearch(alert.search || "");
                       if (alert.type === "Setor melebihi diberi") {
                         setBoronganOnlyOverSetor(true);
@@ -5542,7 +5645,7 @@ function rateDocId(productType, model, process) {
             </div>
             <button
               type="button"
-              onClick={() => { setPesananOnlyNeedCheck(true); setNeedCheckContextId(""); setSearch(""); setTab("pesanan"); }}
+              onClick={() => { clearFocusedData(); setPesananOnlyNeedCheck(true); setNeedCheckContextId(""); setSearch(""); setTab("pesanan"); }}
               className="text-xs font-bold px-3 py-1.5 rounded-full text-white shrink-0"
               style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
             >
@@ -5570,6 +5673,10 @@ function rateDocId(productType, model, process) {
             onClick={() => {
               const nextTab = t.id === "master" ? ((tab === "kain" || tab === "tarif") ? tab : "kain") : t.id;
               if (nextTab === "pesanan") setPesananOnlyNeedCheck(false);
+              if (nextTab !== "pesanan") setFocusedPesananId("");
+              if (nextTab !== "borongan") setFocusedBoronganEntryId("");
+              if (nextTab !== "produksi") setFocusedProduksiId("");
+              if (nextTab !== "kirim") setFocusedKirimOrderId("");
               if (nextTab !== "borongan") setBoronganOnlyBelumSetor(false);
               if (nextTab !== "borongan") setBoronganOnlyOverSetor(false);
               if (nextTab !== "produksi") setProduksiOnlyBelumSelesai(false);
@@ -5610,7 +5717,7 @@ function rateDocId(productType, model, process) {
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => { setBoronganOnlyBelumSetor(true); setBoronganOnlyOverSetor(false); setSearch(""); setTab("borongan"); }}
+                onClick={() => { clearFocusedData(); setBoronganOnlyBelumSetor(true); setBoronganOnlyOverSetor(false); setSearch(""); setTab("borongan"); }}
                 className="rounded-3xl bg-orange-50 p-4 text-left active:scale-[0.99] transition-transform"
                 style={{ border: "1px solid #fed7aa" }}
               >
@@ -5622,7 +5729,7 @@ function rateDocId(productType, model, process) {
 
               <button
                 type="button"
-                onClick={() => { setProduksiOnlyBelumSelesai(true); setSearch(""); setTab("produksi"); }}
+                onClick={() => { clearFocusedData(); setProduksiOnlyBelumSelesai(true); setSearch(""); setTab("produksi"); }}
                 className="rounded-3xl bg-violet-50 p-4 text-left active:scale-[0.99] transition-transform"
                 style={{ border: "1px solid #ddd6fe" }}
               >
@@ -5634,7 +5741,7 @@ function rateDocId(productType, model, process) {
 
               <button
                 type="button"
-                onClick={() => { setKirimOnlyBelumLengkap(true); setSearch(""); setTab("kirim"); }}
+                onClick={() => { clearFocusedData(); setKirimOnlyBelumLengkap(true); setSearch(""); setTab("kirim"); }}
                 className="rounded-3xl bg-sky-50 p-4 text-left active:scale-[0.99] transition-transform"
                 style={{ border: "1px solid #bae6fd" }}
               >
@@ -5646,7 +5753,7 @@ function rateDocId(productType, model, process) {
 
               <button
                 type="button"
-                onClick={() => { setPesananOnlyNeedCheck(true); setNeedCheckContextId(""); setSearch(""); setTab("pesanan"); }}
+                onClick={() => { clearFocusedData(); setPesananOnlyNeedCheck(true); setNeedCheckContextId(""); setSearch(""); setTab("pesanan"); }}
                 className="rounded-3xl bg-rose-50 p-4 text-left active:scale-[0.99] transition-transform"
                 style={{ border: "1px solid #fecdd3" }}
               >
@@ -5674,7 +5781,7 @@ function rateDocId(productType, model, process) {
                 {dashboardInsights.tugas.activeBorongan.slice(0, 3).map(({ entry, totals }) => (
                   <button
                     key={`bor-${entry.id}`}
-                    onClick={() => { setBoronganOnlyBelumSetor(true); setBoronganOnlyOverSetor(false); setSearch(displayWorkerName(entry.employeeName)); setTab("borongan"); }}
+                    onClick={() => openFocusedBorongan(entry.id)}
                     className="w-full text-left rounded-2xl bg-white p-3 active:bg-orange-100 transition-colors"
                     style={{ border: "1px solid #fed7aa" }}
                   >
@@ -5685,7 +5792,7 @@ function rateDocId(productType, model, process) {
                 {dashboardInsights.tugas.activeProduksi.slice(0, 2).map((item) => (
                   <button
                     key={`prod-${item.id}`}
-                    onClick={() => { setProduksiOnlyBelumSelesai(true); setSearch(item.customer || item.orderCustomer || ""); setTab("produksi"); }}
+                    onClick={() => openFocusedProduksi(item.id)}
                     className="w-full text-left rounded-2xl bg-white p-3 active:bg-orange-100 transition-colors"
                     style={{ border: "1px solid #fed7aa" }}
                   >
@@ -5696,7 +5803,7 @@ function rateDocId(productType, model, process) {
                 {dashboardInsights.tugas.kirimBelumLengkap.slice(0, 2).map(({ order, sisa }) => (
                   <button
                     key={`ship-${order.id}`}
-                    onClick={() => { setKirimOnlyBelumLengkap(true); setSearch(order.customer || order.invoice || ""); setTab("kirim"); }}
+                    onClick={() => openFocusedKirim(order.id)}
                     className="w-full text-left rounded-2xl bg-white p-3 active:bg-orange-100 transition-colors"
                     style={{ border: "1px solid #fed7aa" }}
                   >
@@ -5726,6 +5833,17 @@ function rateDocId(productType, model, process) {
       {tab === "pesanan" && (
         <div className="space-y-3 p-4">
           <InfoBox title="Sumber: Gallery Kerudung" subtitle="Data realtime dari collection orders" icon="🏪" />
+          {focusedPesananId && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fecdd3" }}>
+              <span className="text-xl">🎯</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>Langsung membuka pesanan yang dipilih dari dashboard</div>
+                <div className="text-xs mt-1" style={{ color: "#e11d48" }}>Daftar disaring ke 1 data bermasalah tersebut.</div>
+              </div>
+              <button type="button" onClick={() => setFocusedPesananId("")} className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0" style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}>Tampilkan Semua</button>
+            </div>
+          )}
+
           {pesananOnlyNeedCheck && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fb7185" }}>
               <span className="text-xl">🔎</span>
@@ -5934,6 +6052,17 @@ function rateDocId(productType, model, process) {
             🧵 + Tambah ke Produksi
           </Button>
 
+          {focusedProduksiId && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}>
+              <span className="text-xl">🎯</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#5b21b6" }}>Langsung membuka produksi yang dipilih dari dashboard</div>
+                <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Daftar disaring ke 1 card produksi tersebut.</div>
+              </div>
+              <button type="button" onClick={() => setFocusedProduksiId("")} className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0" style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}>Tampilkan Semua</button>
+            </div>
+          )}
+
           {/* Banner filter belum selesai */}
           {produksiOnlyBelumSelesai && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}>
@@ -5972,12 +6101,14 @@ function rateDocId(productType, model, process) {
           )}
 
           {(() => {
-            const displayedProduksi = produksiOnlyBelumSelesai
-              ? filteredProduksi.filter((p) => p.status !== "Selesai")
-              : filteredProduksi;
+            const displayedProduksi = focusedProduksiId
+              ? filteredProduksi.filter((p) => String(p.id || "") === String(focusedProduksiId))
+              : produksiOnlyBelumSelesai
+                ? filteredProduksi.filter((p) => p.status !== "Selesai")
+                : filteredProduksi;
             return (
               <>
-                {displayedProduksi.length === 0 && <Empty text={produksiOnlyBelumSelesai ? "Semua produksi sudah selesai" : "Tidak ada data produksi"} />}
+                {displayedProduksi.length === 0 && <Empty text={focusedProduksiId ? "Data produksi terkait tidak ditemukan. Coba tampilkan semua." : produksiOnlyBelumSelesai ? "Semua produksi sudah selesai" : "Tidak ada data produksi"} />}
                 {displayedProduksi.map((p) => {
             const qtyPesanan = Number(p.qty || 0);
             const rekapProses = [
@@ -6120,6 +6251,17 @@ function rateDocId(productType, model, process) {
           </Button>
 
           {/* Banner filter belum setor */}
+          {focusedBoronganEntryId && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fffbeb", border: "1.5px solid #fde68a" }}>
+              <span className="text-xl">🎯</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#92400e" }}>Langsung membuka borongan yang dipilih dari dashboard</div>
+                <div className="text-xs mt-1" style={{ color: "#b45309" }}>Daftar disaring ke 1 data borongan tersebut.</div>
+              </div>
+              <button type="button" onClick={() => setFocusedBoronganEntryId("")} className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0" style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}>Tampilkan Semua</button>
+            </div>
+          )}
+
           {boronganOnlyBelumSetor && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fefce8", border: "1.5px solid #fbbf24" }}>
               <span className="text-xl">🟡</span>
@@ -6933,6 +7075,17 @@ function rateDocId(productType, model, process) {
             </div>
           )}
 
+          {focusedKirimOrderId && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#eff6ff", border: "1.5px solid #93c5fd" }}>
+              <span className="text-xl">🎯</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#1d4ed8" }}>Langsung membuka kiriman yang dipilih dari dashboard</div>
+                <div className="text-xs mt-1" style={{ color: "#2563eb" }}>Daftar disaring ke 1 order/kiriman bermasalah tersebut.</div>
+              </div>
+              <button type="button" onClick={() => setFocusedKirimOrderId("")} className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0" style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}>Tampilkan Semua</button>
+            </div>
+          )}
+
           {/* Banner filter belum lengkap */}
           {kirimOnlyBelumLengkap && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}>
@@ -6956,15 +7109,13 @@ function rateDocId(productType, model, process) {
             const kirimBelumLengkapIds = new Set(
               (dashboardInsights.tugas.kirimBelumLengkapAll || dashboardInsights.tugas.kirimBelumLengkap).map(({ order }) => order.id)
             );
-            const displayedBase = kirimOnlyBelumLengkap
-              ? filteredShipments.filter((k) => kirimBelumLengkapIds.has(k.orderId) || kirimBelumLengkapIds.has(k.pesananId))
-              : filteredShipments;
+            const displayedBase = focusedKirimOrderId
+              ? filteredShipments.filter((k) => String(k.orderId || "") === String(focusedKirimOrderId) || String(k.pesananId || "") === String(focusedKirimOrderId) || String(findRelatedOrderForShipmentRow(k)?.id || "") === String(focusedKirimOrderId))
+              : kirimOnlyBelumLengkap
+                ? filteredShipments.filter((k) => kirimBelumLengkapIds.has(k.orderId) || kirimBelumLengkapIds.has(k.pesananId) || kirimBelumLengkapIds.has(findRelatedOrderForShipmentRow(k)?.id))
+                : filteredShipments;
             const shipmentIssuePriority = (k) => {
-              const relatedOrder =
-                orderLookupForCards.byId.get(String(k.orderId || k.pesananId || "").trim()) ||
-                orderLookupForCards.byId.get(String(k.pesananId || k.orderId || "").trim()) ||
-                orderLookupForCards.byInvoice.get(normalizedInvoice(k.invoice || "")) ||
-                null;
+              const relatedOrder = findRelatedOrderForShipmentRow(k);
               const ordered = relatedOrder ? dashboardTotalOrderedQty(relatedOrder) : (k.items || []).reduce((s, item) => s + Number(item.qtyPesan || item.orderedQty || 0), 0);
               const shipped = relatedOrder ? dashboardTotalShippedQty(relatedOrder) : (k.items || []).reduce((s, item) => s + Number(item.qtyKirim || item.shippedQty || item.qty || 0), 0);
               if (ordered > 0 && shipped > ordered) return 0;
@@ -6977,13 +7128,9 @@ function rateDocId(productType, model, process) {
               if (pa !== pb) return pa - pb;
               return String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || ""));
             });
-            if (displayed.length === 0) return <Empty text={kirimOnlyBelumLengkap ? "Semua pengiriman sudah lengkap" : "Tidak ada data pengiriman"} />;
+            if (displayed.length === 0) return <Empty text={focusedKirimOrderId ? "Data kiriman terkait tidak ditemukan. Coba tampilkan semua atau cek pesanan." : kirimOnlyBelumLengkap ? "Semua pengiriman sudah lengkap" : "Tidak ada data pengiriman"} />;
             return displayed.map((k) => {
-              const relatedOrder =
-                orderLookupForCards.byId.get(String(k.orderId || k.pesananId || "").trim()) ||
-                orderLookupForCards.byId.get(String(k.pesananId || k.orderId || "").trim()) ||
-                orderLookupForCards.byInvoice.get(normalizedInvoice(k.invoice || "")) ||
-                null;
+              const relatedOrder = findRelatedOrderForShipmentRow(k);
               return (
             <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               {(() => {
@@ -7959,7 +8106,7 @@ function rateDocId(productType, model, process) {
                   </span>
                 </div>
                 <button
-                  onClick={() => { setTugasDetailModal(false); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                  onClick={() => { setTugasDetailModal(false); clearFocusedData(); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
@@ -7973,7 +8120,7 @@ function rateDocId(productType, model, process) {
                   {dashboardInsights.tugas.activeBorongan.map(({ entry, totals }) => (
                     <button
                       key={`tugas-bor-${entry.id}`}
-                      onClick={() => { setTugasDetailModal(false); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                      onClick={() => { setTugasDetailModal(false); openFocusedBorongan(entry.id); }}
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}
                     >
@@ -7985,7 +8132,7 @@ function rateDocId(productType, model, process) {
                   ))}
                   {dashboardInsights.tugas.boronganBelumSetor > dashboardInsights.tugas.activeBorongan.length && (
                     <button
-                      onClick={() => { setTugasDetailModal(false); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                      onClick={() => { setTugasDetailModal(false); clearFocusedData(); setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#ffedd5", color: "#c2410c" }}
                     >
@@ -8006,7 +8153,7 @@ function rateDocId(productType, model, process) {
                   </span>
                 </div>
                 <button
-                  onClick={() => { setTugasDetailModal(false); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
+                  onClick={() => { setTugasDetailModal(false); clearFocusedData(); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
@@ -8020,7 +8167,7 @@ function rateDocId(productType, model, process) {
                   {dashboardInsights.tugas.activeProduksi.map((item) => (
                     <button
                       key={`tugas-prod-${item.id}`}
-                      onClick={() => { setTugasDetailModal(false); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
+                      onClick={() => { setTugasDetailModal(false); openFocusedProduksi(item.id); }}
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}
                     >
@@ -8033,7 +8180,7 @@ function rateDocId(productType, model, process) {
                   ))}
                   {dashboardInsights.tugas.produksiBelumSelesai > dashboardInsights.tugas.activeProduksi.length && (
                     <button
-                      onClick={() => { setTugasDetailModal(false); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
+                      onClick={() => { setTugasDetailModal(false); clearFocusedData(); setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#ede9fe", color: "#7c3aed" }}
                     >
@@ -8054,7 +8201,7 @@ function rateDocId(productType, model, process) {
                   </span>
                 </div>
                 <button
-                  onClick={() => { setTugasDetailModal(false); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
+                  onClick={() => { setTugasDetailModal(false); clearFocusedData(); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
@@ -8068,7 +8215,7 @@ function rateDocId(productType, model, process) {
                   {dashboardInsights.tugas.kirimBelumLengkap.map(({ order, sisa }) => (
                     <button
                       key={`tugas-kirim-${order.id}`}
-                      onClick={() => { setTugasDetailModal(false); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
+                      onClick={() => { setTugasDetailModal(false); openFocusedKirim(order.id); }}
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}
                     >
@@ -8079,7 +8226,7 @@ function rateDocId(productType, model, process) {
                   ))}
                   {dashboardInsights.tugas.kirimanBelumLengkap > dashboardInsights.tugas.kirimBelumLengkap.length && (
                     <button
-                      onClick={() => { setTugasDetailModal(false); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
+                      onClick={() => { setTugasDetailModal(false); clearFocusedData(); setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#dbeafe", color: "#1d4ed8" }}
                     >
@@ -8130,6 +8277,11 @@ function rateDocId(productType, model, process) {
                         type="button"
                         onClick={() => {
                           setAlertDetailModal(false);
+                          if (alert.produksiId) { openFocusedProduksi(alert.produksiId); return; }
+                          if (alert.entryId && alert.tab === "borongan") { openFocusedBorongan(alert.entryId); return; }
+                          if (alert.orderId && alert.tab === "pesanan") { openFocusedPesanan(alert.orderId); return; }
+                          if (alert.orderId && alert.tab === "kirim") { openFocusedKirim(alert.orderId); return; }
+                          clearFocusedData();
                           setSearch(alert.search || "");
                           if (alert.type === "Setor melebihi diberi") {
                             setBoronganOnlyOverSetor(true);
