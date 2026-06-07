@@ -6025,20 +6025,20 @@ function rateDocId(productType, model, process) {
 
               {/* Ubah status — compact pills */}
               <div className="px-4 pb-3">
-                {p.status !== "Selesai" && boronganTanpaPesanan.length > 0 && (
+                {p.status !== "Selesai" && (
                   <button
                     type="button"
                     onClick={() => {
                       setBoronganOnlyBelumSetor(false);
                       setBoronganOnlyOverSetor(false);
-                      setBoronganOnlyTanpaPesanan(true);
-                      setQ(p.customer || p.item || "");
+                      setBoronganOnlyTanpaPesanan(false);
+                      setQ(`${p.customer || ""} ${p.invoice || ""} ${p.item || ""}`.trim());
                       setTab("borongan");
                     }}
                     className="mb-2 w-full rounded-full px-3 py-2 text-xs font-black text-white"
                     style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
                   >
-                    🔗 Cari/Kaitkan Hasil Borongan
+                    🔎 Cek/Kaitkan Borongan Pesanan Ini
                   </button>
                 )}
                 <div className="flex gap-1 flex-wrap">
