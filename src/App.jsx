@@ -1343,6 +1343,7 @@ export default function App() {
   const [masterPekerja, setMasterPekerja] = useState([]); // daftar nama pekerja dari Gallery Kerudung (read-only)
   const [boronganOnlyOverSetor, setBoronganOnlyOverSetor] = useState(false); // filter tab borongan hanya setor melebihi diberi
   const [boronganOnlyTanpaPesanan, setBoronganOnlyTanpaPesanan] = useState(false); // filter tab borongan hanya entry tanpa pesanan
+  const [boronganLinkTarget, setBoronganLinkTarget] = useState(null); // target pesanan dari tombol Produksi > Kaitkan Borongan
   const [produksiOnlyBelumSelesai, setProduksiOnlyBelumSelesai] = useState(false); // filter tab produksi hanya belum selesai
   const [kirimOnlyBelumLengkap, setKirimOnlyBelumLengkap] = useState(false); // filter tab kirim hanya belum lengkap
   const [alertDetailModal, setAlertDetailModal] = useState(false); // modal popup alert bermasalah dari dashboard
@@ -2338,6 +2339,52 @@ export default function App() {
   const boronganTanpaPesananIds = useMemo(() => {
     return new Set((boronganTanpaPesanan || []).map((e) => e.id));
   }, [boronganTanpaPesanan]);
+
+  const boronganTanpaPesananAll = useMemo(() => {
+    return (productionEntries || []).filter((e) => {
+      const noOrder = !e.orderId && !e.pesananId;
+      if (!noOrder) return false;
+      const proses = lower(e.process || e.proses || "");
+      const prosesRelevan =
+        proses.includes("potong") ||
+        proses.includes("jahit") ||
+        proses.includes("qc") ||
+        proses.includes("pengemasan");
+      const tidakDihapus = !e.deletedAt && !e.cancelledAt && e.status !== "deleted";
+      return prosesRelevan && tidakDihapus;
+    });
+  }, [productionEntries]);
+
+  const boronganKandidatTarget = useMemo(() => {
+    const target = boronganLinkTarget;
+    const base = boronganTanpaPesananAll || [];
+    if (!target) return base;
+    const targetText = normalizeMasterKey(`${target.customer || ""} ${target.invoice || ""} ${target.item || ""}`);
+    const targetItem = normalizeMasterKey(target.item || "");
+    const targetCustomer = normalizeMasterKey(target.customer || "");
+    const targetInvoice = normalizeMasterKey(target.invoice || "");
+
+    return [...base]
+      .map((e) => {
+        const entryText = normalizeMasterKey(`${e.employeeName || ""} ${e.productType || ""} ${e.model || ""} ${e.process || ""} ${e.invoice || ""} ${e.customer || ""}`);
+        let score = 0;
+        if (targetInvoice && entryText.includes(targetInvoice)) score += 100;
+        if (targetCustomer && entryText.includes(targetCustomer)) score += 60;
+        if (targetItem && entryText.includes(targetItem)) score += 80;
+        if (targetItem && targetItem.split(/\s+/).some((w) => w.length >= 4 && entryText.includes(w))) score += 25;
+        if (!score && targetText && entryText && targetText.split(/\s+/).some((w) => w.length >= 4 && entryText.includes(w))) score += 10;
+        return { e, score };
+      })
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return String(b.e.tanggal || b.e.createdAt || "").localeCompare(String(a.e.tanggal || a.e.createdAt || ""));
+      })
+      .map((row) => row.e);
+  }, [boronganLinkTarget, boronganTanpaPesananAll]);
+
+  const boronganKandidatTargetIds = useMemo(() => {
+    return new Set((boronganKandidatTarget || []).map((e) => e.id));
+  }, [boronganKandidatTarget]);
 
   const ordersForShipment = useMemo(() => {
     return orders
@@ -5915,7 +5962,7 @@ function rateDocId(productType, model, process) {
               </div>
               <button
                 type="button"
-                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setSearch(""); setTab("borongan"); }}
+                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setBoronganLinkTarget(null); setSearch(""); setTab("borongan"); }}
                 className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
                 style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
               >
@@ -6031,9 +6078,10 @@ function rateDocId(productType, model, process) {
                     onClick={() => {
                       setBoronganOnlyBelumSetor(false);
                       setBoronganOnlyOverSetor(false);
-                      setBoronganOnlyTanpaPesanan(false);
-                      setSearch(`${p.customer || ""} ${p.invoice || ""} ${p.item || ""}`.trim());
-                      showToast("🔎 Membuka Borongan sesuai pesanan ini", 2200);
+                      setBoronganOnlyTanpaPesanan(true);
+                      setBoronganLinkTarget({ orderId: p.orderId, customer: p.customer, invoice: p.invoice, item: p.item });
+                      setSearch("");
+                      showToast("🔗 Menampilkan borongan tanpa pesanan untuk dikaitkan", 2600);
                       setTab("borongan");
                     }}
                     className="mb-2 w-full rounded-full px-3 py-2 text-xs font-black text-white"
@@ -6110,14 +6158,18 @@ function rateDocId(productType, model, process) {
 
           {boronganOnlyTanpaPesanan && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fffbeb", border: "1.5px solid #f59e0b" }}>
-              <span className="text-xl">⚠️</span>
+              <span className="text-xl">🔗</span>
               <div className="flex-1">
-                <div className="text-sm font-black" style={{ color: "#92400e" }}>Hanya menampilkan borongan minggu ini belum dikaitkan</div>
-                <div className="text-xs mt-1" style={{ color: "#b45309" }}>Semua produksi dibuat sesuai pesanan, jadi entry periode berjalan perlu dikaitkan agar masuk progress produksi sebelum kirim.</div>
+                <div className="text-sm font-black" style={{ color: "#92400e" }}>Menampilkan borongan yang belum terkait pesanan</div>
+                <div className="text-xs mt-1" style={{ color: "#b45309" }}>
+                  {boronganLinkTarget
+                    ? `Target: ${boronganLinkTarget.customer || "-"} · ${boronganLinkTarget.invoice || "-"} · ${boronganLinkTarget.item || "-"}. Klik Kaitkan ke Pesanan Ini pada borongan yang benar.`
+                    : "Pilih borongan yang benar lalu kaitkan ke pesanan agar masuk progress produksi."}
+                </div>
               </div>
               <button
                 type="button"
-                onClick={() => setBoronganOnlyTanpaPesanan(false)}
+                onClick={() => { setBoronganOnlyTanpaPesanan(false); setBoronganLinkTarget(null); }}
                 className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
                 style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
               >
@@ -6132,9 +6184,17 @@ function rateDocId(productType, model, process) {
             <div className="text-xs" style={{ color: "#94a3b8" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
           </div>
 
+          {boronganOnlyTanpaPesanan && (boronganLinkTarget ? boronganKandidatTarget.length : filteredEntries.filter((e) => boronganTanpaPesananIds.has(e.id)).length) === 0 && (
+            <div className="rounded-2xl bg-white p-4 text-sm font-bold" style={{ border: "1.5px dashed #f59e0b", color: "#92400e" }}>
+              Tidak ada borongan tanpa pesanan yang bisa dikaitkan. Cek apakah borongan sudah terkait ke pesanan lain, atau input borongan baru dari tombol <b>Input Hasil Borongan</b> dengan pesanan yang benar.
+            </div>
+          )}
+
 
           {(boronganOnlyTanpaPesanan
-            ? filteredEntries.filter((e) => boronganTanpaPesananIds.has(e.id))
+            ? (boronganLinkTarget
+                ? boronganKandidatTarget
+                : filteredEntries.filter((e) => boronganTanpaPesananIds.has(e.id)))
             : boronganOnlyBelumSetor
               ? filteredEntries.filter((e) => setorTotals(e).statusSetor !== "sudah_setor")
               : boronganOnlyOverSetor
@@ -6224,11 +6284,11 @@ function rateDocId(productType, model, process) {
                     </div>
                     <button
                       type="button"
-                      onClick={() => { setKaitkanModal(e); setKaitkanOrderId(""); }}
+                      onClick={() => { setKaitkanModal(e); setKaitkanOrderId(boronganLinkTarget?.orderId || ""); }}
                       className="shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
                       style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
                     >
-                      🔗 Kaitkan
+                      {boronganLinkTarget ? "🔗 Kaitkan ke Pesanan Ini" : "🔗 Kaitkan"}
                     </button>
                   </div>
                 )}
@@ -6244,11 +6304,11 @@ function rateDocId(productType, model, process) {
                   {!e.orderId && !e.pesananId && (
                     <button
                       type="button"
-                      onClick={() => { setKaitkanModal(e); setKaitkanOrderId(""); }}
+                      onClick={() => { setKaitkanModal(e); setKaitkanOrderId(boronganLinkTarget?.orderId || ""); }}
                       className="flex-1 rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#fffbeb", color: "#b45309", border: "1px solid #fbbf24" }}
                     >
-                      🔗 Kaitkan
+                      {boronganLinkTarget ? "🔗 Kaitkan ke Pesanan Ini" : "🔗 Kaitkan"}
                     </button>
                   )}
                   <button
@@ -6864,7 +6924,7 @@ function rateDocId(productType, model, process) {
               </div>
               <button
                 type="button"
-                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setTab("borongan"); }}
+                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setBoronganLinkTarget(null); setTab("borongan"); }}
                 className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
                 style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
               >
