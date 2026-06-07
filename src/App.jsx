@@ -1274,10 +1274,13 @@ export default function App() {
   const [kasbonList, setKasbonList] = useState([]); // daftar semua kasbon pegawai dari Firestore (kasbon_pegawai)
   const [masterPekerja, setMasterPekerja] = useState([]); // daftar nama pekerja dari Gallery Kerudung (read-only)
   const [boronganOnlyOverSetor, setBoronganOnlyOverSetor] = useState(false); // filter tab borongan hanya setor melebihi diberi
+  const [boronganOnlyTanpaPesanan, setBoronganOnlyTanpaPesanan] = useState(false); // filter tab borongan hanya entry tanpa pesanan
   const [produksiOnlyBelumSelesai, setProduksiOnlyBelumSelesai] = useState(false); // filter tab produksi hanya belum selesai
   const [kirimOnlyBelumLengkap, setKirimOnlyBelumLengkap] = useState(false); // filter tab kirim hanya belum lengkap
   const [alertDetailModal, setAlertDetailModal] = useState(false); // modal popup alert bermasalah dari dashboard
   const [tugasDetailModal, setTugasDetailModal] = useState(false); // modal popup semua tugas hari ini
+  const [kaitkanModal, setKaitkanModal] = useState(null); // entry borongan lama/tanpa pesanan yang akan dikaitkan
+  const [kaitkanOrderId, setKaitkanOrderId] = useState(""); // pesanan target untuk kaitkan borongan
   const slipRef = useRef(null);
   const backUiRef = useRef({});
   const lastBackPressRef = useRef(0);
@@ -1690,6 +1693,7 @@ export default function App() {
       rekapDetailModal,
       tugasDetailModal,
       alertDetailModal,
+      kaitkanModal,
       search,
     };
   });
@@ -1712,6 +1716,7 @@ export default function App() {
       if (ui.rekapDetailModal) { setRekapDetailModal(null); return true; }
       if (ui.tugasDetailModal) { setTugasDetailModal(false); return true; }
       if (ui.alertDetailModal) { setAlertDetailModal(false); return true; }
+      if (ui.kaitkanModal) { setKaitkanModal(null); setKaitkanOrderId(""); return true; }
       if (ui.modal) { closeMainModal(); return true; }
       if (ui.search) { setSearch(""); return true; }
       if (ui.tab && ui.tab !== "dashboard") { setTab("dashboard"); return true; }
@@ -2170,6 +2175,33 @@ export default function App() {
       .filter((o) => !isOrderClosedForNewWork(o, shipmentByOrderId))
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   }, [orders, shipmentByOrderId]);
+
+  const boronganTanpaPesanan = useMemo(() => {
+    const periode = getMingguIni();
+    return (productionEntries || []).filter((e) => {
+      const noOrder = !e.orderId && !e.pesananId;
+      if (!noOrder) return false;
+
+      // Banner Tab Kirim tidak boleh menghitung semua data legacy.
+      // Yang perlu dikejar sebelum kirim adalah borongan aktif/periode berjalan.
+      const tanggalEntry = e.tanggal || e.tanggalMulai || e.createdAt || e.updatedAt || "";
+      const masukPeriodeBerjalan = dateInRange(tanggalEntry, periode.dari, periode.sampai);
+
+      const proses = lower(e.process || e.proses || "");
+      const prosesRelevan =
+        proses.includes("potong") ||
+        proses.includes("jahit") ||
+        proses.includes("qc") ||
+        proses.includes("pengemasan");
+
+      const tidakDihapus = !e.deletedAt && !e.cancelledAt && e.status !== "deleted";
+      return masukPeriodeBerjalan && prosesRelevan && tidakDihapus;
+    });
+  }, [productionEntries]);
+
+  const boronganTanpaPesananIds = useMemo(() => {
+    return new Set((boronganTanpaPesanan || []).map((e) => e.id));
+  }, [boronganTanpaPesanan]);
 
   const ordersForShipment = useMemo(() => {
     return orders
@@ -3209,8 +3241,8 @@ function rateDocId(productType, model, process) {
     if (!entryForm.employeeName.trim()) return alert("Nama pekerja wajib diisi");
     if (!entryForm.qty || Number(entryForm.qty) <= 0) return alert("Qty wajib diisi");
     if (!entryForm.model.trim()) return alert("Model wajib diisi sesuai Master Tarif");
-    if (PROCESSES_WITH_MODEL.includes(entryForm.process) && !entryForm.orderId) {
-      return alert(`Proses ${entryForm.process} wajib dikaitkan ke pesanan.\nPilih pesanan di dropdown "Pesanan terkait".`);
+    if (!entryForm.orderId) {
+      return alert(`Pilih pesanan dulu. Semua produksi wajib dikaitkan ke pesanan karena produksi dibuat sesuai order.`);
     }
 
     const cleanEmployeeName = canonicalByExisting(entryForm.employeeName, workerNameOptions, "worker");
@@ -4065,6 +4097,112 @@ function rateDocId(productType, model, process) {
     }
   }
 
+
+
+
+  async function kaitkanEntryKePesanan() {
+    if (!kaitkanModal) return;
+    if (!kaitkanOrderId) return alert("Pilih pesanan tujuan terlebih dahulu.");
+
+    const targetOrder = orders.find((o) => o.id === kaitkanOrderId);
+    if (!targetOrder) return alert("Pesanan tidak ditemukan.");
+
+    const entry = kaitkanModal;
+    const alreadyLinked = entry.orderId || entry.pesananId;
+    if (alreadyLinked && alreadyLinked !== kaitkanOrderId) {
+      const okRelink = window.confirm(
+        `Entry ini sudah terkait pesanan lain.\n\n` +
+        `Lanjut pindahkan kaitan ke ${targetOrder.invoice || targetOrder.customer}?`
+      );
+      if (!okRelink) return;
+    }
+
+    const totals = setorTotals(entry);
+    const hasSetor = Number(totals.qtySetor || 0) > 0 || Number(totals.qtyReject || 0) > 0;
+    if (hasSetor) {
+      const ok = window.confirm(
+        `Entry ini sudah punya data setor (${totals.qtySetor || 0} pcs).\n` +
+        `Mengubah pesanan tidak akan menghapus data setor/gaji yang sudah tersimpan.\n\n` +
+        `Lanjut kaitkan ke pesanan ${targetOrder.invoice || targetOrder.customer}?`
+      );
+      if (!ok) return;
+    }
+
+    const prod = produksiByOrderId.get(kaitkanOrderId);
+    const nextProduksiId = prod?.id || "";
+    const currentProduksiId = String(entry.produksiId || entry.productionId || "").trim();
+    const entryRef = doc(db, C.PRODUCTION_ENTRIES, entry.id);
+    const oldProdRef = currentProduksiId && currentProduksiId !== nextProduksiId
+      ? doc(db, C.PRODUKSI, currentProduksiId)
+      : null;
+    const prodRef = nextProduksiId ? doc(db, C.PRODUKSI, nextProduksiId) : null;
+
+    setIsSaving(true);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const entrySnap = await transaction.get(entryRef);
+        if (!entrySnap.exists()) throw new Error("Entry borongan tidak ditemukan.");
+
+        const oldProdSnap = oldProdRef ? await transaction.get(oldProdRef) : null;
+        const prodSnap = prodRef ? await transaction.get(prodRef) : null;
+        const liveEntry = { id: entry.id, ...entrySnap.data() };
+        const liveOldProduksiId = String(liveEntry.produksiId || liveEntry.productionId || currentProduksiId || "").trim();
+        const shouldRemoveFromOldProd = oldProdRef && liveOldProduksiId && liveOldProduksiId !== nextProduksiId;
+
+        if (shouldRemoveFromOldProd && oldProdSnap?.exists()) {
+          const oldWorkers = Array.isArray(oldProdSnap.data().workers) ? oldProdSnap.data().workers : [];
+          const nextOldWorkers = oldWorkers.filter((w) => w.entryId !== entry.id);
+          if (nextOldWorkers.length !== oldWorkers.length) {
+            transaction.update(oldProdRef, {
+              workers: nextOldWorkers,
+              updatedAt: todayStr(),
+            });
+          }
+        }
+
+        transaction.update(entryRef, {
+          orderId: kaitkanOrderId,
+          pesananId: kaitkanOrderId,
+          invoice: targetOrder.invoice || "",
+          customer: targetOrder.customer || "",
+          item: targetOrder.item || "",
+          productType: liveEntry.productType || targetOrder.productType || "Kerudung",
+          model: liveEntry.model || targetOrder.model || "",
+          produksiId: nextProduksiId,
+          updatedAt: new Date().toISOString(),
+          linkedAt: new Date().toISOString(),
+          linkedBy: user?.email || user?.uid || "",
+        });
+
+        if (prodRef && prodSnap?.exists()) {
+          const liveWorkers = Array.isArray(prodSnap.data().workers) ? prodSnap.data().workers : [];
+          const nextWorker = {
+            employeeName: liveEntry.employeeName,
+            process: liveEntry.process,
+            productType: liveEntry.productType || targetOrder.productType || "Kerudung",
+            model: liveEntry.model || targetOrder.model || "",
+            qty: Number(liveEntry.qty || 0),
+            tanggal: liveEntry.tanggal || todayStr(),
+            entryId: entry.id,
+          };
+          const hasWorker = liveWorkers.some((w) => w.entryId === entry.id);
+          transaction.update(prodRef, {
+            workers: hasWorker ? liveWorkers.map((w) => w.entryId === entry.id ? { ...w, ...nextWorker } : w) : [...liveWorkers, nextWorker],
+            updatedAt: todayStr(),
+          });
+        }
+      });
+
+      showToast(`✅ Borongan ${displayWorkerName(entry.employeeName)} berhasil dikaitkan ke ${targetOrder.invoice || targetOrder.customer}`, 3500);
+      setKaitkanModal(null);
+      setKaitkanOrderId("");
+      await Promise.all([refreshProductionEntries(), refreshProduksi()]);
+    } catch (e) {
+      alert(friendlyErrorMessage("Mengaitkan borongan ke pesanan", e));
+    } finally {
+      setIsSaving(false);
+    }
+  }
 
 
   async function simpanGajianLama(form) {
@@ -5830,6 +5968,24 @@ function rateDocId(productType, model, process) {
             </div>
           )}
 
+          {boronganOnlyTanpaPesanan && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fffbeb", border: "1.5px solid #f59e0b" }}>
+              <span className="text-xl">⚠️</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#92400e" }}>Hanya menampilkan borongan minggu ini belum dikaitkan</div>
+                <div className="text-xs mt-1" style={{ color: "#b45309" }}>Semua produksi dibuat sesuai pesanan, jadi entry periode berjalan perlu dikaitkan agar masuk progress produksi sebelum kirim.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBoronganOnlyTanpaPesanan(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+
           <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #fce7f3" }}>
             <div className="text-xs font-bold" style={{ color: "#a855f7" }}>Total hasil borongan</div>
             <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{stats.boronganPcs} pcs</div>
@@ -5837,14 +5993,16 @@ function rateDocId(productType, model, process) {
           </div>
 
 
-          {(boronganOnlyBelumSetor
-            ? filteredEntries.filter((e) => setorTotals(e).statusSetor !== "sudah_setor")
-            : boronganOnlyOverSetor
-              ? filteredEntries.filter((e) => {
-                  const totals = setorTotals(e);
-                  return (Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0)) > Number(e.qty || 0);
-                })
-              : filteredEntries
+          {(boronganOnlyTanpaPesanan
+            ? filteredEntries.filter((e) => boronganTanpaPesananIds.has(e.id))
+            : boronganOnlyBelumSetor
+              ? filteredEntries.filter((e) => setorTotals(e).statusSetor !== "sudah_setor")
+              : boronganOnlyOverSetor
+                ? filteredEntries.filter((e) => {
+                    const totals = setorTotals(e);
+                    return (Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0)) > Number(e.qty || 0);
+                  })
+                : filteredEntries
           ).map((e) => {
             const totals = setorTotals(e);
             const sudahSetor = totals.statusSetor === "sudah_setor";
@@ -5898,40 +6056,70 @@ function rateDocId(productType, model, process) {
             );
             return (
               <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
-              <div className="flex justify-between">
-                <div>
-                  <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
-                  <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
-                  {e.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {e.invoice}</div>}
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>📅 {e.tanggal}</div>
+                <div className="flex justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
+                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
+                    {e.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {e.invoice}</div>}
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>📅 {e.tanggal}</div>
+                    {!e.orderId && !e.pesananId && (
+                      <div className="mt-1.5 inline-flex items-center gap-1 rounded-full px-2.5 py-1" style={{ background: "#fefce8", border: "1px solid #fbbf24" }}>
+                        <span className="text-xs">⚠️</span>
+                        <span className="text-xs font-bold" style={{ color: "#92400e" }}>Tanpa Pesanan</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-2xl font-bold" style={{ color: "#10b981" }}>{e.qty}</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-2xl font-bold" style={{ color: "#10b981" }}>{e.qty}</div>
-                  <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
+
+                {statusSetorPanel}
+
+                {!e.orderId && !e.pesananId && (
+                  <div className="mt-2 rounded-2xl px-3 py-2.5 flex items-center justify-between gap-2" style={{ background: "#fffbeb", border: "1.5px dashed #f59e0b" }}>
+                    <div className="text-xs" style={{ color: "#92400e" }}>
+                      Entry ini belum terkait pesanan. Setor/gaji tetap bisa untuk data lama, tapi progress produksi baru terhitung setelah dikaitkan.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setKaitkanModal(e); setKaitkanOrderId(""); }}
+                      className="shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
+                      style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
+                    >
+                      🔗 Kaitkan
+                    </button>
+                  </div>
+                )}
+
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => openEditEntry(e)}
+                    className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                    style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
+                  >
+                    ✏️ Edit
+                  </button>
+                  {!e.orderId && !e.pesananId && (
+                    <button
+                      type="button"
+                      onClick={() => { setKaitkanModal(e); setKaitkanOrderId(""); }}
+                      className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                      style={{ background: "#fffbeb", color: "#b45309", border: "1px solid #fbbf24" }}
+                    >
+                      🔗 Kaitkan
+                    </button>
+                  )}
+                  <button
+                    onClick={() => requestDeleteEntry(e)}
+                    className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                    style={{ background: "#fff1f2", color: "#e11d48", border: "1px solid #fecaca" }}
+                  >
+                    🗑️ Hapus
+                  </button>
                 </div>
               </div>
-
-              {/* Status setor bertahap */}
-              {statusSetorPanel}
-
-              {/* Tombol Edit & Hapus */}
-              <div className="mt-2 flex gap-2">
-                <button
-                  onClick={() => openEditEntry(e)}
-                  className="flex-1 rounded-2xl py-2 text-xs font-bold"
-                  style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
-                >
-                  ✏️ Edit
-                </button>
-                <button
-                  onClick={() => requestDeleteEntry(e)}
-                  className="flex-1 rounded-2xl py-2 text-xs font-bold"
-                  style={{ background: "#fff1f2", color: "#e11d48", border: "1px solid #fecaca" }}
-                >
-                  🗑️ Hapus
-                </button>
-              </div>
-            </div>
             );
           })}
         </div>
@@ -6527,6 +6715,24 @@ function rateDocId(productType, model, process) {
             🚚 + Catat Pengiriman
           </Button>
 
+          {boronganTanpaPesanan.length > 0 && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fffbeb", border: "1.5px solid #f59e0b" }}>
+              <span className="text-xl">⚠️</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#92400e" }}>{boronganTanpaPesanan.length} borongan minggu ini belum dikaitkan ke pesanan</div>
+                <div className="text-xs mt-1" style={{ color: "#b45309" }}>Semua produksi wajib terkait pesanan. Sebelum kirim, kaitkan dulu dari Tab Borongan agar qty masuk progress.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setTab("borongan"); }}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
+              >
+                Buka Borongan
+              </button>
+            </div>
+          )}
+
           {/* Banner filter belum lengkap */}
           {kirimOnlyBelumLengkap && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}>
@@ -6673,9 +6879,15 @@ function rateDocId(productType, model, process) {
                 setEntryForm((f) => ({ ...f, orderId: v, model: "", qty: "" }));
               }}
             >
-              <option value="">Tidak dikaitkan ke pesanan</option>
+              <option value="">-- Pilih pesanan --</option>
               {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
             </Select>
+
+            {!entryForm.orderId && (
+              <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+                ⚠️ Pilih pesanan dulu. Semua proses produksi wajib dikaitkan ke pesanan agar progress dan kirim tetap akurat.
+              </div>
+            )}
 
             <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
@@ -6705,9 +6917,9 @@ function rateDocId(productType, model, process) {
                     <option value="">{isModelSpecificProcess(entryForm.process) ? "-- Pilih model dari pesanan terkait --" : "-- Pilih acuan tarif dari Master Tarif --"}</option>
                     {rateModels.map((name) => <option key={name} value={name}>{name}</option>)}
                   </Select>
-                  {isModelSpecificProcess(entryForm.process) && !selectedOrder && (
+                  {!selectedOrder && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                      ⚠️ Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
+                      ⚠️ Pesanan wajib dipilih untuk semua proses produksi.
                     </div>
                   )}
                   {rateModels.length === 0 && (!isModelSpecificProcess(entryForm.process) || selectedOrder) && (
@@ -7627,6 +7839,95 @@ function rateDocId(productType, model, process) {
                 )}
               </div>
             )}
+          </motion.div>
+        </div>
+      )}
+
+
+      {kaitkanModal && (
+        <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }}>
+          <motion.div
+            initial={{ y: 80 }}
+            animate={{ y: 0 }}
+            className="w-full p-5 max-h-[88vh] overflow-y-auto"
+            style={{ background: "white", borderRadius: "32px 32px 0 0", borderTop: "3px solid #f59e0b" }}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black" style={{ color: "#92400e" }}>🔗 Kaitkan ke Pesanan</h2>
+                <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
+                  👤 {displayWorkerName(kaitkanModal.employeeName)} · {kaitkanModal.process}{kaitkanModal.model ? ` · ${kaitkanModal.model}` : ""} · {kaitkanModal.qty} pcs
+                </div>
+              </div>
+              <button
+                onClick={() => { setKaitkanModal(null); setKaitkanOrderId(""); }}
+                className="rounded-2xl px-4 py-2 text-sm font-semibold"
+                style={{ background: "#fefce8", color: "#92400e" }}
+              >
+                Tutup
+              </button>
+            </div>
+
+            <div className="rounded-2xl p-3 mb-4" style={{ background: "#fefce8", border: "1px solid #fbbf24" }}>
+              <div className="text-xs font-bold mb-1" style={{ color: "#92400e" }}>⚠️ Entry ini belum terkait pesanan</div>
+              <div className="text-xs" style={{ color: "#78350f" }}>Tanggal input: {kaitkanModal.tanggal || "-"} · Qty: {kaitkanModal.qty || 0} pcs</div>
+              {kaitkanModal.invoice && <div className="text-xs" style={{ color: "#78350f" }}>Invoice tercatat: {kaitkanModal.invoice}</div>}
+            </div>
+
+            <div className="mb-4">
+              <div className="text-sm font-bold mb-2" style={{ color: "#92400e" }}>Pilih Pesanan Tujuan</div>
+              <select
+                value={kaitkanOrderId}
+                onChange={(ev) => setKaitkanOrderId(ev.target.value)}
+                className="w-full px-4 py-3 rounded-2xl text-sm outline-none"
+                style={{ border: "1.5px solid #fbbf24", background: "#fffbeb", color: "#1e1b4b" }}
+              >
+                <option value="">-- Pilih pesanan --</option>
+                {ordersForBoronganLink.map((o) => {
+                  const prod = produksiByOrderId.get(o.id);
+                  const statusProd = prod?.status || "Belum produksi";
+                  const label = [
+                    o.customer || "-",
+                    o.invoice ? `· ${o.invoice}` : "",
+                    o.item ? `· ${o.item}` : "",
+                    `· ${o.qty} pcs`,
+                    `· ${statusProd}`,
+                  ].filter(Boolean).join(" ");
+                  return <option key={o.id} value={o.id}>{label}</option>;
+                })}
+              </select>
+            </div>
+
+            {kaitkanOrderId && (() => {
+              const selectedOrder = orders.find((o) => o.id === kaitkanOrderId);
+              const prod = produksiByOrderId.get(kaitkanOrderId);
+              if (!selectedOrder) return null;
+              return (
+                <div className="rounded-2xl p-3 mb-4" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                  <div className="text-xs font-black mb-1" style={{ color: "#15803d" }}>✅ Pesanan dipilih:</div>
+                  <div className="text-sm font-bold" style={{ color: "#14532d" }}>{selectedOrder.customer} {selectedOrder.invoice ? `· ${selectedOrder.invoice}` : ""}</div>
+                  <div className="text-xs mt-0.5" style={{ color: "#64748b" }}>{selectedOrder.item} · {selectedOrder.qty} pcs · Status: {selectedOrder.status || "-"}</div>
+                  {prod && <div className="text-xs mt-0.5" style={{ color: "#7c3aed" }}>Produksi: {prod.status || "Ada"}</div>}
+                </div>
+              );
+            })()}
+
+            <button
+              type="button"
+              disabled={isSaving || !kaitkanOrderId}
+              onClick={kaitkanEntryKePesanan}
+              className="w-full rounded-2xl py-3.5 text-sm font-black text-white"
+              style={{
+                background: kaitkanOrderId ? "linear-gradient(135deg,#f59e0b,#d97706)" : "#d1d5db",
+                opacity: isSaving ? 0.6 : 1,
+              }}
+            >
+              {isSaving ? "Menyimpan..." : "🔗 Kaitkan ke Pesanan Ini"}
+            </button>
+
+            <div className="mt-3 text-center text-xs" style={{ color: "#94a3b8" }}>
+              Data lama tetap bisa setor/gaji · Progress produksi baru terhitung setelah dikaitkan
+            </div>
           </motion.div>
         </div>
       )}
