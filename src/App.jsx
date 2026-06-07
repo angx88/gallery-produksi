@@ -5893,7 +5893,7 @@ function rateDocId(productType, model, process) {
               <span className="text-xl">🧵</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#5b21b6" }}>Hanya menampilkan produksi belum selesai</div>
-                <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Update status produksi di bawah ini.</div>
+                <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Kalau produksi sebenarnya sudah selesai, kemungkinan hasil borongan belum dikaitkan ke pesanan.</div>
               </div>
               <button
                 type="button"
@@ -5902,6 +5902,24 @@ function rateDocId(productType, model, process) {
                 style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
               >
                 Tampilkan Semua
+              </button>
+            </div>
+          )}
+
+          {boronganTanpaPesanan.length > 0 && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fffbeb", border: "1.5px solid #f59e0b" }}>
+              <span className="text-xl">🔗</span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#92400e" }}>{boronganTanpaPesanan.length} hasil borongan belum dikaitkan</div>
+                <div className="text-xs mt-1" style={{ color: "#b45309" }}>Buka daftar ini kalau progress produksi terlihat kurang, padahal kerjaan sudah selesai.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setQ(""); setTab("borongan"); }}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
+              >
+                Kaitkan Hasil
               </button>
             </div>
           )}
@@ -6007,6 +6025,22 @@ function rateDocId(productType, model, process) {
 
               {/* Ubah status — compact pills */}
               <div className="px-4 pb-3">
+                {p.status !== "Selesai" && boronganTanpaPesanan.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBoronganOnlyBelumSetor(false);
+                      setBoronganOnlyOverSetor(false);
+                      setBoronganOnlyTanpaPesanan(true);
+                      setQ(p.customer || p.item || "");
+                      setTab("borongan");
+                    }}
+                    className="mb-2 w-full rounded-full px-3 py-2 text-xs font-black text-white"
+                    style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
+                  >
+                    🔗 Cari/Kaitkan Hasil Borongan
+                  </button>
+                )}
                 <div className="flex gap-1 flex-wrap">
                   {PROD_STATUS.map((s) => (
                     <button key={s} onClick={() => updateProduksiStatus(p.id, s)}
@@ -6861,9 +6895,27 @@ function rateDocId(productType, model, process) {
             const kirimBelumLengkapIds = new Set(
               (dashboardInsights.tugas.kirimBelumLengkapAll || dashboardInsights.tugas.kirimBelumLengkap).map(({ order }) => order.id)
             );
-            const displayed = kirimOnlyBelumLengkap
+            const displayedBase = kirimOnlyBelumLengkap
               ? filteredShipments.filter((k) => kirimBelumLengkapIds.has(k.orderId) || kirimBelumLengkapIds.has(k.pesananId))
               : filteredShipments;
+            const shipmentIssuePriority = (k) => {
+              const relatedOrder =
+                orderLookupForCards.byId.get(String(k.orderId || k.pesananId || "").trim()) ||
+                orderLookupForCards.byId.get(String(k.pesananId || k.orderId || "").trim()) ||
+                orderLookupForCards.byInvoice.get(normalizedInvoice(k.invoice || "")) ||
+                null;
+              const ordered = relatedOrder ? dashboardTotalOrderedQty(relatedOrder) : (k.items || []).reduce((s, item) => s + Number(item.qtyPesan || item.orderedQty || 0), 0);
+              const shipped = relatedOrder ? dashboardTotalShippedQty(relatedOrder) : (k.items || []).reduce((s, item) => s + Number(item.qtyKirim || item.shippedQty || item.qty || 0), 0);
+              if (ordered > 0 && shipped > ordered) return 0;
+              if (ordered > 0 && shipped < ordered) return 1;
+              return 2;
+            };
+            const displayed = [...displayedBase].sort((a, b) => {
+              const pa = shipmentIssuePriority(a);
+              const pb = shipmentIssuePriority(b);
+              if (pa !== pb) return pa - pb;
+              return String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || ""));
+            });
             if (displayed.length === 0) return <Empty text={kirimOnlyBelumLengkap ? "Semua pengiriman sudah lengkap" : "Tidak ada data pengiriman"} />;
             return displayed.map((k) => {
               const relatedOrder =
