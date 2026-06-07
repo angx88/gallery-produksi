@@ -5915,7 +5915,7 @@ function rateDocId(productType, model, process) {
               </div>
               <button
                 type="button"
-                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setQ(""); setTab("borongan"); }}
+                onClick={() => { setBoronganOnlyBelumSetor(false); setBoronganOnlyOverSetor(false); setBoronganOnlyTanpaPesanan(true); setSearch(""); setTab("borongan"); }}
                 className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
                 style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
               >
@@ -6032,7 +6032,8 @@ function rateDocId(productType, model, process) {
                       setBoronganOnlyBelumSetor(false);
                       setBoronganOnlyOverSetor(false);
                       setBoronganOnlyTanpaPesanan(false);
-                      setQ(`${p.customer || ""} ${p.invoice || ""} ${p.item || ""}`.trim());
+                      setSearch(`${p.customer || ""} ${p.invoice || ""} ${p.item || ""}`.trim());
+                      showToast("🔎 Membuka Borongan sesuai pesanan ini", 2200);
                       setTab("borongan");
                     }}
                     className="mb-2 w-full rounded-full px-3 py-2 text-xs font-black text-white"
@@ -6994,7 +6995,7 @@ function rateDocId(productType, model, process) {
                         )}
                         <Button
                           type="button"
-                          onClick={() => { setPesananOnlyNeedCheck(false); setQ(relatedOrder.invoice || relatedOrder.customer || ""); setTab("pesanan"); }}
+                          onClick={() => { setPesananOnlyNeedCheck(false); setSearch(relatedOrder.invoice || relatedOrder.customer || ""); setTab("pesanan"); }}
                           className="text-xs"
                           style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
                         >
