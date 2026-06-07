@@ -4260,8 +4260,8 @@ function rateDocId(productType, model, process) {
         Button={Button}
         Badge={Badge}
         Empty={Empty}
-        Input={Input}
-        Select={Select}
+        Input={UiInput}
+        Select={UiSelect}
         UiInput={UiInput}
         UiSelect={UiSelect}
         UiButton={UiButton}
@@ -4600,6 +4600,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
