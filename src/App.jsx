@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
-import { Badge, Button as UiButton } from "./components/ui";
+import { Badge, Button as UiButton, Input as UiInput } from "./components/ui";
 import { safeDocId, safeFileName } from "./utils/idUtils";
 import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey, normalizeMasterKey } from "./utils/normalizers";
 import {
@@ -839,28 +839,6 @@ function Button({ children, onClick, className = "", style = {}, disabled }) {
     >
       {children}
     </button>
-  );
-}
-function Input({ label, value, onChange, placeholder, type = "text", readOnly = false }) {
-  return (
-    <div className="space-y-1">
-      <label className="text-sm font-black" style={{ color: "#7e22ce" }}>{label}</label>
-      <input
-        value={value}
-        type={type}
-        readOnly={readOnly}
-        placeholder={placeholder}
-        onChange={(e) => onChange?.(e.target.value)}
-        className="w-full px-4 py-3.5 outline-none text-base font-semibold"
-        style={{
-          borderRadius: 16,
-          border: "1.7px solid #f0abfc",
-          background: readOnly ? "#f1f5f9" : "#fff7fb",
-          color: readOnly ? "#475569" : "#1e1b4b",
-          minHeight: 50,
-        }}
-      />
-    </div>
   );
 }
 function Select({ label, value, onChange, children }) {
@@ -3979,7 +3957,7 @@ function rateDocId(productType, model, process) {
         </div>
         <div className="mt-7 rounded-3xl px-5 py-4 flex items-center gap-4 relative z-10" style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.25)" }}>
           <span className="text-2xl"></span>
-          <input
+          <UiInput
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Cari pesanan, produksi, kain, pengiriman..."
@@ -5064,12 +5042,12 @@ function rateDocId(productType, model, process) {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
-                  <input type="date" value={rekapDari} onChange={(e) => handleRekapDariChange(e.target.value)}
+                  <UiInput type="date" value={rekapDari} onChange={(e) => handleRekapDariChange(e.target.value)}
                     className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
                 </div>
                 <div>
                   <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Sampai</div>
-                  <input type="date" value={rekapSampai} onChange={(e) => handleRekapSampaiChange(e.target.value)}
+                  <UiInput type="date" value={rekapSampai} onChange={(e) => handleRekapSampaiChange(e.target.value)}
                     className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
                 </div>
               </div>
@@ -5118,13 +5096,13 @@ function rateDocId(productType, model, process) {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Tanggal Digaji</div>
-                      <input type="date" value={formGajianLama.tanggalGaji}
+                      <UiInput type="date" value={formGajianLama.tanggalGaji}
                         onChange={(e) => setFormGajianLama((f) => ({ ...f, tanggalGaji: e.target.value }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Jumlah Dibayar</div>
-                      <input type="number" placeholder="0" value={formGajianLama.jumlah}
+                      <UiInput type="number" placeholder="0" value={formGajianLama.jumlah}
                         onChange={(e) => setFormGajianLama((f) => ({ ...f, jumlah: e.target.value }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
@@ -5132,13 +5110,13 @@ function rateDocId(productType, model, process) {
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Dari</div>
-                      <input type="date" value={formGajianLama.periodeGajiDari}
+                      <UiInput type="date" value={formGajianLama.periodeGajiDari}
                         onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiDari: e.target.value }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Sampai</div>
-                      <input type="date" value={formGajianLama.periodeGajiSampai}
+                      <UiInput type="date" value={formGajianLama.periodeGajiSampai}
                         onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiSampai: e.target.value }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
@@ -5689,8 +5667,8 @@ function rateDocId(productType, model, process) {
               <option value="">-- Pilih Pesanan --</option>
               {ordersBelumProduksi.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.item}  {o.qty} pcs</option>)}
             </Select>
-            <Input label="Tanggal Mulai" type="date" value={prodForm.tanggalMulai} onChange={(v) => setProdForm((f) => ({ ...f, tanggalMulai: v }))} />
-            <Input label="Catatan" value={prodForm.catatan} onChange={(v) => setProdForm((f) => ({ ...f, catatan: v }))} placeholder="Catatan produksi" />
+            <UiInput label="Tanggal Mulai" type="date" value={prodForm.tanggalMulai} onChange={(v) => setProdForm((f) => ({ ...f, tanggalMulai: v }))} />
+            <UiInput label="Catatan" value={prodForm.catatan} onChange={(v) => setProdForm((f) => ({ ...f, catatan: v }))} placeholder="Catatan produksi" />
             <Button onClick={addProduksi} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
               Simpan Produksi
             </Button>
@@ -5701,7 +5679,7 @@ function rateDocId(productType, model, process) {
         <Modal title=" Input Hasil Borongan" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <div>
-              <Input
+              <UiInput
                 label="Nama Pekerja"
                 value={entryForm.employeeName}
                 onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: v }))}
@@ -5809,9 +5787,9 @@ function rateDocId(productType, model, process) {
                 </div>
               );
             })()}
-            <Input label="Jumlah pcs" type="number" value={entryForm.qty} onChange={(v) => setEntryForm((f) => ({ ...f, qty: v }))} placeholder="Contoh: 500" />
-            <Input label="Tanggal" type="date" value={entryForm.tanggal} onChange={(v) => setEntryForm((f) => ({ ...f, tanggal: v }))} />
-            <Input label="Catatan" value={entryForm.catatan} onChange={(v) => setEntryForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
+            <UiInput label="Jumlah pcs" type="number" value={entryForm.qty} onChange={(v) => setEntryForm((f) => ({ ...f, qty: v }))} placeholder="Contoh: 500" />
+            <UiInput label="Tanggal" type="date" value={entryForm.tanggal} onChange={(v) => setEntryForm((f) => ({ ...f, tanggal: v }))} />
+            <UiInput label="Catatan" value={entryForm.catatan} onChange={(v) => setEntryForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
             <Button onClick={addProductionEntry} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
               Simpan Hasil Borongan
             </Button>
@@ -5844,14 +5822,14 @@ function rateDocId(productType, model, process) {
                 ))}
               </div>
             )}
-            <Input
+            <UiInput
               label="Qty Disetor (pcs)"
               type="number"
               value={setorForm.qtySetor}
               onChange={(v) => setSetorForm((f) => ({ ...f, qtySetor: v }))}
               placeholder={`Maks ${sisa} pcs`}
             />
-            <Input
+            <UiInput
               label="Qty Reject (pcs)  opsional"
               type="number"
               value={setorForm.qtyReject}
@@ -5874,13 +5852,13 @@ function rateDocId(productType, model, process) {
                 <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs  {money(setorModal.rate)})</span>
               </div>
             )}
-            <Input
+            <UiInput
               label="Tanggal Setor"
               type="date"
               value={setorForm.tanggalSetor}
               onChange={(v) => setSetorForm((f) => ({ ...f, tanggalSetor: v }))}
             />
-            <Input
+            <UiInput
               label="Catatan"
               value={setorForm.catatan}
               onChange={(v) => setSetorForm((f) => ({ ...f, catatan: v }))}
@@ -5903,7 +5881,7 @@ function rateDocId(productType, model, process) {
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
             </Select>
             <div>
-              <Input label="Model / Acuan Tarif" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Kerudung / Alya L / Gamis" />
+              <UiInput label="Model / Acuan Tarif" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Kerudung / Alya L / Gamis" />
               <div className="mt-1 text-[11px] font-semibold" style={{ color: "#64748b" }}>
                 Isi sesuai Master Tarif. Untuk Potong/Pengemasan-QC boleh memakai acuan umum seperti Kerudung.
               </div>
@@ -5923,7 +5901,7 @@ function rateDocId(productType, model, process) {
                 </div>
               )}
             </div>
-            <Input label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
+            <UiInput label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
             <Button onClick={addWorkRate} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
               Simpan Tarif
             </Button>
@@ -5978,7 +5956,7 @@ function rateDocId(productType, model, process) {
                   const checked = (kirimForm.orderIds || []).includes(o.id);
                   return (
                     <label key={o.id} className="flex items-center gap-2 rounded-xl bg-white p-2">
-                      <input
+                      <UiInput
                         type="checkbox"
                         checked={checked}
                         onChange={(e) => {
@@ -6010,13 +5988,13 @@ function rateDocId(productType, model, process) {
                 })}
               </div>
             )}
-            <Input label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
-            <Input label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
-            <Input label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
+            <UiInput label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
+            <UiInput label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
+            <UiInput label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
             {kirimForm.items.map((item, idx) => (
               <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
                 {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"}  {item.customer || kirimForm.penerima}</div>}
-                <Input
+                <UiInput
                   label="Item"
                   value={item.nama}
                   onChange={(v) => {
@@ -6026,8 +6004,8 @@ function rateDocId(productType, model, process) {
                   }}
                 />
                 <div className="grid grid-cols-2 gap-2 mt-2">
-                  <Input label="Qty Pesan" value={item.qtyPesan} readOnly />
-                  <Input
+                  <UiInput label="Qty Pesan" value={item.qtyPesan} readOnly />
+                  <UiInput
                     label="Qty Kirim"
                     type="number"
                     value={item.qtyKirim}
@@ -6062,11 +6040,11 @@ function rateDocId(productType, model, process) {
                   </div>
                   <div className="grid gap-2">
                     <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
-                      <input type="radio" checked={(kirimForm.shortShipmentMode || "temporary") === "temporary"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "temporary" }))} />
+                      <UiInput type="radio" checked={(kirimForm.shortShipmentMode || "temporary") === "temporary"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "temporary" }))} />
                       <span><b>Kurang kirim sementara</b><br/>Pilih ini jika sisa barang masih akan diproduksi/dikirim lagi nanti. Status menjadi Dikirim Sebagian dan sisa tetap tampil di Dashboard.</span>
                     </label>
                     <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
-                      <input type="radio" checked={kirimForm.shortShipmentMode === "final"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "final" }))} />
+                      <UiInput type="radio" checked={kirimForm.shortShipmentMode === "final"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "final" }))} />
                       <span><b>Kurang kirim final</b><br/>Pilih ini jika sisa tidak akan dikirim lagi. Order ditutup sebagai Kurang Kirim Final, sisa tidak jadi tanggungan aktif, dan tagihan tetap hanya dari qty terkirim.</span>
                     </label>
                   </div>
@@ -6078,7 +6056,7 @@ function rateDocId(productType, model, process) {
                         <option value="Customer setuju dikurangi">Customer setuju dikurangi</option>
                         <option value="Lainnya">Lainnya</option>
                       </Select>
-                      <Input label="Catatan penutupan" value={kirimForm.shortShipmentNote || ""} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentNote: v }))} placeholder="Opsional" />
+                      <UiInput label="Catatan penutupan" value={kirimForm.shortShipmentNote || ""} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentNote: v }))} placeholder="Opsional" />
                     </div>
                   )}
                 </div>
@@ -6093,7 +6071,7 @@ function rateDocId(productType, model, process) {
                 </div>
               );
             })()}
-            <Input label="Catatan" value={kirimForm.catatan} onChange={(v) => setKirimForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
+            <UiInput label="Catatan" value={kirimForm.catatan} onChange={(v) => setKirimForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
             <Button onClick={addPengiriman} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
               Simpan Pengiriman
             </Button>
@@ -6178,27 +6156,27 @@ function rateDocId(productType, model, process) {
               </Select>
             )}
             {!isGeneralRateProcess(editEntryModal.process) && (
-              <Input
+              <UiInput
                 label="Model"
                 value={editEntryForm.model}
                 onChange={(v) => setEditEntryForm(f => ({ ...f, model: v }))}
                 placeholder="Contoh: Alya L"
               />
             )}
-            <Input
+            <UiInput
               label="Jumlah pcs diberikan"
               type="number"
               value={editEntryForm.qty}
               onChange={(v) => setEditEntryForm(f => ({ ...f, qty: v }))}
               placeholder="Contoh: 62"
             />
-            <Input
+            <UiInput
               label="Tanggal"
               type="date"
               value={editEntryForm.tanggal}
               onChange={(v) => setEditEntryForm(f => ({ ...f, tanggal: v }))}
             />
-            <Input
+            <UiInput
               label="Catatan"
               value={editEntryForm.catatan}
               onChange={(v) => setEditEntryForm(f => ({ ...f, catatan: v }))}
@@ -6697,6 +6675,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
