@@ -1,4 +1,4 @@
-// App.jsx Gallery Produksi - BORONGAN SEARCH PINTAR - 2026-06-08
+// App.jsx Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
 // Audit final: fokus produksi, borongan/upah, kasbon pegawai, stok siap kirim, dan pengiriman real ke App Kerudung.
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
@@ -2245,6 +2245,29 @@ export default function App() {
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   }, [orders, shipmentByOrderId]);
 
+  const productionQtyIndex = useMemo(() => {
+    const byOrderProcess = new Map();
+    const byOrderProcessModel = new Map();
+
+    productionEntries.forEach((e) => {
+      const orderId = String(e.orderId || "").trim();
+      if (!orderId) return;
+      const processKey = normalizeProcessKey(e.process || "");
+      const modelKey = normalizeModelKey(e.model || "");
+      const qty = Number(e.qty || 0);
+
+      const processMapKey = `${orderId}||${processKey}`;
+      byOrderProcess.set(processMapKey, (byOrderProcess.get(processMapKey) || 0) + qty);
+
+      if (modelKey) {
+        const modelMapKey = `${orderId}||${processKey}||${modelKey}`;
+        byOrderProcessModel.set(modelMapKey, (byOrderProcessModel.get(modelMapKey) || 0) + qty);
+      }
+    });
+
+    return { byOrderProcess, byOrderProcessModel };
+  }, [productionEntries]);
+
   const ordersForBoronganLink = useMemo(() => {
     const qRaw = entryOrderSearch.trim();
     const q = normalizeMasterKey(qRaw);
@@ -3003,28 +3026,7 @@ export default function App() {
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
   }, [productionEntries, workRates, orders, produksi]);
 
-  const productionQtyIndex = useMemo(() => {
-    const byOrderProcess = new Map();
-    const byOrderProcessModel = new Map();
 
-    productionEntries.forEach((e) => {
-      const orderId = String(e.orderId || "").trim();
-      if (!orderId) return;
-      const processKey = normalizeProcessKey(e.process || "");
-      const modelKey = normalizeModelKey(e.model || "");
-      const qty = Number(e.qty || 0);
-
-      const processMapKey = `${orderId}||${processKey}`;
-      byOrderProcess.set(processMapKey, (byOrderProcess.get(processMapKey) || 0) + qty);
-
-      if (modelKey) {
-        const modelMapKey = `${orderId}||${processKey}||${modelKey}`;
-        byOrderProcessModel.set(modelMapKey, (byOrderProcessModel.get(modelMapKey) || 0) + qty);
-      }
-    });
-
-    return { byOrderProcess, byOrderProcessModel };
-  }, [productionEntries]);
 
   function processQtyForOrder(orderId, process) {
     const key = `${String(orderId || "").trim()}||${normalizeProcessKey(process || "")}`;
