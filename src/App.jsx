@@ -1,4 +1,5 @@
-// App.jsx Gallery Produksi - mode hemat kuota Firestore - 2026-06-06
+﻿// App.jsx Gallery Produksi - AUDIT BISNIS & UANG FINAL - 2026-06-08
+// Audit final: fokus produksi, borongan/upah, kasbon pegawai, stok siap kirim, dan pengiriman real ke App Kerudung.
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
 // PERFORMA: (1) work_rates, master_pekerja, materials, payroll, gajian_history pakai getDocs.
@@ -190,8 +191,70 @@ function sameText(a, b) {
   return String(a || "").trim() !== "" && String(b || "").trim() !== "" && String(a).trim() === String(b).trim();
 }
 
+
+function parseIndoNumber(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  let raw = String(value).trim();
+  if (!raw) return 0;
+  const negative = /^-/.test(raw) || /\(.*\)/.test(raw);
+  raw = raw.replace(/[^\d,.-]/g, "");
+  if (!raw) return 0;
+
+  const hasComma = raw.includes(",");
+  const hasDot = raw.includes(".");
+  let normalized = raw;
+
+  if (hasComma && hasDot) {
+    const lastComma = raw.lastIndexOf(",");
+    const lastDot = raw.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      normalized = raw.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = raw.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    const parts = raw.split(",");
+    normalized = parts.length === 2 && parts[1].length <= 2
+      ? `${parts[0].replace(/\./g, "")}.${parts[1]}`
+      : raw.replace(/,/g, "");
+  } else if (hasDot) {
+    const parts = raw.split(".");
+    const last = parts[parts.length - 1];
+    normalized = parts.length > 1 && last.length === 3
+      ? raw.replace(/\./g, "")
+      : raw;
+  }
+
+  const n = Number(normalized);
+  if (!Number.isFinite(n)) return 0;
+  return negative ? -Math.abs(n) : n;
+}
+
+function qtyValue(value) {
+  const n = parseIndoNumber(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function moneyValue(value) {
+  const n = parseIndoNumber(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function nonNegativeQty(value) {
+  return Math.max(0, qtyValue(value));
+}
+
+function nonNegativeMoney(value) {
+  return Math.max(0, moneyValue(value));
+}
+
+function lineMoneyTotal(qty, price) {
+  return nonNegativeQty(qty) * nonNegativeMoney(price);
+}
+
 function fmtQty(value) {
-  const n = Number(value || 0);
+  const n = qtyValue(value);
   if (!Number.isFinite(n)) return "0";
   return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
 }
@@ -208,7 +271,7 @@ function materialNameFromItem(item) {
 }
 
 function materialQtyPerPcsFromItem(item) {
-  return Number(
+  return qtyValue(
     item?.materialQtyPerPcs ??
     item?.kebutuhanKainPerPcs ??
     item?.kebutuhanKain ??
@@ -227,7 +290,7 @@ function orderItemsForMaterial(order) {
 
   return rawItems.map((it) => ({
     name: it?.name || it?.item || order?.item || "-",
-    qty: Number(it?.qty ?? it?.quantity ?? order?.qty ?? 0),
+    qty: nonNegativeQty(it?.qty ?? it?.quantity ?? order?.qty ?? 0),
     mainMaterial: materialNameFromItem(it) || materialNameFromItem(order?.raw) || materialNameFromItem(order),
     materialQtyPerPcs: materialQtyPerPcsFromItem(it) || materialQtyPerPcsFromItem(order?.raw) || materialQtyPerPcsFromItem(order),
   }));
@@ -470,7 +533,7 @@ function money(v) {
     style: "currency",
     currency: "IDR",
     maximumFractionDigits: 0,
-  }).format(Number(v || 0));
+  }).format(moneyValue(v));
 }
 
 
@@ -478,16 +541,16 @@ function normalizeSetorHistory(entry) {
   const raw = Array.isArray(entry?.setorHistory) ? entry.setorHistory : [];
   const normalized = raw
     .map((h, idx) => {
-      const qtySetor = Number(h?.qtySetor || 0);
-      const qtyReject = Number(h?.qtyReject || 0);
-      const rate = Number(h?.rate ?? entry?.rate ?? 0);
+      const qtySetor = nonNegativeQty(h?.qtySetor || 0);
+      const qtyReject = nonNegativeQty(h?.qtyReject || 0);
+      const rate = nonNegativeMoney(h?.rate ?? entry?.rate ?? 0);
       return {
         id: h?.id || `${entry?.id || "entry"}-${idx}`,
         tanggalSetor: h?.tanggalSetor || h?.tanggal || entry?.tanggalSetor || entry?.tanggal || todayStr(),
         qtySetor,
         qtyReject,
         rate,
-        totalWageSetor: Math.max(0, Number(h?.totalWageSetor ?? (qtySetor * rate) ?? 0)),
+        totalWageSetor: Math.max(0, moneyValue(h?.totalWageSetor ?? (qtySetor * rate) ?? 0)),
         catatan: h?.catatan || h?.catatanSetor || "",
         createdAt: h?.createdAt || "",
       };
@@ -495,17 +558,17 @@ function normalizeSetorHistory(entry) {
     .filter((h) => Number(h.qtySetor || 0) > 0 || Number(h.qtyReject || 0) > 0);
 
   // Dukungan data lama: entry lama hanya punya qtySetor/qtyReject tanpa setorHistory.
-  if (normalized.length === 0 && (Number(entry?.qtySetor || 0) > 0 || Number(entry?.qtyReject || 0) > 0 || entry?.statusSetor === "sudah_setor")) {
-    const qtySetor = Number(entry?.qtySetor || 0);
-    const qtyReject = Number(entry?.qtyReject || 0);
-    const rate = Number(entry?.rate || 0);
+  if (normalized.length === 0 && (nonNegativeQty(entry?.qtySetor || 0) > 0 || nonNegativeQty(entry?.qtyReject || 0) > 0 || entry?.statusSetor === "sudah_setor")) {
+    const qtySetor = nonNegativeQty(entry?.qtySetor || 0);
+    const qtyReject = nonNegativeQty(entry?.qtyReject || 0);
+    const rate = nonNegativeMoney(entry?.rate || 0);
     normalized.push({
       id: `${entry?.id || "legacy"}-legacy-setor`,
       tanggalSetor: entry?.tanggalSetor || entry?.tanggal || todayStr(),
       qtySetor,
       qtyReject,
       rate,
-      totalWageSetor: Math.max(0, Number(entry?.totalWageSetor ?? (qtySetor * rate) ?? 0)),
+      totalWageSetor: Math.max(0, moneyValue(entry?.totalWageSetor ?? (qtySetor * rate) ?? 0)),
       catatan: entry?.catatanSetor || "",
       createdAt: entry?.updatedAt || entry?.createdAt || "",
     });
@@ -516,10 +579,10 @@ function normalizeSetorHistory(entry) {
 
 function setorTotals(entry) {
   const history = normalizeSetorHistory(entry);
-  const qtySetor = history.reduce((s, h) => s + Number(h.qtySetor || 0), 0);
-  const qtyReject = history.reduce((s, h) => s + Number(h.qtyReject || 0), 0);
-  const totalWageSetor = history.reduce((s, h) => s + Number(h.totalWageSetor || 0), 0);
-  const qtyAwal = Number(entry?.qty || 0);
+  const qtySetor = history.reduce((s, h) => s + nonNegativeQty(h.qtySetor || 0), 0);
+  const qtyReject = history.reduce((s, h) => s + nonNegativeQty(h.qtyReject || 0), 0);
+  const totalWageSetor = history.reduce((s, h) => s + nonNegativeMoney(h.totalWageSetor || 0), 0);
+  const qtyAwal = nonNegativeQty(entry?.qty || 0);
   const sisaSetor = Math.max(0, qtyAwal - qtySetor - qtyReject);
   const tanggalSetor = history.length > 0 ? history[history.length - 1].tanggalSetor : (entry?.tanggalSetor || "");
   const statusSetor = sisaSetor <= 0 && (qtySetor + qtyReject) > 0
@@ -534,9 +597,9 @@ function setorHistoryInRange(entry, dari, sampai) {
 
 function setorTotalsFromHistory(history) {
   return {
-    qtySetor: (history || []).reduce((s, h) => s + Number(h.qtySetor || 0), 0),
-    qtyReject: (history || []).reduce((s, h) => s + Number(h.qtyReject || 0), 0),
-    totalWageSetor: (history || []).reduce((s, h) => s + Math.max(0, Number(h.totalWageSetor || 0)), 0),
+    qtySetor: (history || []).reduce((s, h) => s + nonNegativeQty(h.qtySetor || 0), 0),
+    qtyReject: (history || []).reduce((s, h) => s + nonNegativeQty(h.qtyReject || 0), 0),
+    totalWageSetor: (history || []).reduce((s, h) => s + nonNegativeMoney(h.totalWageSetor || 0), 0),
   };
 }
 
@@ -554,15 +617,15 @@ function safeOrder(d) {
   if (rawItems.length > 0) {
     items = rawItems.map((it) => ({
       name: displayModelName(it.name || it.nama || it.item || it.productName || it.model || "-"),
-      qty: Number(it.qty || it.quantity || it.jumlah || 0),
-      price: Number(it.price || it.harga || it.hargaPcs || 0),
+      qty: nonNegativeQty(it.qty || it.quantity || it.jumlah || 0),
+      price: nonNegativeMoney(it.price || it.harga || it.hargaJual || it.sellingPrice || it.unitPrice || it.hargaSatuan || it.hargaPcs || 0),
     })).filter((it) => it.qty > 0 || it.name !== "-");
   }
 
-  const totalQty = Number(d.qty || d.quantity || d.jumlah || d.totalQty || 0);
+  const totalQty = nonNegativeQty(d.qty || d.quantity || d.jumlah || d.totalQty || 0);
 
   if (items.length === 0) {
-    items = [{ name: displayModelName(d.item || d.productName || d.produk || d.product || "Pesanan"), qty: totalQty, price: Number(d.hargaPcs || d.price || 0) }];
+    items = [{ name: displayModelName(d.item || d.productName || d.produk || d.product || "Pesanan"), qty: totalQty, price: nonNegativeMoney(d.hargaPcs || d.hargaJual || d.sellingPrice || d.unitPrice || d.hargaSatuan || d.price || 0) }];
   }
 
   return {
@@ -592,19 +655,19 @@ function rawOrderItemsForDelivery(order) {
 
   return rawItems.map((it, idx) => {
     const name = displayModelName(it?.name || it?.nama || it?.item || it?.productName || it?.model || order?.item || raw.item || "Produk");
-    const orderedQty = Number(it?.qty ?? it?.quantity ?? it?.jumlah ?? order?.qty ?? raw.qty ?? 0);
-    const price = Number(it?.price ?? it?.harga ?? it?.hargaPcs ?? raw.hargaPcs ?? raw.price ?? 0);
-    const hppPerPcs = Number(it?.hppPerPcs ?? it?.hpp ?? it?.bahanCost ?? it?.materialCost ?? 0);
+    const orderedQty = nonNegativeQty(it?.qty ?? it?.quantity ?? it?.jumlah ?? order?.qty ?? raw.qty ?? 0);
+    const price = nonNegativeMoney(it?.price ?? it?.harga ?? it?.hargaJual ?? it?.sellingPrice ?? it?.unitPrice ?? it?.hargaSatuan ?? it?.hargaPcs ?? raw.hargaJual ?? raw.sellingPrice ?? raw.unitPrice ?? raw.hargaSatuan ?? raw.hargaPcs ?? raw.price ?? 0);
+    const hppPerPcs = nonNegativeMoney(it?.hppPerPcs ?? it?.hpp ?? it?.bahanCost ?? it?.materialCost ?? 0);
     return {
       itemIndex: idx,
       name,
       orderedQty,
       qty: orderedQty,
       price,
-      bahanCost: Number(it?.bahanCost ?? it?.materialCost ?? 0),
+      bahanCost: nonNegativeMoney(it?.bahanCost ?? it?.materialCost ?? 0),
       hppPerPcs,
       mainMaterial: it?.mainMaterial || it?.materialName || it?.kain || it?.namaKain || "",
-      materialQtyPerPcs: Number(it?.materialQtyPerPcs ?? it?.kebutuhanKainPerPcs ?? it?.kebutuhanKain ?? it?.kainPerPcs ?? 0),
+      materialQtyPerPcs: nonNegativeQty(it?.materialQtyPerPcs ?? it?.kebutuhanKainPerPcs ?? it?.kebutuhanKain ?? it?.kainPerPcs ?? 0),
       unit: it?.unit || it?.satuan || "yard",
     };
   }).filter((it) => it.name && Number(it.orderedQty || 0) > 0);
@@ -615,8 +678,8 @@ function hasDeliveryDetail(order) {
   return (
     (Array.isArray(raw.deliveries) && raw.deliveries.length > 0) ||
     (Array.isArray(raw.shippedItems) && raw.shippedItems.length > 0) ||
-    Number(raw.deliveredTotal || 0) > 0 ||
-    Number(raw.totalKirim || raw.totalShipped || 0) > 0
+    moneyValue(raw.deliveredTotal || 0) > 0 ||
+    nonNegativeQty(raw.totalKirim || raw.totalShipped || 0) > 0
   );
 }
 
@@ -630,18 +693,18 @@ function dashboardTotalShippedQty(order) {
   if (Array.isArray(raw.deliveries) && raw.deliveries.length > 0) {
     return raw.deliveries.reduce((deliverySum, delivery) => {
       return deliverySum + (delivery.items || []).reduce((itemSum, item) => {
-        return itemSum + Number(item.qty ?? item.shippedQty ?? item.qtyKirim ?? item.sentQty ?? 0);
+        return itemSum + nonNegativeQty(item.qty ?? item.shippedQty ?? item.qtyKirim ?? item.sentQty ?? 0);
       }, 0);
     }, 0);
   }
 
   if (Array.isArray(raw.shippedItems) && raw.shippedItems.length > 0) {
     return raw.shippedItems.reduce((sum, item) => {
-      return sum + Number(item.shippedQty ?? item.qtyKirim ?? item.qty ?? item.quantity ?? item.sentQty ?? 0);
+      return sum + nonNegativeQty(item.shippedQty ?? item.qtyKirim ?? item.qty ?? item.quantity ?? item.sentQty ?? 0);
     }, 0);
   }
 
-  return Number(raw.totalKirim ?? raw.totalShipped ?? raw.shippedQty ?? raw.sentQty ?? 0);
+  return nonNegativeQty(raw.totalKirim ?? raw.totalShipped ?? raw.shippedQty ?? raw.sentQty ?? 0);
 }
 
 function isLegacyDoneOrSentOrder(order) {
@@ -678,36 +741,36 @@ function buildFullDeliveryPayload(order) {
   const items = rawOrderItemsForDelivery(order);
   const syncDate = order?.raw?.tanggalKirim || order?.raw?.deliveryDate || order?.raw?.shippedAt || order?.createdAt || todayStr();
   const deliveryItems = items.map((it) => ({
-    itemIndex: Number(it.itemIndex || 0),
+    itemIndex: nonNegativeQty(it.itemIndex || 0),
     name: it.name || "Produk",
-    qty: Number(it.orderedQty || 0),
-    shippedQty: Number(it.orderedQty || 0),
-    orderedQty: Number(it.orderedQty || 0),
-    price: Number(it.price || 0),
-    bahanCost: Number(it.bahanCost || 0),
-    hppPerPcs: Number(it.hppPerPcs || 0),
+    qty: nonNegativeQty(it.orderedQty || 0),
+    shippedQty: nonNegativeQty(it.orderedQty || 0),
+    orderedQty: nonNegativeQty(it.orderedQty || 0),
+    price: nonNegativeMoney(it.price || 0),
+    bahanCost: nonNegativeMoney(it.bahanCost || 0),
+    hppPerPcs: nonNegativeMoney(it.hppPerPcs || 0),
     mainMaterial: it.mainMaterial || "",
-    materialQtyPerPcs: Number(it.materialQtyPerPcs || 0),
+    materialQtyPerPcs: nonNegativeQty(it.materialQtyPerPcs || 0),
     unit: it.unit || "yard",
   }));
 
   const shippedItems = items.map((it) => ({
     name: it.name || "Produk",
-    orderedQty: Number(it.orderedQty || 0),
-    shippedQty: Number(it.orderedQty || 0),
-    price: Number(it.price || 0),
-    bahanCost: Number(it.bahanCost || 0),
-    hppPerPcs: Number(it.hppPerPcs || 0),
+    orderedQty: nonNegativeQty(it.orderedQty || 0),
+    shippedQty: nonNegativeQty(it.orderedQty || 0),
+    price: nonNegativeMoney(it.price || 0),
+    bahanCost: nonNegativeMoney(it.bahanCost || 0),
+    hppPerPcs: nonNegativeMoney(it.hppPerPcs || 0),
     mainMaterial: it.mainMaterial || "",
-    materialQtyPerPcs: Number(it.materialQtyPerPcs || 0),
+    materialQtyPerPcs: nonNegativeQty(it.materialQtyPerPcs || 0),
     unit: it.unit || "yard",
     note: "Sesuai pesanan",
   }));
 
-  const deliveredTotal = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0) * Number(it.price || 0), 0);
-  const deliveredHppTotal = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0) * Number(it.hppPerPcs || it.bahanCost || 0), 0);
-  const totalShipped = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0), 0);
-  const totalOrdered = shippedItems.reduce((s, it) => s + Number(it.orderedQty || 0), 0);
+  const deliveredTotal = shippedItems.reduce((s, it) => s + lineMoneyTotal(it.shippedQty || 0, it.price || 0), 0);
+  const deliveredHppTotal = shippedItems.reduce((s, it) => s + lineMoneyTotal(it.shippedQty || 0, it.hppPerPcs || it.bahanCost || 0), 0);
+  const totalShipped = shippedItems.reduce((s, it) => s + nonNegativeQty(it.shippedQty || 0), 0);
+  const totalOrdered = shippedItems.reduce((s, it) => s + nonNegativeQty(it.orderedQty || 0), 0);
 
   const legacyDelivery = {
     date: syncDate,
@@ -776,14 +839,14 @@ function shipmentDeliveredQtyForOrder(order, shipmentByOrderId) {
   return rows.reduce((sum, shipment) => {
     const items = shipmentItemsForOrder(shipment, order);
     if (items.length > 0) {
-      return sum + items.reduce((itemSum, item) => itemSum + Number(item.qtyKirim ?? item.shippedQty ?? item.qty ?? 0), 0);
+      return sum + items.reduce((itemSum, item) => itemSum + nonNegativeQty(item.qtyKirim ?? item.shippedQty ?? item.qty ?? 0), 0);
     }
     const shipmentOrderIds = Array.isArray(shipment?.orderIds) ? shipment.orderIds.map((id) => String(id || "").trim()) : [];
     const isTopLevelMatch =
       String(shipment?.orderId || shipment?.pesananId || "").trim() === String(order?.id || "").trim() ||
       shipmentOrderIds.includes(String(order?.id || "").trim()) ||
       String(shipment?.invoice || "").trim() === String(order?.invoice || "").trim();
-    return isTopLevelMatch ? sum + Number(shipment.totalKirim ?? shipment.qty ?? shipment.raw?.qty ?? 0) : sum;
+    return isTopLevelMatch ? sum + nonNegativeQty(shipment.totalKirim ?? shipment.qty ?? shipment.raw?.qty ?? 0) : sum;
   }, 0);
 }
 
@@ -1221,7 +1284,7 @@ function ProgressBar({ status }) {
 
 function isOfficialGajiPayroll(row) {
   if (!row) return false;
-  const amount = Number(row.totalAmount || 0);
+  const amount = nonNegativeMoney(row.totalAmount || 0);
   if (!Number.isFinite(amount) || amount <= 0) return false;
 
   const source = String(row.source || "").toLowerCase();
@@ -1244,7 +1307,7 @@ function isOfficialGajiPayroll(row) {
 function officialGajiPayrollTotal(rows = []) {
   return (rows || [])
     .filter(isOfficialGajiPayroll)
-    .reduce((sum, row) => sum + Number(row.totalAmount || 0), 0);
+    .reduce((sum, row) => sum + nonNegativeMoney(row.totalAmount || 0), 0);
 }
 
 export default function App() {
@@ -3203,7 +3266,7 @@ function rateDocId(productType, model, process) {
     const cleanProductType = displayProductTypeName(rateForm.productType);
     const cleanProcess = rateForm.process;
     const cleanModel = canonicalByExisting(rateForm.model, modelNameOptions, "model");
-    const cleanRate = Number(rateForm.rate || 0);
+    const cleanRate = nonNegativeMoney(rateForm.rate || 0);
 
     if (!cleanProductType.trim()) return alert("Jenis produk wajib diisi");
     if (!cleanModel.trim()) return alert("Model wajib diisi sesuai Master Tarif");
@@ -3239,7 +3302,7 @@ function rateDocId(productType, model, process) {
 
   async function addProductionEntry() {
     if (!entryForm.employeeName.trim()) return alert("Nama pekerja wajib diisi");
-    if (!entryForm.qty || Number(entryForm.qty) <= 0) return alert("Qty wajib diisi");
+    if (!entryForm.qty || nonNegativeQty(entryForm.qty) <= 0) return alert("Qty wajib diisi");
     if (!entryForm.model.trim()) return alert("Model wajib diisi sesuai Master Tarif");
     if (!entryForm.orderId) {
       return alert(`Pilih pesanan dulu. Semua produksi wajib dikaitkan ke pesanan karena produksi dibuat sesuai order.`);
@@ -3253,9 +3316,10 @@ function rateDocId(productType, model, process) {
 
     const order = orders.find((o) => o.id === entryForm.orderId);
     const prod = order ? produksiByOrderId.get(order.id) : null;
-    const effectiveRate = Number(rate.rate || 0);
+    const effectiveRate = nonNegativeMoney(rate.rate || 0);
     if (!Number.isFinite(effectiveRate) || effectiveRate <= 0) return alert("Tarif efektif tidak valid. Periksa tarif dasar dan aturan potongan konveksi.");
-    const totalWage = Number(entryForm.qty) * effectiveRate;
+    const entryQty = nonNegativeQty(entryForm.qty);
+    const totalWage = entryQty * effectiveRate;
 
     const draftPayloadForCheck = {
       employeeName: cleanEmployeeName,
@@ -3274,7 +3338,7 @@ function rateDocId(productType, model, process) {
       const alreadyQty = isGeneralRateProcess(entryForm.process)
         ? processQtyForOrder(order.id, entryForm.process)
         : processQtyForOrderModel(order.id, entryForm.process, cleanModel);
-      const nextQty = alreadyQty + Number(entryForm.qty || 0);
+      const nextQty = alreadyQty + entryQty;
       if (limit > 0 && nextQty > limit) {
         return alert(
           `Qty ${entryForm.process} melebihi qty ${label}.\n` +
@@ -3301,8 +3365,8 @@ function rateDocId(productType, model, process) {
         productType: cleanProductType,
         model: cleanModel,
         process: entryForm.process,
-        qty: Number(entryForm.qty),
-        rate: Number(rate.rate || 0),
+        qty: entryQty,
+        rate: effectiveRate,
         totalWage,
         tanggal: entryForm.tanggal,
         catatan: entryForm.catatan || "",
@@ -3856,7 +3920,7 @@ function rateDocId(productType, model, process) {
 
   async function saveEditEntry() {
     if (!editEntryModal) return;
-    const nextQty = Number(editEntryForm.qty || 0);
+    const nextQty = nonNegativeQty(editEntryForm.qty || 0);
     if (!Number.isFinite(nextQty) || nextQty <= 0) return alert("Qty wajib diisi dan harus lebih dari 0.");
 
     const nextModel = canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
@@ -3902,11 +3966,11 @@ function rateDocId(productType, model, process) {
           throw new Error("Entry yang sudah disetor tidak bisa diubah qty/model/tanggal karena sudah terkait payroll. Hapus setor/payroll terkait atau buat koreksi baru.");
         }
 
-        let newRate = Number(liveEntry.rate || 0);
+        let newRate = nonNegativeMoney(liveEntry.rate || 0);
         if (!hasSetor) {
           const rateInfo = getRateForEmployee(liveEntry.productType || editEntryModal.productType || "Kerudung", nextModel, liveEntry.process, liveEntry.employeeName);
           if (!rateInfo) throw new Error("Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.");
-          newRate = Number(rateInfo.rate || 0);
+          newRate = nonNegativeMoney(rateInfo.rate || 0);
         }
 
         const updates = {
@@ -4209,7 +4273,7 @@ function rateDocId(productType, model, process) {
     if (!form.employeeName || !form.tanggalGaji || !form.periodeGajiDari || !form.periodeGajiSampai || !form.jumlah) {
       return alert("Lengkapi semua field: nama pekerja, tanggal gaji, periode, dan jumlah.");
     }
-    const jumlah = Number(String(form.jumlah).replace(/[^0-9]/g, ""));
+    const jumlah = nonNegativeMoney(form.jumlah);
     if (jumlah <= 0) return alert("Jumlah gaji harus lebih dari 0.");
     setIsSaving(true);
     try {
@@ -4238,12 +4302,12 @@ function rateDocId(productType, model, process) {
     return kasbonList.filter((k) =>
       k.status === "aktif" &&
       normalizeWorkerNameKey(k.employeeName || "") === key &&
-      Number(k.sisaKasbon || 0) > 0
+      nonNegativeMoney(k.sisaKasbon || 0) > 0
     ).sort((a, b) => (a.tanggal || "").localeCompare(b.tanggal || ""));
   }
 
   function totalSisaKasbonPekerja(nama) {
-    return kasbonAktifUntukPekerja(nama).reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
+    return kasbonAktifUntukPekerja(nama).reduce((s, k) => s + nonNegativeMoney(k.sisaKasbon || 0), 0);
   }
 
   async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
@@ -4252,11 +4316,11 @@ function rateDocId(productType, model, process) {
       showToast("✅ Status gajian sudah tercatat", 2500);
       return;
     }
-    const jumlah = Number(r?.gaji || 0);
+    const jumlah = nonNegativeMoney(r?.gaji || 0);
     if (jumlah <= 0) return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
 
     const kasbonAktif = kasbonAktifUntukPekerja(nama);
-    const totalKasbon = kasbonAktif.reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
+    const totalKasbon = kasbonAktif.reduce((s, k) => s + nonNegativeMoney(k.sisaKasbon || 0), 0);
     const potonganKasbonEstimasi = Math.min(totalKasbon, jumlah);
     const gajiDiterimaEstimasi = jumlah - potonganKasbonEstimasi;
 
@@ -4302,7 +4366,7 @@ function rateDocId(productType, model, process) {
           const snap = await transaction.get(item.ref);
           if (!snap.exists()) continue;
           const data = snap.data();
-          const sisaLive = Math.max(0, Number(data.sisaKasbon || 0));
+          const sisaLive = nonNegativeMoney(data.sisaKasbon || 0);
           if (sisaLive > 0 && data.status === "aktif") {
             liveKasbon.push({ ref: item.ref, data, sisaLive, id: item.local.id });
           }
@@ -4327,8 +4391,8 @@ function rateDocId(productType, model, process) {
           };
           const existingCicilan = Array.isArray(kasbon.data.cicilan) ? kasbon.data.cicilan : [];
           const updatedCicilan = [...existingCicilan, newCicilan];
-          const totalCicilan = updatedCicilan.reduce((s, c) => s + Number(c.jumlah || 0), 0);
-          const sisaBaru = Math.max(0, Number(kasbon.data.jumlah || 0) - totalCicilan);
+          const totalCicilan = updatedCicilan.reduce((s, c) => s + nonNegativeMoney(c.jumlah || 0), 0);
+          const sisaBaru = Math.max(0, nonNegativeMoney(kasbon.data.jumlah || 0) - totalCicilan);
           transaction.update(kasbon.ref, {
             cicilan: updatedCicilan,
             sisaKasbon: sisaBaru,
@@ -7481,7 +7545,7 @@ function rateDocId(productType, model, process) {
                 {(() => {
                   const kasbonAktif = kasbonAktifUntukPekerja(nama);
                   if (kasbonAktif.length === 0) return null;
-                  const totalKasbon = kasbonAktif.reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
+                  const totalKasbon = kasbonAktif.reduce((s, k) => s + nonNegativeMoney(k.sisaKasbon || 0), 0);
                   const potongan = Math.min(totalKasbon, Number(r.gaji || 0));
                   const diterima = Number(r.gaji || 0) - potongan;
                   return (
