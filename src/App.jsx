@@ -5814,19 +5814,6 @@ function rateDocId(productType, model, process) {
               </div>
             )}
           </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <button type="button" onClick={() => setRekapDetailModal("belumSetor")} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99]" style={{ border: "1px solid #fce7f3" }}>
-              <div className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian belum setor ›</div>
-              <div className="mt-1 text-xl font-black" style={{ color: dashboardSummary.totalSisaSetor > 0 ? "#b45309" : "#16a34a" }}>{dashboardSummary.totalSisaSetor.toLocaleString()}</div>
-              <div className="text-xs font-bold" style={{ color: "#64748b" }}>Sisa Setor Pcs</div>
-            </button>
-            <button type="button" onClick={() => setRekapDetailModal("allTime")} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99]" style={{ border: "1px solid #ddd6fe" }}>
-              <div className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian gaji ›</div>
-              <div className="mt-1 text-lg font-black" style={{ color: "#7c3aed" }}>{money(dashboardSummary.gajiKeseluruhan)}</div>
-              <div className="text-xs font-bold" style={{ color: "#64748b" }}>Total Gaji Tercatat</div>
-            </button>
-          </div>
         </div>
       )}
 
