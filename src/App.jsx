@@ -4249,7 +4249,7 @@ function rateDocId(productType, model, process) {
         setShowFormGajianLama={setShowFormGajianLama}
         formGajianLama={formGajianLama}
         setFormGajianLama={setFormGajianLama}
-        saveGajianLama={saveGajianLama}
+        saveGajianLama={simpanGajianLama}
         deleteGajianHistory={deleteGajianHistory}
 
         setRekapDetailModal={setRekapDetailModal}
@@ -4600,6 +4600,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
