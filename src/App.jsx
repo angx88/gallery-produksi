@@ -34,6 +34,7 @@ import TarifTab from "./tabs/TarifTab";
 import RekapTab from "./tabs/RekapTab";
 import ProduksiModal from "./modals/ProduksiModal";
 import BoronganModal from "./modals/BoronganModal";
+import SetorModal from "./modals/SetorModal";
 import TarifModal from "./modals/TarifModal";
 import KirimModal from "./modals/KirimModal";
 import ConfirmDeleteModal from "./modals/ConfirmDeleteModal";
@@ -4282,6 +4283,22 @@ function rateDocId(productType, model, process) {
         addBorongan={addBorongan}
         isSaving={isSaving}
         Button={Button}
+      />
+      <SetorModal
+        setorModal={setorModal}
+        setSetorModal={setSetorModal}
+        setorForm={setorForm}
+        setSetorForm={setSetorForm}
+        saveSetor={saveSetor}
+        isSaving={isSaving}
+        getEntrySetorTotals={getEntrySetorTotals}
+        setorTotals={setorTotals}
+        fmtQty={fmtQty}
+        money={money}
+        displayWorkerName={displayWorkerName}
+        displayModelName={displayModelName}
+        displayProductTypeName={displayProductTypeName}
+        Button={Button}
       />      <TarifModal
         modal={modal}
         setModal={setModal}
@@ -4583,6 +4600,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
