@@ -4219,7 +4219,7 @@ function rateDocId(productType, model, process) {
         productionEntries={productionEntries}
         payrollExpenses={payrollExpenses}
         gajianHistory={gajianHistory}
-        kasbonPegawai={kasbonPegawai}
+        kasbonPegawai={kasbonList}
         orders={orders}
         materials={materials}
 
@@ -4600,6 +4600,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
