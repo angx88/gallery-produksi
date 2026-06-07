@@ -10,7 +10,11 @@
 }) {
   return (
     <label className={`block ${className}`}>
-      {label && <span className="mb-1 block text-sm font-bold text-slate-700">{label}</span>}
+      {label && (
+        <span className="mb-1 block text-sm font-bold text-slate-700">
+          {label}
+        </span>
+      )}
       <input
         type={type}
         value={value}
