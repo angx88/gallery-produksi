@@ -1,10 +1,18 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+// App.jsx Gallery Produksi - mode hemat kuota Firestore - 2026-06-06
+// Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
+// legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
+// PERFORMA: (1) work_rates, master_pekerja, materials, payroll, gajian_history pakai getDocs.
+// (2) SHIPMENTS, KASBON, PAYROLL_EXPENSES: getDocs + refreshData() setelah write — tidak lagi
+//     onSnapshot sehingga setiap write tidak memicu re-read seluruh collection.
+// (3) ORDERS, PRODUKSI, dan PRODUCTION_ENTRIES tidak lagi realtime onSnapshot;
+//     dimuat manual dan di-refresh setelah simpan agar hemat reads.
+// (4) debounce search 250ms, (5) dashboardInsights dipecah useMemo terpisah.
+// (6) backfill legacy hanya jalan sekali per sesi (flag backfillDoneRef dll).
+// (7) Audit bersih: hapus CardHeader/Title/Desc/Content/Footer, dateAfter, PROCESSES_NO_MODEL,
+//     deleteStep. rateDocId dipindah ke luar App(). Toast cleanup via toastTimerRef.
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
-import { formatNumber } from "./utils/formatters";
-import { Badge, Button as UiButton, Input as UiInput, Select as UiSelect, Modal as UiModal } from "./components/ui";
-import { safeDocId, safeFileName } from "./utils/idUtils";
-import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey, normalizeMasterKey } from "./utils/normalizers";
 import {
   collection,
   addDoc,
@@ -24,8 +32,20 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import "./index.css";
-import { sameProcess, entryProcessRequiresOrder, entryProcessWarnsWithoutOrder } from "./utils/processUtils";
+
+/*
+  Gallery Produksi
+  - Pesanan dari Gallery Kerudung: orders
+  - Kain dari Gallery Kerudung: materials
+  - Pengiriman link ke Gallery Kerudung: shipments
+  - Produksi lokal: produksi
+  - Tarif borongan: work_rates
+  - Hasil borongan: production_entries
+  - Gaji masuk pengeluaran: payroll_expenses
+*/
+
 const provider = new GoogleAuthProvider();
+
 const C = {
   ORDERS: "orders",
   MATERIALS: "materials",
@@ -38,54 +58,98 @@ const C = {
   GAJIAN_HISTORY: "gajian_history",
   KASBON: "kasbon_pegawai",
 };
+
+// HEMAT KUOTA FIRESTORE:
+// Background backfill/migrasi otomatis dimatikan agar app tidak menulis/membaca data lama
+// setiap kali dibuka. Jalankan perbaikan data lama secara manual saja bila memang diperlukan.
 const ENABLE_AUTO_BACKFILL = false;
+const KONVEKSI_RATE_DEDUCTION = 500;
+
+const FIRESTORE_CACHE_VERSION = "v1";
+const FIRESTORE_CACHE_TTL_MS = 1000 * 60 * 60 * 12; // 12 jam, cukup untuk hemat reads harian
+
+function safeReadJson(value, fallback = null) {
+  try {
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function canUseLocalStorage() {
+  return typeof window !== "undefined" && !!window.localStorage;
+}
+
+function inputValue(valueOrEvent) {
+  if (valueOrEvent && typeof valueOrEvent === "object" && "target" in valueOrEvent) {
+    return valueOrEvent.target?.value ?? "";
+  }
+  return valueOrEvent;
+}
+
 function friendlyErrorMessage(action, error) {
   const raw = String(error?.code || error?.message || error || "").toLowerCase();
+
   if (raw.includes("quota") || raw.includes("resource-exhausted")) {
     return `${action} gagal. Kuota Firebase/Firestore sedang penuh. Coba lagi nanti, cek Usage Firebase, atau kurangi pemakaian data.`;
   }
+
   if (raw.includes("permission-denied") || raw.includes("missing or insufficient permissions")) {
     return `${action} gagal. Akses database ditolak. Cek login dan aturan Firestore.`;
   }
+
   if (raw.includes("unavailable") || raw.includes("deadline-exceeded") || raw.includes("network") || raw.includes("offline")) {
     return `${action} gagal. Koneksi internet/server sedang bermasalah. Coba ulang beberapa saat lagi.`;
   }
+
   if (raw.includes("already-exists")) {
     return `${action} gagal. Data yang sama sudah ada.`;
   }
+
   if (raw.includes("failed-precondition")) {
     return `${action} gagal. Ada syarat database yang belum terpenuhi. Coba refresh data lalu ulangi.`;
   }
+
   return `${action} gagal. ${error?.message || error || "Silakan coba ulang."}`;
 }
+
+
 const PROD_STATUS = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
 const GENERAL_RATE_PROCESSES = ["Potong", "Pengemasan QC"];
 const MODEL_SPECIFIC_PROCESSES = ["Jahit"];
 const PROCESSES_WITH_MODEL = [...GENERAL_RATE_PROCESSES, ...MODEL_SPECIFIC_PROCESSES];
 const ALL_PROCESSES = PROCESSES_WITH_MODEL;
 const PRODUCT_TYPES = ["Kerudung", "Mukena", "Baju Anak", "Gamis", "Lainnya"];
+
 function isGeneralRateProcess(process) {
   return GENERAL_RATE_PROCESSES.some((p) => normalizeProcessKey(p) === normalizeProcessKey(process));
 }
+
 function isModelSpecificProcess(process) {
   return MODEL_SPECIFIC_PROCESSES.some((p) => normalizeProcessKey(p) === normalizeProcessKey(process));
 }
+
 const PROD_COLORS = {
-  Antri: { bg: "#fef3c7", text: "#92400e", icon: "" },
-  Potong: { bg: "#dbeafe", text: "#1e40af", icon: "" },
-  Jahit: { bg: "#ede9fe", text: "#5b21b6", icon: "" },
-  "Pengemasan QC": { bg: "#fce7f3", text: "#9d174d", icon: "" },
-  Selesai: { bg: "#d1fae5", text: "#065f46", icon: "" },
+  Antri: { bg: "#fef3c7", text: "#92400e", icon: "⏳" },
+  Potong: { bg: "#dbeafe", text: "#1e40af", icon: "✂️" },
+  Jahit: { bg: "#ede9fe", text: "#5b21b6", icon: "🧵" },
+  "Pengemasan QC": { bg: "#fce7f3", text: "#9d174d", icon: "📦" },
+  Selesai: { bg: "#d1fae5", text: "#065f46", icon: "✅" },
 };
+
 const lower = (v) => String(v || "").toLowerCase();
+
 function isSentStatus(status) {
   const s = lower(status);
   return s.includes("kirim") || s.includes("sent") || s.includes("shipped") || s.includes("terkirim");
 }
+
 function isDoneStatus(status) {
   const s = lower(status);
+  // "Lunas" adalah status pembayaran, bukan bukti produksi/pengiriman selesai.
   return s === "selesai" || s.includes("done") || s.includes("complete");
 }
+
 function isShortShipmentClosed(order) {
   const raw = order?.raw || order || {};
   return raw.shortShipmentClosed === true
@@ -93,11 +157,25 @@ function isShortShipmentClosed(order) {
     || raw.shippingStatus === "Kurang Kirim Final"
     || raw.status === "Ditutup Kurang Kirim";
 }
+
+
+function safeDocId(value, fallback = "doc") {
+  const raw = String(value || "").trim().toLowerCase();
+  const clean = raw
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120);
+  return clean || fallback;
+}
+
 function getDeliveryArray(orderLike) {
   if (Array.isArray(orderLike?.raw?.deliveries)) return orderLike.raw.deliveries;
   if (Array.isArray(orderLike?.deliveries)) return orderLike.deliveries;
   return [];
 }
+
 function isOrderStatusClosedForShipment(status) {
   const s = lower(status);
   if (!s) return false;
@@ -107,14 +185,17 @@ function isOrderStatusClosedForShipment(status) {
   if (s === "selesai") return true;
   return false;
 }
+
 function sameText(a, b) {
   return String(a || "").trim() !== "" && String(b || "").trim() !== "" && String(a).trim() === String(b).trim();
 }
+
 function fmtQty(value) {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return "0";
   return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
 }
+
 function materialNameFromItem(item) {
   return (
     item?.mainMaterial ||
@@ -125,6 +206,7 @@ function materialNameFromItem(item) {
     ""
   );
 }
+
 function materialQtyPerPcsFromItem(item) {
   return Number(
     item?.materialQtyPerPcs ??
@@ -135,12 +217,14 @@ function materialQtyPerPcsFromItem(item) {
     0
   );
 }
+
 function orderItemsForMaterial(order) {
   const rawItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
     ? order.raw.items
     : Array.isArray(order?.items) && order.items.length > 0
       ? order.items
       : [order?.raw || order];
+
   return rawItems.map((it) => ({
     name: it?.name || it?.item || order?.item || "-",
     qty: Number(it?.qty ?? it?.quantity ?? order?.qty ?? 0),
@@ -148,22 +232,35 @@ function orderItemsForMaterial(order) {
     materialQtyPerPcs: materialQtyPerPcsFromItem(it) || materialQtyPerPcsFromItem(order?.raw) || materialQtyPerPcsFromItem(order),
   }));
 }
+
+function normalizeKey(value) {
+  return lower(value).replace(/[^a-z0-9]/g, "");
+}
+
 function todayStr() {
   return new Date().toISOString().split("T")[0];
 }
+
 function localDateStr(date = new Date()) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
+
 function currentSundayToSaturdayPeriod(baseDate = new Date()) {
   const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+  // JavaScript: Minggu = 0, Senin = 1, ..., Sabtu = 6.
+  // Periode rekap yang benar adalah Minggu s/d Sabtu.
   start.setDate(start.getDate() - start.getDay());
+
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
+
   return { dari: localDateStr(start), sampai: localDateStr(end) };
 }
+
+
 function dateKey(value) {
   if (value === null || value === undefined || value === "") return "";
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
@@ -171,29 +268,35 @@ function dateKey(value) {
   }
   const raw = String(value).trim();
   if (!raw) return "";
+
   const isoMatch = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (isoMatch) {
     return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, "0")}-${String(isoMatch[3]).padStart(2, "0")}`;
   }
+
   const slashMatch = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
   if (slashMatch) {
     return `${slashMatch[3]}-${String(slashMatch[2]).padStart(2, "0")}-${String(slashMatch[1]).padStart(2, "0")}`;
   }
+
   const parsed = new Date(raw);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   return "";
 }
+
 function dateInRange(value, dari, sampai) {
   const t = dateKey(value);
   const d = dateKey(dari);
   const s = dateKey(sampai);
   return Boolean(t && d && s && t >= d && t <= s);
 }
+
 function dateBefore(value, compareTo) {
   const t = dateKey(value);
   const c = dateKey(compareTo);
   return Boolean(t && c && t < c);
 }
+
 function dateRangesOverlap(startA, endA, startB, endB) {
   const a1 = dateKey(startA);
   const a2 = dateKey(endA);
@@ -202,9 +305,15 @@ function dateRangesOverlap(startA, endA, startB, endB) {
   if (!a1 || !a2 || !b1 || !b2) return false;
   return a1 <= b2 && b1 <= a2;
 }
+
+// ─── Master Data Normalization ──────────────────────────────────────────────
+// Tujuan: data lama yang beda kapital, titik, strip, spasi, atau typo ringan
+// tetap dianggap satu master. Contoh: "A muslim", "A. Muslim", "a-muslim"
+// → "A Muslim". Untuk model: "Alya L", "alya-l", "Alya  L" → "Alya L".
 function stripDiacritics(value) {
   return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
+
 function toTitleCase(str) {
   return String(str || "")
     .toLowerCase()
@@ -214,13 +323,51 @@ function toTitleCase(str) {
       return word.charAt(0).toUpperCase() + word.slice(1);
     });
 }
+
 function cleanMasterText(value) {
   return stripDiacritics(value)
-    .replace(/[`]/g, "'")
+    .replace(/[’`]/g, "'")
     .replace(/[._\-/\\]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
+
+function normalizeMasterKey(value) {
+  return cleanMasterText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCompactKey(value) {
+  return normalizeMasterKey(value).replace(/\s+/g, "");
+}
+
+function normalizeProcessKey(value) {
+  const key = normalizeMasterKey(value);
+  const compact = normalizeCompactKey(value);
+  if (!key) return "";
+  if (key.includes("potong")) return "potong";
+  if (key.includes("jahit")) return "jahit";
+  const isPackingQc =
+    compact === "qcpacking" ||
+    compact === "packingqc" ||
+    compact === "pengemasanqc" ||
+    compact === "qcpengemasan" ||
+    key.includes("qc packing") ||
+    key.includes("packing qc") ||
+    key.includes("pengemasan qc") ||
+    key.includes("qc pengemasan") ||
+    ((key.includes("qc") || key.includes("quality control")) && (key.includes("packing") || key.includes("pengemasan")));
+  if (isPackingQc) return "pengemasan qc";
+  return key;
+}
+
+function sameProcess(a, b) {
+  return normalizeProcessKey(a) === normalizeProcessKey(b);
+}
+
 function displayProcessName(value) {
   const key = normalizeProcessKey(value);
   if (key === "potong") return "Potong";
@@ -228,13 +375,27 @@ function displayProcessName(value) {
   if (key === "pengemasan qc") return "Pengemasan QC";
   return toTitleCase(cleanMasterText(value));
 }
+
 const WORKER_PROCESS_WORDS = new Set([
   "jahit", "potong", "qc", "packing", "pack", "pengemasan", "borongan",
   "pcs", "pc", "setor", "hasil"
 ]);
+
 const WORKER_TITLE_WORDS = new Set(["teh", "ibu", "mbak", "mba", "pak"]);
+
 const WORKER_NOISE_WORDS = new Set([...WORKER_PROCESS_WORDS, ...WORKER_TITLE_WORDS]);
+
+function normalizeWorkerNameKey(name) {
+  const words = normalizeMasterKey(name)
+    .split(" ")
+    .filter(Boolean)
+    .filter((w) => !WORKER_NOISE_WORDS.has(w));
+  return words.join(" ") || normalizeMasterKey(name);
+}
+
 function displayWorkerName(name) {
+  // Tampilan tetap mempertahankan panggilan seperti Teh/Ibu/Mbak/Pak jika memang ada.
+  // Yang dibuang dari tampilan hanya kata proses yang sering ikut salah ketik di nama pekerja.
   const words = cleanMasterText(name)
     .split(" ")
     .filter(Boolean)
@@ -242,21 +403,33 @@ function displayWorkerName(name) {
   const clean = words.join(" ");
   return clean ? toTitleCase(clean) : "Tidak Diketahui";
 }
+
 function workerDisplayScore(name) {
   const words = normalizeMasterKey(name).split(" ").filter(Boolean);
   const hasTitle = words.some((w) => WORKER_TITLE_WORDS.has(w));
   const cleanLen = displayWorkerName(name).length;
   return (hasTitle ? 1000 : 0) - cleanLen;
 }
+
+function normalizeModelKey(name) {
+  return normalizeMasterKey(name);
+}
+
 function displayModelName(name) {
   const clean = cleanMasterText(name);
   return clean ? toTitleCase(clean) : "-";
 }
+
+function normalizeProductTypeKey(name) {
+  return normalizeMasterKey(name);
+}
+
 function displayProductTypeName(name) {
   const key = normalizeProductTypeKey(name);
   const found = PRODUCT_TYPES.find((p) => normalizeProductTypeKey(p) === key);
   return found || (cleanMasterText(name) ? toTitleCase(cleanMasterText(name)) : "Kerudung");
 }
+
 function canonicalByExisting(value, candidates, kind = "text") {
   const keyFn = kind === "worker" ? normalizeWorkerNameKey : kind === "model" ? normalizeModelKey : normalizeMasterKey;
   const displayFn = kind === "worker" ? displayWorkerName : kind === "model" ? displayModelName : toTitleCase;
@@ -268,6 +441,8 @@ function canonicalByExisting(value, candidates, kind = "text") {
   const fuzzy = (candidates || []).find((x) => normalizeCompactKey(x) === compact);
   return displayFn(fuzzy || value);
 }
+
+// Hitung periode minggu (Minggu s/d Sabtu) dari tanggal tertentu
 function getMingguPeriod(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
   const day = d.getDay();
@@ -275,7 +450,9 @@ function getMingguPeriod(dateStr) {
   const sabtu = new Date(d); sabtu.setDate(d.getDate() + (6 - day));
   return { dari: minggu.toISOString().slice(0, 10), sampai: sabtu.toISOString().slice(0, 10) };
 }
+
 function getMingguIni() { return getMingguPeriod(todayStr()); }
+
 function getDaftarMinggu(n = 7) {
   const hasil = [];
   const today = new Date();
@@ -287,6 +464,7 @@ function getDaftarMinggu(n = 7) {
   }
   return hasil;
 }
+
 function money(v) {
   return new Intl.NumberFormat("id-ID", {
     style: "currency",
@@ -294,6 +472,8 @@ function money(v) {
     maximumFractionDigits: 0,
   }).format(Number(v || 0));
 }
+
+
 function normalizeSetorHistory(entry) {
   const raw = Array.isArray(entry?.setorHistory) ? entry.setorHistory : [];
   const normalized = raw
@@ -313,6 +493,8 @@ function normalizeSetorHistory(entry) {
       };
     })
     .filter((h) => Number(h.qtySetor || 0) > 0 || Number(h.qtyReject || 0) > 0);
+
+  // Dukungan data lama: entry lama hanya punya qtySetor/qtyReject tanpa setorHistory.
   if (normalized.length === 0 && (Number(entry?.qtySetor || 0) > 0 || Number(entry?.qtyReject || 0) > 0 || entry?.statusSetor === "sudah_setor")) {
     const qtySetor = Number(entry?.qtySetor || 0);
     const qtyReject = Number(entry?.qtyReject || 0);
@@ -328,8 +510,10 @@ function normalizeSetorHistory(entry) {
       createdAt: entry?.updatedAt || entry?.createdAt || "",
     });
   }
+
   return normalized;
 }
+
 function setorTotals(entry) {
   const history = normalizeSetorHistory(entry);
   const qtySetor = history.reduce((s, h) => s + Number(h.qtySetor || 0), 0);
@@ -343,9 +527,11 @@ function setorTotals(entry) {
     : (qtySetor + qtyReject) > 0 ? "setor_sebagian" : "belum_setor";
   return { history, qtySetor, qtyReject, totalWageSetor, sisaSetor, tanggalSetor, statusSetor };
 }
+
 function setorHistoryInRange(entry, dari, sampai) {
   return normalizeSetorHistory(entry).filter((h) => dateInRange(h.tanggalSetor || h.tanggal || "", dari, sampai));
 }
+
 function setorTotalsFromHistory(history) {
   return {
     qtySetor: (history || []).reduce((s, h) => s + Number(h.qtySetor || 0), 0),
@@ -353,7 +539,9 @@ function setorTotalsFromHistory(history) {
     totalWageSetor: (history || []).reduce((s, h) => s + Math.max(0, Number(h.totalWageSetor || 0)), 0),
   };
 }
+
 function safeOrder(d) {
+  // Ambil items per model dari berbagai kemungkinan field Gallery Kerudung
   let items = [];
   const rawItems = Array.isArray(d.items) && d.items.length > 0
     ? d.items
@@ -362,6 +550,7 @@ function safeOrder(d) {
       : Array.isArray(d.modelItems) && d.modelItems.length > 0
         ? d.modelItems
         : [];
+
   if (rawItems.length > 0) {
     items = rawItems.map((it) => ({
       name: displayModelName(it.name || it.nama || it.item || it.productName || it.model || "-"),
@@ -369,10 +558,13 @@ function safeOrder(d) {
       price: Number(it.price || it.harga || it.hargaPcs || 0),
     })).filter((it) => it.qty > 0 || it.name !== "-");
   }
+
   const totalQty = Number(d.qty || d.quantity || d.jumlah || d.totalQty || 0);
+
   if (items.length === 0) {
     items = [{ name: displayModelName(d.item || d.productName || d.produk || d.product || "Pesanan"), qty: totalQty, price: Number(d.hargaPcs || d.price || 0) }];
   }
+
   return {
     id: d.id,
     customer: d.customer || d.customerName || d.nama || d.name || "-",
@@ -388,6 +580,8 @@ function safeOrder(d) {
     raw: d,
   };
 }
+
+
 function rawOrderItemsForDelivery(order) {
   const raw = order?.raw || order || {};
   const rawItems = Array.isArray(raw.items) && raw.items.length > 0
@@ -395,6 +589,7 @@ function rawOrderItemsForDelivery(order) {
     : Array.isArray(order?.items) && order.items.length > 0
       ? order.items
       : [{ name: order?.item || raw.item || raw.productName || "Produk", qty: order?.qty || raw.qty || 0, price: raw.hargaPcs || raw.price || 0 }];
+
   return rawItems.map((it, idx) => {
     const name = displayModelName(it?.name || it?.nama || it?.item || it?.productName || it?.model || order?.item || raw.item || "Produk");
     const orderedQty = Number(it?.qty ?? it?.quantity ?? it?.jumlah ?? order?.qty ?? raw.qty ?? 0);
@@ -414,6 +609,7 @@ function rawOrderItemsForDelivery(order) {
     };
   }).filter((it) => it.name && Number(it.orderedQty || 0) > 0);
 }
+
 function hasDeliveryDetail(order) {
   const raw = order?.raw || order || {};
   return (
@@ -423,11 +619,14 @@ function hasDeliveryDetail(order) {
     Number(raw.totalKirim || raw.totalShipped || 0) > 0
   );
 }
+
 function dashboardTotalOrderedQty(order) {
   return rawOrderItemsForDelivery(order).reduce((sum, item) => sum + Number(item.orderedQty || item.qty || 0), 0);
 }
+
 function dashboardTotalShippedQty(order) {
   const raw = order?.raw || order || {};
+
   if (Array.isArray(raw.deliveries) && raw.deliveries.length > 0) {
     return raw.deliveries.reduce((deliverySum, delivery) => {
       return deliverySum + (delivery.items || []).reduce((itemSum, item) => {
@@ -435,13 +634,16 @@ function dashboardTotalShippedQty(order) {
       }, 0);
     }, 0);
   }
+
   if (Array.isArray(raw.shippedItems) && raw.shippedItems.length > 0) {
     return raw.shippedItems.reduce((sum, item) => {
       return sum + Number(item.shippedQty ?? item.qtyKirim ?? item.qty ?? item.quantity ?? item.sentQty ?? 0);
     }, 0);
   }
+
   return Number(raw.totalKirim ?? raw.totalShipped ?? raw.shippedQty ?? raw.sentQty ?? 0);
 }
+
 function isLegacyDoneOrSentOrder(order) {
   const raw = order?.raw || order || {};
   const statusText = [
@@ -452,6 +654,9 @@ function isLegacyDoneOrSentOrder(order) {
     raw.statusPengiriman,
     raw.paymentStatus,
   ].map((v) => lower(v)).join(" ");
+
+  // Legacy sync hanya boleh berjalan untuk status yang benar-benar bermakna sudah dikirim.
+  // Status lunas/selesai tidak otomatis berarti barang sudah dikirim fisik.
   return (
     isSentStatus(statusText) ||
     statusText.includes("terkirim") ||
@@ -459,6 +664,7 @@ function isLegacyDoneOrSentOrder(order) {
     statusText.includes("shipped")
   );
 }
+
 function shouldAutoSyncLegacyDelivery(order) {
   const raw = order?.raw || order || {};
   if (!order?.id) return false;
@@ -467,6 +673,7 @@ function shouldAutoSyncLegacyDelivery(order) {
   if (!isLegacyDoneOrSentOrder(order)) return false;
   return rawOrderItemsForDelivery(order).reduce((s, it) => s + Number(it.orderedQty || 0), 0) > 0;
 }
+
 function buildFullDeliveryPayload(order) {
   const items = rawOrderItemsForDelivery(order);
   const syncDate = order?.raw?.tanggalKirim || order?.raw?.deliveryDate || order?.raw?.shippedAt || order?.createdAt || todayStr();
@@ -483,6 +690,7 @@ function buildFullDeliveryPayload(order) {
     materialQtyPerPcs: Number(it.materialQtyPerPcs || 0),
     unit: it.unit || "yard",
   }));
+
   const shippedItems = items.map((it) => ({
     name: it.name || "Produk",
     orderedQty: Number(it.orderedQty || 0),
@@ -495,10 +703,12 @@ function buildFullDeliveryPayload(order) {
     unit: it.unit || "yard",
     note: "Sesuai pesanan",
   }));
+
   const deliveredTotal = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0) * Number(it.price || 0), 0);
   const deliveredHppTotal = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0) * Number(it.hppPerPcs || it.bahanCost || 0), 0);
   const totalShipped = shippedItems.reduce((s, it) => s + Number(it.shippedQty || 0), 0);
   const totalOrdered = shippedItems.reduce((s, it) => s + Number(it.orderedQty || 0), 0);
+
   const legacyDelivery = {
     date: syncDate,
     createdAt: new Date().toISOString(),
@@ -511,6 +721,7 @@ function buildFullDeliveryPayload(order) {
     items: deliveryItems,
     total: deliveredTotal,
   };
+
   return {
     deliveries: [legacyDelivery],
     shippedItems,
@@ -528,20 +739,24 @@ function buildFullDeliveryPayload(order) {
     updatedAt: todayStr(),
   };
 }
+
 function shipmentLineItems(shipment) {
   if (Array.isArray(shipment?.deliveryItems) && shipment.deliveryItems.length > 0) return shipment.deliveryItems;
   if (Array.isArray(shipment?.items) && shipment.items.length > 0) return shipment.items;
   return [];
 }
+
 function shipmentItemsForOrder(shipment, order) {
   const items = shipmentLineItems(shipment);
   if (!order) return items;
+
   const orderId = String(order.id || "").trim();
   const invoice = String(order.invoice || "").trim();
   const topOrderId = String(shipment?.orderId || shipment?.pesananId || "").trim();
   const topInvoice = String(shipment?.invoice || shipment?.raw?.orderCode || shipment?.raw?.kode || "").trim();
   const orderIds = Array.isArray(shipment?.orderIds) ? shipment.orderIds.map((id) => String(id || "").trim()) : [];
   const invoices = Array.isArray(shipment?.invoices) ? shipment.invoices.map((id) => String(id || "").trim()) : [];
+
   const itemHasOrderIdentity = items.some((it) => it?.orderId || it?.pesananId || it?.invoice || it?.orderInvoice);
   if (itemHasOrderIdentity) {
     return items.filter((it) => {
@@ -550,10 +765,12 @@ function shipmentItemsForOrder(shipment, order) {
       return (orderId && itemOrderId === orderId) || (invoice && itemInvoice === invoice);
     });
   }
+
   if (orderId && (topOrderId === orderId || orderIds.includes(orderId))) return items;
   if (invoice && (topInvoice === invoice || invoices.includes(invoice))) return items;
   return [];
 }
+
 function shipmentDeliveredQtyForOrder(order, shipmentByOrderId) {
   const rows = shipmentByOrderId?.get?.(order?.id) || [];
   return rows.reduce((sum, shipment) => {
@@ -569,6 +786,7 @@ function shipmentDeliveredQtyForOrder(order, shipmentByOrderId) {
     return isTopLevelMatch ? sum + Number(shipment.totalKirim ?? shipment.qty ?? shipment.raw?.qty ?? 0) : sum;
   }, 0);
 }
+
 function isOrderFullyDelivered(order, shipmentByOrderId = null) {
   const ordered = dashboardTotalOrderedQty(order);
   let shipped = dashboardTotalShippedQty(order);
@@ -577,6 +795,7 @@ function isOrderFullyDelivered(order, shipmentByOrderId = null) {
   if (!hasDeliveryDetail(order) && shipmentQty <= 0 && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) shipped = ordered;
   return ordered > 0 && shipped >= ordered;
 }
+
 function orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) {
   const raw = order?.raw || order || {};
   const prod = produksiByOrderId?.get?.(order?.id);
@@ -591,6 +810,7 @@ function orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId
     isLegacyDoneOrSentOrder(order)
   );
 }
+
 function isOrderClosedForNewWork(order, shipmentByOrderId = null) {
   const raw = order?.raw || order || {};
   const status = lower(raw.status || order?.status || "");
@@ -599,16 +819,21 @@ function isOrderClosedForNewWork(order, shipmentByOrderId = null) {
   if (isShortShipmentClosed(order)) return true;
   return isOrderFullyDelivered(order, shipmentByOrderId);
 }
+
+
 function productionStatusRank(status) {
   const idx = PROD_STATUS.indexOf(String(status || ""));
   return idx >= 0 ? idx : 0;
 }
+
 function chooseBetterProduction(current, candidate) {
   if (!current) return candidate;
   if (!candidate) return current;
+
   const currentRank = productionStatusRank(current.status);
   const candidateRank = productionStatusRank(candidate.status);
   if (candidateRank !== currentRank) return candidateRank > currentRank ? candidate : current;
+
   const currentCompleteness = [
     current.orderId,
     current.pesananId,
@@ -626,15 +851,22 @@ function chooseBetterProduction(current, candidate) {
     Array.isArray(candidate.items) && candidate.items.length > 0,
   ].filter(Boolean).length;
   if (candidateCompleteness !== currentCompleteness) return candidateCompleteness > currentCompleteness ? candidate : current;
+
   return String(candidate.updatedAt || candidate.createdAt || candidate.tanggalMulai || "") >= String(current.updatedAt || current.createdAt || current.tanggalMulai || "")
     ? candidate
     : current;
 }
+
+function normalizedInvoice(value) {
+  return String(value || "").trim();
+}
+
 function buildProductionItemsFromOrder(order, fallbackProd = null) {
   const parsedItems = (order?.items || [])
     .filter((it) => it && it.name && it.name !== "-" && Number(it.qty || 0) > 0)
     .map((it) => ({ name: it.name || it.item || "Pesanan", qty: Number(it.qty || 0) }));
   if (parsedItems.length > 0) return parsedItems;
+
   const rawItems = Array.isArray(order?.raw?.items) ? order.raw.items : [];
   const mappedRawItems = rawItems
     .filter((it) => Number(it?.qty || it?.quantity || it?.jumlah || 0) > 0)
@@ -643,41 +875,49 @@ function buildProductionItemsFromOrder(order, fallbackProd = null) {
       qty: Number(it?.qty || it?.quantity || it?.jumlah || 0),
     }));
   if (mappedRawItems.length > 0) return mappedRawItems;
+
   const qty = dashboardTotalOrderedQty(order) || Number(order?.qty || fallbackProd?.qty || 0);
   return [{ name: order?.item || fallbackProd?.item || "Pesanan", qty: Number(qty || 0) }];
 }
+
 function entriesForProductionOrder(entries, prod, order) {
   const orderId = String(order?.id || prod?.orderId || prod?.pesananId || "").trim();
-  const invoice = normalizeInvoice(order?.invoice || prod?.invoice || order?.raw?.invoice);
+  const invoice = normalizedInvoice(order?.invoice || prod?.invoice || order?.raw?.invoice);
   const prodId = String(prod?.id || "").trim();
   return (entries || []).filter((entry) => {
     const entryOrderId = String(entry?.orderId || entry?.pesananId || "").trim();
-    const entryInvoice = normalizeInvoice(entry?.invoice || entry?.orderInvoice);
+    const entryInvoice = normalizedInvoice(entry?.invoice || entry?.orderInvoice);
     const entryProdId = String(entry?.produksiId || entry?.productionId || "").trim();
     return (orderId && entryOrderId === orderId) || (invoice && entryInvoice === invoice) || (prodId && entryProdId === prodId);
   });
 }
+
 function inferProductionStatusFromReality(prod, order, entries, shipmentByOrderId) {
   if (order && (isOrderClosedForNewWork(order, shipmentByOrderId) || orderHasCompletedProduction(order, new Map([[order.id, prod]]), shipmentByOrderId))) {
     return "Selesai";
   }
+
   const qtyPesanan = Math.max(0, Number(prod?.qty || dashboardTotalOrderedQty(order) || 0));
   const relatedEntries = entriesForProductionOrder(entries, prod, order);
+
   const totalGiven = (process) => relatedEntries
     .filter((e) => sameProcess(e.process, process))
     .reduce((sum, e) => sum + Number(e.qty || 0), 0);
   const totalSetor = (process) => relatedEntries
     .filter((e) => sameProcess(e.process, process))
     .reduce((sum, e) => sum + Number(setorTotals(e).qtySetor || 0), 0);
+
   const qcSetor = totalSetor("Pengemasan QC");
   const qcGiven = totalGiven("Pengemasan QC");
   if (qtyPesanan > 0 && qcSetor >= qtyPesanan) return "Selesai";
   if (qcGiven > 0 || qcSetor > 0) return "Pengemasan QC";
+
   const items = buildProductionItemsFromOrder(order, prod).filter((it) => Number(it.qty || 0) > 0);
   const jahitSetor = totalSetor("Jahit");
   const jahitGiven = totalGiven("Jahit");
   const potongSetor = totalSetor("Potong");
   const potongGiven = totalGiven("Potong");
+
   const allJahitModelDone = items.length > 0 && items.every((item) => {
     const modelKey = normalizeModelKey(item.name || "");
     const modelQty = Number(item.qty || 0);
@@ -686,18 +926,21 @@ function inferProductionStatusFromReality(prod, order, entries, shipmentByOrderI
       .reduce((sum, e) => sum + Number(setorTotals(e).qtySetor || 0), 0);
     return modelQty <= 0 || modelSetor >= modelQty;
   });
+
   if ((qtyPesanan > 0 && jahitSetor >= qtyPesanan) || allJahitModelDone) return "Pengemasan QC";
   if (jahitGiven > 0 || jahitSetor > 0) return "Jahit";
   if (qtyPesanan > 0 && potongSetor >= qtyPesanan) return "Jahit";
   if (potongGiven > 0 || potongSetor > 0) return "Potong";
   return "Antri";
 }
+
 function orderBaseItems(order) {
   const rawItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
     ? order.raw.items
     : Array.isArray(order?.items) && order.items.length > 0
       ? order.items
       : [{ name: order?.item || "Produk", qty: order?.qty || 0, price: order?.raw?.hargaPcs || order?.raw?.price || 0 }];
+
   return rawItems.map((it, idx) => {
     const name = it.name || it.nama || it.item || it.productName || it.model || order?.item || "Produk";
     const qty = Number(it.qty ?? it.quantity ?? it.jumlah ?? order?.qty ?? 0);
@@ -716,13 +959,16 @@ function orderBaseItems(order) {
     };
   });
 }
+
 function safeMaterial(d) {
   const name = d.namaKain || d.nama || d.name || d.materialName || d.title || d.jenis || "-";
   const satuan = d.satuan || d.unit || d.uom || "";
+
   let warnas = [];
   if (Array.isArray(d.warnas)) warnas = d.warnas;
   else if (Array.isArray(d.colors)) warnas = d.colors;
   else warnas = [d];
+
   return {
     id: d.id,
     namaKain: name,
@@ -741,6 +987,7 @@ function safeMaterial(d) {
     raw: d,
   };
 }
+
 function safeShipment(d) {
   const orderRef =
     d.pesananId ||
@@ -750,6 +997,7 @@ function safeShipment(d) {
     d.order_id ||
     d.pesanan ||
     "";
+
   const invoice =
     d.invoice ||
     d.orderCode ||
@@ -759,6 +1007,7 @@ function safeShipment(d) {
     d.orderNumber ||
     d.orderNo ||
     "";
+
   const customer =
     d.customer ||
     d.customerName ||
@@ -767,6 +1016,7 @@ function safeShipment(d) {
     d.receiver ||
     d.penerima ||
     "";
+
   const produk =
     d.produk ||
     d.productName ||
@@ -775,6 +1025,7 @@ function safeShipment(d) {
     d.namaProduk ||
     d.namaBarang ||
     "";
+
   const qtyBase = Number(
     d.qtyKirim ??
     d.sentQty ??
@@ -785,6 +1036,7 @@ function safeShipment(d) {
     d.jumlah ??
     0
   );
+
   let items = [];
   if (Array.isArray(d.items) && d.items.length > 0) {
     items = d.items.map((x) => ({
@@ -805,6 +1057,7 @@ function safeShipment(d) {
       qtyKirim: Number(d.qtyKirim ?? d.sentQty ?? d.qty ?? d.quantity ?? qtyBase ?? 0),
     }];
   }
+
   const tanggalKirim =
     d.tanggalKirim ||
     d.shippedAt ||
@@ -813,6 +1066,7 @@ function safeShipment(d) {
     d.date ||
     d.tanggal ||
     "";
+
   return {
     id: d.id,
     pesananId: orderRef,
@@ -828,64 +1082,127 @@ function safeShipment(d) {
     raw: d,
   };
 }
+
 function Button({ children, onClick, className = "", style = {}, disabled }) {
   return (
     <button
       type="button"
       disabled={Boolean(disabled)}
       onClick={onClick}
-      className={`px-5 py-3.5 text-white transition-all active:scale-95 shadow-sm ${className}`}
-      style={{ borderRadius: 18, fontWeight: 900, minHeight: 48, letterSpacing: 0.1, opacity: disabled ? 0.55 : 1, ...style }}
+      className={`px-4 py-3 text-white transition-all active:scale-95 shadow-sm ${className}`}
+      style={{ borderRadius: 16, fontWeight: 800, opacity: disabled ? 0.55 : 1, ...style }}
     >
       {children}
     </button>
   );
 }
+
+function Input({ label, value, onChange, placeholder, type = "text", readOnly = false }) {
+  return (
+    <div className="space-y-1">
+      <label className="text-sm font-bold" style={{ color: "#9333ea" }}>{label}</label>
+      <input
+        value={value}
+        type={type}
+        readOnly={readOnly}
+        placeholder={placeholder}
+        onChange={(e) => onChange?.(e.target.value)}
+        className="w-full px-4 py-3 outline-none text-base"
+        style={{
+          borderRadius: 14,
+          border: "1.5px solid #f9a8d4",
+          background: readOnly ? "#f1f5f9" : "#fdf2f8",
+          color: readOnly ? "#64748b" : "#2d1b69",
+        }}
+      />
+    </div>
+  );
+}
+
+function Select({ label, value, onChange, children }) {
+  return (
+    <div className="space-y-1">
+      <label className="text-sm font-bold" style={{ color: "#9333ea" }}>{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-4 py-3 outline-none text-base"
+        style={{
+          borderRadius: 14,
+          border: "1.5px solid #f9a8d4",
+          background: "#fdf2f8",
+          color: "#2d1b69",
+        }}
+      >
+        {children}
+      </select>
+    </div>
+  );
+}
+
+function Modal({ title, children, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.25)" }}>
+      <motion.div
+        initial={{ y: 80 }}
+        animate={{ y: 0 }}
+        className="max-h-[92vh] w-full overflow-auto p-5"
+        style={{ background: "white", borderRadius: "32px 32px 0 0", borderTop: "3px solid #f9a8d4" }}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold" style={{ color: "#ec4899" }}>{title}</h2>
+          <button
+            onClick={onClose}
+            className="rounded-2xl px-4 py-2 text-base font-semibold"
+            style={{ background: "#fdf2f8", color: "#ec4899" }}
+          >
+            Tutup
+          </button>
+        </div>
+        {children}
+      </motion.div>
+    </div>
+  );
+}
+
+
 function Card({ children, className = "", style = {}, onClick }) {
   return (
     <div
       onClick={onClick}
       className={`rounded-3xl bg-white p-4 shadow-sm ${className}`}
-      style={{ border: "1.3px solid #fbcfe8", boxShadow: "0 8px 24px rgba(148, 163, 184, 0.16)", ...style }}
+      style={{ border: "1px solid #fce7f3", ...style }}
     >
       {children}
     </div>
   );
 }
+
 function GlobalReadableStyle() {
   return (
     <style>{`
       html { -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; }
-      body { color: #0f172a; background: #fdf2f8; }
-      * { -webkit-tap-highlight-color: rgba(236,72,153,.12); }
-      button, input, select, textarea { font-size: 16px; touch-action: manipulation; }
-      button { min-height: 44px; }
+      body { color: #0f172a; }
+      button, input, select, textarea { font-size: 16px; }
       input::placeholder, textarea::placeholder { color: #64748b; opacity: 1; }
-      .text-\[10px\] { font-size: 12.5px !important; line-height: 1.45 !important; }
-      .text-\[11px\] { font-size: 13px !important; line-height: 1.45 !important; }
-      .text-xs { font-size: 13.5px !important; line-height: 1.5 !important; }
-      .text-sm { font-size: 15.5px !important; line-height: 1.55 !important; }
-      .leading-tight { line-height: 1.16 !important; }
-      .shadow-sm { box-shadow: 0 8px 24px rgba(148, 163, 184, 0.16) !important; }
-      .no-scrollbar::-webkit-scrollbar { display: none; }
-      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-      @media (max-width: 430px) {
-        .hd-header-title { font-size: 34px !important; }
-        .hd-stat-grid { gap: 8px !important; padding: 14px !important; }
-        .hd-stat-card { padding: 10px 6px !important; }
-        .hd-tab-button { min-width: 82px !important; padding-top: 12px !important; padding-bottom: 12px !important; }
-      }
+      .text-\[10px\] { font-size: 12px !important; line-height: 1.35 !important; }
+      .text-\[11px\] { font-size: 12.5px !important; line-height: 1.4 !important; }
+      .text-xs { font-size: 13px !important; line-height: 1.45 !important; }
+      .text-sm { font-size: 15px !important; line-height: 1.5 !important; }
+      .shadow-sm { box-shadow: 0 6px 18px rgba(148, 163, 184, 0.14) !important; }
     `}</style>
   );
 }
+
 function StatusBadge({ status }) {
-  const s = PROD_COLORS[status] || { bg: "#f1f5f9", text: "#64748b", icon: "" };
+  const s = PROD_COLORS[status] || { bg: "#f1f5f9", text: "#64748b", icon: "❓" };
   return (
-    <span className="rounded-full px-3.5 py-1.5 text-xs font-black inline-flex items-center gap-1.5" style={{ background: s.bg, color: s.text, border: "1px solid rgba(15,23,42,0.06)" }}>
+    <span className="rounded-full px-3 py-1 text-xs font-bold inline-flex items-center gap-1" style={{ background: s.bg, color: s.text }}>
       {s.icon} {status || "Antri"}
     </span>
   );
 }
+
 function ProgressBar({ status }) {
   const idx = PROD_STATUS.indexOf(status);
   const pct = idx < 0 ? 0 : Math.round(((idx + 1) / PROD_STATUS.length) * 100);
@@ -900,23 +1217,36 @@ function ProgressBar({ status }) {
     </div>
   );
 }
+
+
 function isOfficialGajiPayroll(row) {
   if (!row) return false;
   const amount = Number(row.totalAmount || 0);
   if (!Number.isFinite(amount) || amount <= 0) return false;
+
   const source = String(row.source || "").toLowerCase();
   const type = String(row.type || "").toLowerCase();
+
+  // Marker status gajian tidak boleh ikut total gaji/pengeluaran.
   if (source === "gallery-produksi-gaji-marker") return false;
   if (type === "status_gajian_periode") return false;
+
+  // Data baru resmi dari Gallery Produksi.
   if (type === "gaji_borongan") return true;
+
+  // Fallback data lama sebelum field type distandarkan.
+  // Tetap dibaca kalau jelas berasal dari setor borongan.
   if (source === "gallery-produksi" && (row.entryId || row.setorBatchId || row.employeeName)) return true;
+
   return false;
 }
+
 function officialGajiPayrollTotal(rows = []) {
   return (rows || [])
     .filter(isOfficialGajiPayroll)
     .reduce((sum, row) => sum + Number(row.totalAmount || 0), 0);
 }
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -932,12 +1262,12 @@ export default function App() {
   const rekapManualPeriodRef = useRef(false);
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [refreshingDataUi, setRefreshingDataUi] = useState(false);
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
   const [editEntryModal, setEditEntryModal] = useState(null); // entry yang sedang diedit
-  const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "", orderId: "" });
+  const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
   const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false);
@@ -952,19 +1282,27 @@ export default function App() {
   const backUiRef = useRef({});
   const lastBackPressRef = useRef(0);
   const toastTimerRef = useRef(null);
+
+  // Helper toast yang aman: selalu clear timer sebelumnya sehingga toast tidak
+  // tumpang tindih, dan tidak ada timer menggantung di memori (penting di HP).
   const showToast = React.useCallback((msg, duration = 3000) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast(msg);
     toastTimerRef.current = setTimeout(() => setToast(""), duration);
   }, []);
+
+  // Pengaman khusus tombol Simpan:
+  // kalau proses simpan gagal/terputus dan isSaving tersangkut true,
+  // tombol simpan dibuka lagi supaya input tidak terkunci.
   useEffect(() => {
     if (!isSaving) return undefined;
     const timer = setTimeout(() => {
       setIsSaving(false);
-      showToast(" Proses simpan terlalu lama. Tombol Simpan dibuka lagi.", 3500);
+      showToast("⚠️ Proses simpan terlalu lama. Tombol Simpan dibuka lagi.", 3500);
     }, 30000);
     return () => clearTimeout(timer);
   }, [isSaving, showToast]);
+
   useEffect(() => {
     const syncAutoPeriod = () => {
       if (rekapManualPeriodRef.current) return;
@@ -972,24 +1310,29 @@ export default function App() {
       setRekapDari((prev) => (prev === next.dari ? prev : next.dari));
       setRekapSampai((prev) => (prev === next.sampai ? prev : next.sampai));
     };
+
     syncAutoPeriod();
     const timer = window.setInterval(syncAutoPeriod, 60 * 1000);
     return () => window.clearInterval(timer);
   }, []);
+
   function handleRekapDariChange(value) {
     rekapManualPeriodRef.current = true;
     setRekapDari(value);
   }
+
   function handleRekapSampaiChange(value) {
     rekapManualPeriodRef.current = true;
     setRekapSampai(value);
   }
+
   function resetRekapToCurrentWeek() {
     const next = currentSundayToSaturdayPeriod();
     rekapManualPeriodRef.current = false;
     setRekapDari(next.dari);
     setRekapSampai(next.sampai);
   }
+
   const [orders, setOrders] = useState([]);
   const [produksi, setProduksi] = useState([]);
   const [workRates, setWorkRates] = useState([]);
@@ -1000,15 +1343,17 @@ export default function App() {
   const [gajianHistory, setGajianHistory] = useState([]);
   const [showFormGajianLama, setShowFormGajianLama] = useState(false);
   const [formGajianLama, setFormGajianLama] = useState({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
+
   const previousOrderIdsRef = useRef(new Set());
   const firstOrderLoadRef = useRef(true);
   const legacyDeliverySyncingRef = useRef(new Set());
   const productionBackfillSyncingRef = useRef(new Set());
-  const loadedDataRef = useRef(new Set()); // penanda koleksi yang sudah dimuat per sesi/tab
-  const isRefreshingDataRef = useRef(false); // guard refresh tanpa dependency state
+  const loadedDataRef = useRef(new Map()); // key -> Promise data yang sudah/sedang dimuat per sesi/tab
+  // HEMAT KUOTA: flag agar backfill hanya jalan sekali per sesi.
   const legacySyncDoneRef = useRef(false);
   const itemsMigrationDoneRef = useRef(false);
   const backfillDoneRef = useRef(false);
+
   const [prodForm, setProdForm] = useState({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
   const [rateForm, setRateForm] = useState({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
   const [entryForm, setEntryForm] = useState({
@@ -1034,6 +1379,118 @@ export default function App() {
     shortShipmentNote: "",
     catatan: "",
   });
+
+
+  const resetProdForm = React.useCallback(() => {
+    setProdForm({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
+  }, []);
+
+  const resetRateForm = React.useCallback(() => {
+    setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
+  }, []);
+
+  const resetEntryForm = React.useCallback(() => {
+    setEntryForm({
+      employeeName: "",
+      orderId: "",
+      productType: "Kerudung",
+      model: "",
+      process: "Jahit",
+      qty: "",
+      tanggal: todayStr(),
+      catatan: "",
+    });
+  }, []);
+
+  const resetKirimForm = React.useCallback(() => {
+    setKirimForm({
+      pesananId: "",
+      orderIds: [],
+      customerKey: "",
+      tanggalKirim: todayStr(),
+      penerima: "",
+      ekspedisi: "",
+      items: [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
+      shortShipmentMode: "temporary",
+      shortShipmentReason: "Stok kain habis",
+      shortShipmentNote: "",
+      catatan: "",
+    });
+  }, []);
+
+  const closeMainModal = React.useCallback(() => {
+    setModal(null);
+    resetProdForm();
+    resetRateForm();
+    resetEntryForm();
+    resetKirimForm();
+  }, [resetProdForm, resetRateForm, resetEntryForm, resetKirimForm]);
+
+  const closeSetorModal = React.useCallback(() => {
+    setSetorModal(null);
+    setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
+  }, []);
+
+  const closeEditEntryModal = React.useCallback(() => {
+    setEditEntryModal(null);
+    setEditEntryForm({ qty: "", tanggal: "", catatan: "", model: "" });
+  }, []);
+
+  const cacheStorageKey = React.useCallback((key) => {
+    const uid = user?.uid || "anon";
+    return `gallery-produksi:${FIRESTORE_CACHE_VERSION}:${uid}:${key}`;
+  }, [user?.uid]);
+
+  const readCachedData = React.useCallback((key) => {
+    if (!canUseLocalStorage()) return null;
+    const payload = safeReadJson(window.localStorage.getItem(cacheStorageKey(key)), null);
+    if (!payload || !Array.isArray(payload.data)) return null;
+    if (Date.now() - Number(payload.savedAt || 0) > FIRESTORE_CACHE_TTL_MS) return null;
+    return payload.data;
+  }, [cacheStorageKey]);
+
+  const writeCachedData = React.useCallback((key, data) => {
+    if (!canUseLocalStorage() || !Array.isArray(data)) return;
+    try {
+      window.localStorage.setItem(cacheStorageKey(key), JSON.stringify({ savedAt: Date.now(), data }));
+    } catch (e) {
+      console.warn("Cache localStorage penuh/tidak tersedia:", e);
+    }
+  }, [cacheStorageKey]);
+
+  const applyCachedData = React.useCallback((key) => {
+    const cached = readCachedData(key);
+    if (!cached) return null;
+
+    if (key === "orders") {
+      setOrders(cached);
+      previousOrderIdsRef.current = new Set(cached.map((x) => x.id));
+      firstOrderLoadRef.current = false;
+    } else if (key === "produksi") {
+      setProduksi(cached);
+    } else if (key === "production_entries") {
+      setProductionEntries(cached);
+    } else if (key === "work_rates") {
+      setWorkRates(cached);
+    } else if (key === "master_pekerja") {
+      setMasterPekerja(cached);
+    } else if (key === "shipments") {
+      setShipments(cached);
+    } else if (key === "kasbon") {
+      setKasbonList(cached);
+    } else if (key === "materials") {
+      setMaterials(cached);
+    } else if (key === "payroll_expenses") {
+      setPayrollExpenses(cached);
+    } else if (key === "gajian_history") {
+      setGajianHistory(cached);
+    } else {
+      return null;
+    }
+
+    return cached;
+  }, [readCachedData]);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u || null);
@@ -1041,122 +1498,154 @@ export default function App() {
     });
     return () => unsub();
   }, []);
-  useEffect(() => {
-    if (user) return;
-    loadedDataRef.current.clear();
-    isRefreshingDataRef.current = false;
-    setRefreshingDataUi(false);
-    legacySyncDoneRef.current = false;
-    itemsMigrationDoneRef.current = false;
-    backfillDoneRef.current = false;
-  }, [user]);
+
+  // ── Refresh helpers (getDocs manual) ──────────────────────────────────────
+  // HEMAT KUOTA: tidak memakai onSnapshot realtime untuk collection besar.
+  // Data dimuat sekali saat app dibuka / saat tab terkait dibuka, lalu di-refresh manual setelah write.
   const refreshOrders = React.useCallback(() => {
     return getDocs(collection(db, C.ORDERS)).then((snap) => {
       const list = snap.docs.map((d) => safeOrder({ id: d.id, ...d.data() }));
       setOrders(list);
+      writeCachedData("orders", list);
       previousOrderIdsRef.current = new Set(list.map((x) => x.id));
       firstOrderLoadRef.current = false;
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshProduksi = React.useCallback(() => {
     return getDocs(collection(db, C.PRODUKSI)).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setProduksi(list);
+      writeCachedData("produksi", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshProductionEntries = React.useCallback(() => {
     return getDocs(collection(db, C.PRODUCTION_ENTRIES)).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setProductionEntries(list);
+      writeCachedData("production_entries", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshWorkRates = React.useCallback(() => {
     return getDocs(collection(db, C.WORK_RATES)).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setWorkRates(list);
+      writeCachedData("work_rates", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshMasterPekerja = React.useCallback(() => {
     return getDocs(collection(db, "master_pekerja")).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setMasterPekerja(list);
+      writeCachedData("master_pekerja", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshShipments = React.useCallback(() => {
     return getDocs(collection(db, C.SHIPMENTS)).then((snap) => {
       const list = snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }));
       setShipments(list);
+      writeCachedData("shipments", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshKasbon = React.useCallback(() => {
     return getDocs(collection(db, C.KASBON)).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setKasbonList(list);
+      writeCachedData("kasbon", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshMaterials = React.useCallback(() => {
     return getDocs(collection(db, C.MATERIALS)).then((snap) => {
       const list = snap.docs.map((d) => safeMaterial({ id: d.id, ...d.data() }));
       setMaterials(list);
+      writeCachedData("materials", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshPayroll = React.useCallback(() => {
     return getDocs(collection(db, C.PAYROLL_EXPENSES)).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setPayrollExpenses(list);
+      writeCachedData("payroll_expenses", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const refreshGajianHistory = React.useCallback(() => {
     return getDocs(collection(db, C.GAJIAN_HISTORY)).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setGajianHistory(list);
+      writeCachedData("gajian_history", list);
       return list;
     });
-  }, []);
+  }, [writeCachedData]);
+
   const loadOnce = React.useCallback((key, loader) => {
-    if (loadedDataRef.current.has(key)) return Promise.resolve();
-    loadedDataRef.current.add(key);
-    return Promise.resolve(loader()).catch((e) => {
+    if (loadedDataRef.current.has(key)) return loadedDataRef.current.get(key);
+
+    const cached = applyCachedData(key);
+    if (cached) {
+      const cachedPromise = Promise.resolve(cached);
+      loadedDataRef.current.set(key, cachedPromise);
+      return cachedPromise;
+    }
+
+    const loadPromise = Promise.resolve(loader()).catch((e) => {
       loadedDataRef.current.delete(key);
       throw e;
     });
-  }, []);
+
+    loadedDataRef.current.set(key, loadPromise);
+    return loadPromise;
+  }, [applyCachedData]);
+
   const refreshDataSaatIni = React.useCallback(async () => {
-    if (!user || isRefreshingDataRef.current) return;
-    isRefreshingDataRef.current = true;
-    setRefreshingDataUi(true);
+    if (!user || isRefreshingData) return;
+    setIsRefreshingData(true);
+
     const forceRefresh = async (key, loader) => {
       const result = await loader();
-      loadedDataRef.current.add(key);
+      loadedDataRef.current.set(key, Promise.resolve(result));
       return result;
     };
+
     try {
       const jobs = [
         forceRefresh("orders", refreshOrders),
         forceRefresh("produksi", refreshProduksi),
         forceRefresh("production_entries", refreshProductionEntries),
       ];
+
       if (["dashboard", "pesanan", "produksi", "kirim"].includes(tab)) {
         jobs.push(forceRefresh("shipments", refreshShipments));
       }
+
       if (["borongan", "tarif"].includes(tab)) {
         jobs.push(forceRefresh("work_rates", refreshWorkRates));
       }
+
       if (tab === "borongan") {
         jobs.push(forceRefresh("master_pekerja", refreshMasterPekerja));
       }
+
       if (["kain", "tarif", "rekap"].includes(tab)) {
         jobs.push(forceRefresh("materials", refreshMaterials));
       }
+
       if (tab === "rekap") {
         jobs.push(
           forceRefresh("payroll_expenses", refreshPayroll),
@@ -1164,18 +1653,19 @@ export default function App() {
           forceRefresh("kasbon", refreshKasbon)
         );
       }
+
       await Promise.all(jobs);
-      showToast(" Data sudah diperbarui", 2200);
+      showToast("✅ Data sudah diperbarui", 2200);
     } catch (e) {
       console.warn("Gagal refresh data:", e);
-      showToast(" Gagal refresh data. Coba lagi.", 3500);
+      showToast("⚠️ Gagal refresh data. Coba lagi.", 3500);
     } finally {
-      isRefreshingDataRef.current = false;
-      setRefreshingDataUi(false);
+      setIsRefreshingData(false);
     }
   }, [
     user,
     tab,
+    isRefreshingData,
     refreshOrders,
     refreshProduksi,
     refreshProductionEntries,
@@ -1188,6 +1678,7 @@ export default function App() {
     refreshKasbon,
     showToast,
   ]);
+
   useEffect(() => {
     backUiRef.current = {
       tab,
@@ -1202,49 +1693,61 @@ export default function App() {
       search,
     };
   });
+
   useEffect(() => {
     if (!user || typeof window === "undefined") return;
+
     const pushGuardState = () => {
       window.history.pushState({ galleryProduksiBackGuard: true }, "", window.location.href);
     };
+
     pushGuardState();
+
     const closeTopLayer = () => {
       const ui = backUiRef.current || {};
       if (ui.confirmDelete) { setConfirmDelete(null); return true; }
-      if (ui.setorModal) { setSetorModal(null); return true; }
-      if (ui.editEntryModal) { setEditEntryModal(null); return true; }
+      if (ui.setorModal) { closeSetorModal(); return true; }
+      if (ui.editEntryModal) { closeEditEntryModal(); return true; }
       if (ui.slipPreview) { setSlipPreview(null); return true; }
       if (ui.rekapDetailModal) { setRekapDetailModal(null); return true; }
       if (ui.tugasDetailModal) { setTugasDetailModal(false); return true; }
       if (ui.alertDetailModal) { setAlertDetailModal(false); return true; }
-      if (ui.modal) { setModal(null); return true; }
+      if (ui.modal) { closeMainModal(); return true; }
       if (ui.search) { setSearch(""); return true; }
       if (ui.tab && ui.tab !== "dashboard") { setTab("dashboard"); return true; }
       return false;
     };
+
     const onPopState = () => {
       if (closeTopLayer()) {
         pushGuardState();
         return;
       }
+
       const now = Date.now();
       if (now - lastBackPressRef.current < 1600) {
         window.removeEventListener("popstate", onPopState);
         window.history.back();
         return;
       }
+
       lastBackPressRef.current = now;
       showToast("Tekan tombol back sekali lagi untuk keluar", 1600);
       pushGuardState();
     };
+
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [user]);
+  }, [user, closeMainModal, closeSetorModal, closeEditEntryModal, showToast]);
+
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
+
     (async () => {
       try {
+        // Core data yang dibutuhkan agar dashboard/menu utama tetap berjalan.
+        // Semua getDocs sekali jalan, tidak realtime listener, supaya tidak boros reads.
         await Promise.all([
           loadOnce("orders", refreshOrders),
           loadOnce("produksi", refreshProduksi),
@@ -1256,25 +1759,32 @@ export default function App() {
       } catch (e) {
         if (!cancelled) {
           console.warn("Gagal memuat data awal:", e);
-          showToast(" Gagal memuat sebagian data. Coba refresh aplikasi.", 4000);
+          showToast("⚠️ Gagal memuat sebagian data. Coba refresh aplikasi.", 4000);
         }
       }
     })();
+
     return () => { cancelled = true; };
   }, [user, loadOnce, refreshOrders, refreshProduksi, refreshProductionEntries, refreshWorkRates, refreshMasterPekerja, refreshShipments, showToast]);
+
   useEffect(() => {
     if (!user) return;
+
+    // Lazy load: data berat hanya dimuat ketika tab yang membutuhkan dibuka.
     if (tab === "kain" || tab === "tarif") {
       loadOnce("materials", refreshMaterials).catch((e) => console.warn("Gagal memuat kain:", e));
       loadOnce("work_rates", refreshWorkRates).catch((e) => console.warn("Gagal memuat tarif:", e));
     }
+
     if (tab === "borongan") {
       loadOnce("work_rates", refreshWorkRates).catch((e) => console.warn("Gagal memuat tarif:", e));
       loadOnce("master_pekerja", refreshMasterPekerja).catch((e) => console.warn("Gagal memuat pekerja:", e));
     }
+
     if (tab === "kirim") {
       loadOnce("shipments", refreshShipments).catch((e) => console.warn("Gagal memuat pengiriman:", e));
     }
+
     if (tab === "rekap") {
       loadOnce("payroll_expenses", refreshPayroll).catch((e) => console.warn("Gagal memuat payroll:", e));
       loadOnce("gajian_history", refreshGajianHistory).catch((e) => console.warn("Gagal memuat gajian:", e));
@@ -1282,23 +1792,34 @@ export default function App() {
       loadOnce("materials", refreshMaterials).catch((e) => console.warn("Gagal memuat kain:", e));
     }
   }, [user, tab, loadOnce, refreshMaterials, refreshWorkRates, refreshMasterPekerja, refreshShipments, refreshPayroll, refreshGajianHistory, refreshKasbon]);
+
+  // Auto sinkron data lama yang aman: hanya order lama yang benar-benar sudah dikirim/terkirim
+  // tetapi belum punya deliveries/shippedItems akan dianggap terkirim penuh.
+  // Ini mencegah pesanan lama muncul lagi sebagai belum dikirim / belum produksi.
   useEffect(() => {
     if (!ENABLE_AUTO_BACKFILL) return;
     if (!user || orders.length === 0) return;
+    // HEMAT KUOTA: sudah selesai di sesi ini, skip.
     if (legacySyncDoneRef.current) return;
     const candidates = orders.filter((o) => shouldAutoSyncLegacyDelivery(o));
     if (candidates.length === 0) { legacySyncDoneRef.current = true; return; }
+
+    // Proses secara sequential (bukan paralel forEach async) agar tidak membanjiri Firestore quota.
+    // Batasi 5 per run jika backfill manual dinyalakan lagi.
     (async () => {
       const batch = candidates.slice(0, 5);
       for (const order of batch) {
         if (legacyDeliverySyncingRef.current.has(order.id)) continue;
         legacyDeliverySyncingRef.current.add(order.id);
         try {
+          // Baca snapshot terbaru dari Firestore sebelum update, agar tidak
+          // double-fire jika useEffect dipanggil lagi sebelum Firestore selesai update.
           await runTransaction(db, async (transaction) => {
             const orderRef = doc(db, C.ORDERS, order.id);
             const snap = await transaction.get(orderRef);
             if (!snap.exists()) return;
             const live = snap.data();
+            // Jika sudah ter-sync (oleh proses lain atau trigger sebelumnya), skip
             if (live.legacyDeliverySynced === true) return;
             if (Array.isArray(live.deliveries) && live.deliveries.length > 0) return;
             transaction.update(orderRef, buildFullDeliveryPayload(order));
@@ -1311,18 +1832,23 @@ export default function App() {
       }
     })();
   }, [user, orders]);
+
+  // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total.
+  // Matching tidak hanya lewat orderId, tapi juga invoice agar data manual lama tetap tersambung.
   useEffect(() => {
     if (!ENABLE_AUTO_BACKFILL) return;
     if (produksi.length === 0 || orders.length === 0) return;
+    // HEMAT KUOTA: sudah selesai di sesi ini, skip.
     if (itemsMigrationDoneRef.current) return;
     const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
+
     const needsMigration = produksi.filter((p) => {
-      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizeInvoice(p.invoice));
+      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
       if (!order) return false;
       if (!Array.isArray(p.items) || p.items.length === 0) return true;
       if (p.items.length === 1 && Number(p.items[0].qty) === Number(p.qty)) {
@@ -1331,9 +1857,10 @@ export default function App() {
       return false;
     });
     if (needsMigration.length === 0) { itemsMigrationDoneRef.current = true; return; }
+
     (async () => {
       for (const p of needsMigration.slice(0, 8)) {
-        const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizeInvoice(p.invoice));
+        const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
         if (!order) continue;
         const key = `items-${p.id}`;
         if (productionBackfillSyncingRef.current.has(key)) continue;
@@ -1352,51 +1879,55 @@ export default function App() {
       }
     })();
   }, [produksi, orders]);
+
+  // PERFORMA: debounce search 250ms agar tidak filter ulang semua data
+  // setiap ketukan keyboard — terasa nyata di HP dengan data banyak.
   const [debouncedSearch, setDebouncedSearch] = useState(search);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 250);
     return () => clearTimeout(t);
   }, [search]);
   const q = debouncedSearch.toLowerCase();
-  const entrySetorTotalsMap = useMemo(() => {
-    const map = new Map();
-    (productionEntries || []).forEach((entry) => {
-      map.set(entry, setorTotals(entry));
-    });
-    return map;
-  }, [productionEntries]);
-  const getEntrySetorTotals = React.useCallback((entry) => {
-    return entrySetorTotalsMap.get(entry) || setorTotals(entry);
-  }, [entrySetorTotalsMap]);
+
   const produksiByOrderId = useMemo(() => {
+    // Matching produksi harus tahan data lama: orderId, pesananId, dan invoice.
+    // Jika ada duplikat, pilih dokumen yang paling maju/lengkap, bukan asal dokumen terakhir.
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
+
     const map = new Map();
     produksi.forEach((p) => {
       const matchedOrderIds = new Set();
       const directId = String(p.orderId || p.pesananId || "").trim();
       if (directId) matchedOrderIds.add(directId);
-      const byInvoice = orderByInvoice.get(normalizeInvoice(p.invoice || p.orderInvoice || p.kode || p.code));
+      const byInvoice = orderByInvoice.get(normalizedInvoice(p.invoice || p.orderInvoice || p.kode || p.code));
       if (byInvoice?.id) matchedOrderIds.add(byInvoice.id);
+
       matchedOrderIds.forEach((orderId) => {
         map.set(orderId, chooseBetterProduction(map.get(orderId), p));
       });
     });
     return map;
   }, [produksi, orders]);
+
   const shipmentByOrderId = useMemo(() => {
+    // Bangun index orders terlebih dahulu (O(n)) sebelum loop shipments,
+    // sehingga pencocokan keseluruhan menjadi O(n+m) bukan O(n*m).
     const orderById = new Map(orders.map((o) => [o.id, o]));
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
+
     const map = new Map();
     shipments.forEach((p) => {
       const candidates = new Set();
+
+      // Cari lewat ID langsung, termasuk format nota kirim gabungan.
       const directIds = [p.pesananId, p.orderId, ...(Array.isArray(p.orderIds) ? p.orderIds : []), ...(Array.isArray(p.pesananIds) ? p.pesananIds : [])]
         .map((id) => String(id || "").trim())
         .filter(Boolean);
@@ -1404,6 +1935,8 @@ export default function App() {
         const found = orderById.get(id);
         if (found) candidates.add(found);
       });
+
+      // Cari lewat invoice, termasuk invoice dalam items/orders nota gabungan.
       const invoiceKeys = [p.invoice, p.raw?.orderCode, p.raw?.kode, ...(Array.isArray(p.invoices) ? p.invoices : [])]
         .map((inv) => String(inv || "").trim())
         .filter(Boolean);
@@ -1425,38 +1958,54 @@ export default function App() {
         const byInv = orderByInvoice.get(inv);
         if (byInv) candidates.add(byInv);
       });
+
       candidates.forEach((o) => {
         const arr = map.get(o.id) || [];
         arr.push(p);
         map.set(o.id, arr);
       });
     });
+
     return map;
   }, [shipments, orders]);
+
+  // Backfill dan normalisasi produksi lama.
+  // Tujuan: data lama/manual tidak perlu diklik ulang satu-satu.
+  // - Produksi lama tanpa orderId dilink lewat invoice.
+  // - Pesanan lama tanpa dokumen produksi dibuatkan otomatis.
+  // - Status produksi dihitung dari kondisi nyata: pengiriman, potong, jahit, QC/setor.
   useEffect(() => {
     if (!ENABLE_AUTO_BACKFILL) return;
     if (!user || orders.length === 0) return;
+    // HEMAT KUOTA: backfill besar hanya jalan sekali per sesi.
+    // Tanpa ini, backfill lama bisa memicu baca/tulis besar dan boros kuota.
     if (backfillDoneRef.current) return;
+
     const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
     const orderByInvoice = new Map();
     orders.forEach((o) => {
-      const inv = normalizeInvoice(o.invoice || o.raw?.invoice);
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
       if (inv) orderByInvoice.set(inv, o);
     });
+
     const tasks = [];
+
     produksi.forEach((prod) => {
       const directOrder = orderById.get(String(prod.orderId || prod.pesananId || "").trim());
-      const invoiceOrder = orderByInvoice.get(normalizeInvoice(prod.invoice || prod.orderInvoice || prod.kode || prod.code));
+      const invoiceOrder = orderByInvoice.get(normalizedInvoice(prod.invoice || prod.orderInvoice || prod.kode || prod.code));
       const order = directOrder || invoiceOrder;
       if (!order) return;
+
       const inferredStatus = inferProductionStatusFromReality(prod, order, productionEntries, shipmentByOrderId);
       const shouldLink = !prod.orderId || prod.orderId !== order.id || !prod.invoice;
       const shouldUpgradeStatus = productionStatusRank(inferredStatus) > productionStatusRank(prod.status);
       const shouldFixItems = !Array.isArray(prod.items) || prod.items.length === 0;
+
       if (shouldLink || shouldUpgradeStatus || shouldFixItems) {
         tasks.push({ type: "update", prod, order, inferredStatus, shouldLink, shouldUpgradeStatus, shouldFixItems });
       }
     });
+
     orders.forEach((order) => {
       if (lower(order.status).includes("batal") || lower(order.status).includes("cancel")) return;
       const existing = produksiByOrderId.get(order.id);
@@ -1464,7 +2013,11 @@ export default function App() {
       const inferredStatus = orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) ? "Selesai" : "Antri";
       tasks.push({ type: "create", order, inferredStatus });
     });
+
     if (tasks.length === 0) { backfillDoneRef.current = true; return; }
+
+    // Sequential processing agar tidak memicu burst write ke Firestore.
+    // Batasi 8 per run — sisanya diproses di run berikutnya.
     (async () => {
       for (const task of tasks.slice(0, 8)) {
         const key = task.type === "create"
@@ -1472,6 +2025,7 @@ export default function App() {
           : `update-${task.prod.id}-${task.inferredStatus}`;
         if (productionBackfillSyncingRef.current.has(key)) continue;
         productionBackfillSyncingRef.current.add(key);
+
       try {
         if (task.type === "create") {
           const order = task.order;
@@ -1560,24 +2114,33 @@ export default function App() {
         }
       }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, orders, produksi, productionEntries]);
+  // SENGAJA: produksiByOrderId dan shipmentByOrderId tidak masuk dependency.
+  // Keduanya adalah useMemo derivasi dari produksi/orders yang sudah ada di atas.
+  // Jika dimasukkan, setiap kali Map dibuat ulang (setiap render) effect akan re-run
+  // → memicu write Firestore → state berubah → loop tak berujung.
+
   function orderSmallStatus(order) {
     const kirim = shipmentByOrderId.get(order.id);
     const prod = produksiByOrderId.get(order.id);
-    if ((kirim && kirim.length > 0) || hasDeliveryDetail(order) || isSentStatus(order.status)) return { label: " Sudah dikirim", color: "#2563eb" };
+
+    if ((kirim && kirim.length > 0) || hasDeliveryDetail(order) || isSentStatus(order.status)) return { label: "🚚 Sudah dikirim", color: "#2563eb" };
     if (prod) {
-      if (prod.status === "Selesai") return { label: " Selesai produksi", color: "#16a34a" };
-      return { label: " Sedang produksi", color: "#7c3aed" };
+      if (prod.status === "Selesai") return { label: "✅ Selesai produksi", color: "#16a34a" };
+      return { label: "🧵 Sedang produksi", color: "#7c3aed" };
     }
-    if (isDoneStatus(order.status)) return { label: " Selesai di Gallery Kerudung", color: "#16a34a" };
-    return { label: " Belum masuk produksi", color: "#d97706" };
+    if (isDoneStatus(order.status)) return { label: "✅ Selesai di Gallery Kerudung", color: "#16a34a" };
+    return { label: "⚠ Belum masuk produksi", color: "#d97706" };
   }
+
   const filteredOrders = useMemo(() => {
     const isBelumProduksi = (o) => {
       const alreadyInProduction = produksiByOrderId.has(o.id);
       const finishedOrDelivered = orderHasCompletedProduction(o, produksiByOrderId, shipmentByOrderId);
       return !alreadyInProduction && !finishedOrDelivered;
     };
+
     return orders
       .filter((o) => {
         const txt = `${o.customer} ${o.item} ${o.invoice} ${o.status} ${o.warna}`.toLowerCase();
@@ -1586,10 +2149,13 @@ export default function App() {
       .sort((a, b) => {
         const aBelum = isBelumProduksi(a) ? 0 : 1;
         const bBelum = isBelumProduksi(b) ? 0 : 1;
+        // Belum produksi naik ke atas
         if (aBelum !== bBelum) return aBelum - bBelum;
+        // Dalam grup yang sama: terbaru di atas (descending)
         return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
       });
   }, [orders, q, produksiByOrderId, shipmentByOrderId]);
+
   const ordersBelumProduksi = useMemo(() => {
     return orders.filter((o) => {
       if (isOrderClosedForNewWork(o, shipmentByOrderId)) return false;
@@ -1598,16 +2164,19 @@ export default function App() {
       return !alreadyInProduction && !finishedOrDelivered;
     });
   }, [orders, produksiByOrderId, shipmentByOrderId]);
+
   const ordersForBoronganLink = useMemo(() => {
     return orders
       .filter((o) => !isOrderClosedForNewWork(o, shipmentByOrderId))
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   }, [orders, shipmentByOrderId]);
+
   const ordersForShipment = useMemo(() => {
     return orders
       .filter((o) => !isOrderClosedForNewWork(o, shipmentByOrderId) && !isOrderStatusClosedForShipment(o.status))
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   }, [orders, shipmentByOrderId]);
+
   const shipmentCustomerOptions = useMemo(() => {
     const map = new Map();
     ordersForShipment.forEach((o) => {
@@ -1618,8 +2187,10 @@ export default function App() {
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [ordersForShipment]);
+
   const filteredProduksi = useMemo(() => {
     const statusPriority = (p) => {
+      // Yang belum/sedang proses naik ke atas, Selesai turun ke bawah
       if (p.status === "Selesai") return 1;
       return 0;
     };
@@ -1632,14 +2203,16 @@ export default function App() {
         const pa = statusPriority(a);
         const pb = statusPriority(b);
         if (pa !== pb) return pa - pb; // belum selesai naik ke atas
+        // Dalam grup yang sama: terbaru di atas
         return String(b.tanggalMulai || b.updatedAt || b.createdAt || "").localeCompare(
           String(a.tanggalMulai || a.updatedAt || a.createdAt || "")
         );
       });
   }, [produksi, q]);
+
   const filteredEntries = useMemo(() => {
     const statusPriority = (e) => {
-      const s = getEntrySetorTotals(e).statusSetor;
+      const s = setorTotals(e).statusSetor;
       if (s === "belum_setor") return 0;
       if (s === "setor_sebagian") return 1;
       return 2; // sudah_setor
@@ -1655,26 +2228,38 @@ export default function App() {
         const txt = `${e.employeeName} ${e.productType} ${e.model} ${e.process} ${e.invoice}`.toLowerCase();
         return q === "" || txt.includes(q);
       });
-  }, [productionEntries, q, getEntrySetorTotals]);
+  }, [productionEntries, q]);
+
+
   const materialUsageByName = useMemo(() => {
     const usage = {};
+
     orders.forEach((order) => {
+      // Dipotong otomatis dari Gallery Kerudung:
+      // qty pesanan x kebutuhan kain per pcs.
+      // Dipakai hanya untuk order yang sudah masuk produksi / selesai / dikirim,
+      // supaya order baru yang belum produksi tidak langsung mengurangi sisa kain.
       const isProductionRelated =
         produksiByOrderId.has(order.id) ||
         hasDeliveryDetail(order) ||
         isSentStatus(order.status);
+
       if (!isProductionRelated) return;
+
       orderItemsForMaterial(order).forEach((item) => {
         const materialName = item.mainMaterial;
         const qtyPerPcs = Number(item.materialQtyPerPcs || 0);
         const qtyOrder = Number(item.qty || 0);
         if (!materialName || qtyPerPcs <= 0 || qtyOrder <= 0) return;
+
         const key = normalizeKey(materialName);
         usage[key] = (usage[key] || 0) + qtyOrder * qtyPerPcs;
       });
     });
+
     return usage;
   }, [orders, produksiByOrderId]);
+
   const filteredMaterials = useMemo(() => {
     return materials
       .filter((k) => q === "" || `${k.namaKain} ${k.satuan}`.toLowerCase().includes(q))
@@ -1695,6 +2280,7 @@ export default function App() {
         };
       });
   }, [materials, q, materialUsageByName]);
+
   const filteredShipments = useMemo(() => {
     const rows = [];
     const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
@@ -1704,6 +2290,7 @@ export default function App() {
       if (inv) orderByInvoice.set(inv, o);
     });
     const orderIdsWithShipment = new Set();
+
     shipments.forEach((shipment) => {
       const matchedOrder =
         orderById.get(String(shipment.pesananId || "").trim()) ||
@@ -1729,6 +2316,7 @@ export default function App() {
         sourceRow: "shipment",
       });
     });
+
     orders.forEach((o) => {
       if (!(isDoneStatus(o.status) || isSentStatus(o.status))) return;
       if (orderIdsWithShipment.has(o.id)) return;
@@ -1757,6 +2345,7 @@ export default function App() {
         sourceRow: "order_status",
       });
     });
+
     return rows
       .filter((s) => {
         const txt = `${s.customer} ${s.produk} ${s.invoice} ${s.ekspedisi}`.toLowerCase();
@@ -1764,6 +2353,19 @@ export default function App() {
       })
       .sort((a, b) => String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || "")));
   }, [shipments, orders, q]);
+
+  const orderLookupForCards = useMemo(() => {
+    const byId = new Map();
+    const byInvoice = new Map();
+    orders.forEach((o) => {
+      const id = String(o.id || "").trim();
+      if (id) byId.set(id, o);
+      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
+      if (inv) byInvoice.set(inv, o);
+    });
+    return { byId, byInvoice };
+  }, [orders]);
+
   const ordersPerluDicek = useMemo(() => {
     return (orders || [])
       .map((order) => {
@@ -1778,6 +2380,7 @@ export default function App() {
         const ordered = dashboardTotalOrderedQty(order);
         let shipped = dashboardTotalShippedQty(order);
         if (!hasDeliveryDetail(order) && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) shipped = ordered;
+
         const reasons = [];
         if (isShortShipmentClosed(order)) {
           reasons.push(`Kurang kirim final${raw.shortShipmentReason ? `: ${raw.shortShipmentReason}` : ""}. Sisa tidak dihitung sebagai tanggungan aktif.`);
@@ -1789,6 +2392,7 @@ export default function App() {
         if (raw.deliveryStatus && !["Belum Dikirim", "Dikirim Sebagian", "Selesai", "Kelebihan Kirim", "Ditutup Kurang Kirim"].includes(raw.deliveryStatus)) {
           reasons.push(`Status pengiriman tidak umum: ${raw.deliveryStatus}.`);
         }
+
         if (reasons.length === 0) return null;
         return {
           id: order.id,
@@ -1800,11 +2404,14 @@ export default function App() {
       })
       .filter(Boolean);
   }, [orders, produksiByOrderId, shipmentByOrderId]);
+
   const ordersPerluDicekIds = useMemo(() => new Set(ordersPerluDicek.map((o) => o.id)), [ordersPerluDicek]);
+
   const visiblePesananOrders = useMemo(() => {
     if (!pesananOnlyNeedCheck) return filteredOrders;
     return filteredOrders.filter((o) => ordersPerluDicekIds.has(o.id));
   }, [filteredOrders, pesananOnlyNeedCheck, ordersPerluDicekIds]);
+
   function openPengirimanForOrder(order) {
     const items = Array.isArray(order?.items) && order.items.length > 0
       ? order.items.map((it, idx) => ({
@@ -1814,8 +2421,10 @@ export default function App() {
           itemIndex: idx,
         }))
       : [{ nama: order?.item || "", qtyPesan: Number(order?.qty || 0), qtyKirim: 0, itemIndex: 0 }];
+
     setKirimForm({
       pesananId: order?.id || "",
+      orderIds: order?.id ? [order.id] : [],
       tanggalKirim: todayStr(),
       penerima: order?.customer || "",
       ekspedisi: "",
@@ -1827,11 +2436,17 @@ export default function App() {
     });
     setModal("kirim");
   }
+
   const stats = useMemo(() => {
     const category = { pesanan: orders.length, belum: 0, proses: 0, selesai: 0, perluDicek: 0 };
+
     (orders || []).forEach((order) => {
+      // perluDicek bisa overlap dengan selesai/proses/belum — hitung keduanya agar
+      // total Pesanan = Belum + Sedang + Selesai + Perlu Dicek tidak tumpang-tindih.
+      // Contoh: order sudah terkirim semua tapi ada kelebihan kirim → masuk selesai DAN perluDicek.
       if (ordersPerluDicekIds.has(order.id)) {
         category.perluDicek += 1;
+        // TIDAK return — lanjut ke kategorisasi status utama di bawah
       }
       if (orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId)) {
         category.selesai += 1;
@@ -1841,6 +2456,8 @@ export default function App() {
         category.belum += 1;
       }
     });
+    // Konsistensi: belum + proses + selesai == total pesanan (perluDicek adalah subset overlay)
+
     return {
       ...category,
       kirim: category.selesai,
@@ -1848,8 +2465,9 @@ export default function App() {
       payroll: officialGajiPayrollTotal(payrollExpenses),
     };
   }, [orders, productionEntries, payrollExpenses, ordersPerluDicekIds, produksiByOrderId, shipmentByOrderId]);
+
   const dashboardSummary = useMemo(() => {
-    const entryTotals = (productionEntries || []).map((e) => getEntrySetorTotals(e));
+    const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
     const totalDiberi = (productionEntries || []).reduce((sum, e) => sum + Number(e.qty || 0), 0);
     const totalSetor = entryTotals.reduce((sum, t) => sum + Number(t.qtySetor || 0), 0);
     const totalReject = entryTotals.reduce((sum, t) => sum + Number(t.qtyReject || 0), 0);
@@ -1857,12 +2475,19 @@ export default function App() {
     const gajiKeseluruhan = officialGajiPayrollTotal(payrollExpenses);
     const produksiAktif = (produksi || []).filter((p) => p.status !== "Selesai").length;
     const boronganAktif = entryTotals.filter((t) => Number(t.sisaSetor || 0) > 0).length;
+
     const orderQtySummary = (orders || []).reduce((acc, order) => {
       const ordered = dashboardTotalOrderedQty(order);
       let shipped = dashboardTotalShippedQty(order);
+
+      // Data lama Gallery Kerudung sering hanya punya status Dikirim/Selesai/Lunas
+      // tanpa detail deliveries/shippedItems. Untuk Dashboard, jangan hitung data lama
+      // seperti itu sebagai sisa kirim. Anggap sudah terkirim penuh sambil menunggu
+      // auto-sync legacy mengisi deliveries di Firestore.
       if (!hasDeliveryDetail(order) && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) {
         shipped = ordered;
       }
+
       const remaining = Math.max(0, ordered - shipped);
       const over = Math.max(0, shipped - ordered);
       const shortClosed = isShortShipmentClosed(order);
@@ -1871,6 +2496,7 @@ export default function App() {
       const finishedOrDelivered = orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId);
       const belumProduksi = !alreadyInProduction && !finishedOrDelivered;
       const siapKirim = !belumProduksi && activeRemaining > 0;
+
       acc.pesananPcs += ordered;
       acc.terkirimPcs += shipped;
       acc.sisaKirimTotal += activeRemaining;
@@ -1880,8 +2506,10 @@ export default function App() {
       if (siapKirim) acc.sisaKirimSiap += activeRemaining;
       return acc;
     }, { pesananPcs: 0, terkirimPcs: 0, sisaKirimTotal: 0, sisaKirimSiap: 0, pcsBelumProduksi: 0, kelebihanKirim: 0, kurangKirimFinal: 0 });
+
     const bahanTotal = (materials || []).length;
     const shipmentTotal = (shipments || []).length;
+
     return {
       totalDiberi, totalSetor, totalReject, totalSisaSetor, gajiKeseluruhan,
       produksiAktif, boronganAktif,
@@ -1894,7 +2522,14 @@ export default function App() {
       kurangKirimFinal: orderQtySummary.kurangKirimFinal,
       bahanTotal, shipmentTotal,
     };
-  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId, getEntrySetorTotals]);
+  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId]);
+
+  // PERFORMA: dashboardInsights dipecah jadi 3 useMemo terpisah dengan
+  // dependencies yang lebih sempit — sehingga tidak semua bagian
+  // dihitung ulang hanya karena orders berubah (padahal grafik mingguan
+  // hanya butuh productionEntries), atau sebaliknya.
+
+  // (A) Grafik mingguan — hanya butuh productionEntries
   const dashboardWeeklyRows = useMemo(() => {
     const weeklyRows = getDaftarMinggu(6).reverse().map((period) => {
       let pcsSetor = 0;
@@ -1911,6 +2546,8 @@ export default function App() {
     const maxWeeklyPcs = Math.max(1, ...weeklyRows.map((row) => Number(row.pcsSetor || 0) + Number(row.pcsReject || 0)));
     return { weeklyRows, maxWeeklyPcs };
   }, [productionEntries]);
+
+  // (B) Top pekerja bulan ini — hanya butuh productionEntries
   const dashboardTopPekerja = useMemo(() => {
     const monthNow = new Date();
     const monthStart = localDateStr(new Date(monthNow.getFullYear(), monthNow.getMonth(), 1));
@@ -1935,41 +2572,50 @@ export default function App() {
     const monthLabel = monthStart.slice(0, 7);
     return { topPekerja, monthLabel };
   }, [productionEntries]);
+
   const cleanDuplicateProduksi = React.useCallback(async (duplicateKey) => {
-    const key = normalizeInvoice(duplicateKey);
+    const key = normalizedInvoice(duplicateKey);
     if (!key) return showToast("Data produksi duplikat tidak punya kode order yang jelas.", 3500);
+
     const rows = (produksi || []).filter((prod) => {
-      const prodKey = normalizeInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
+      const prodKey = normalizedInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
       return prodKey === key;
     });
+
     if (rows.length <= 1) {
       await refreshProduksi();
       return showToast("Duplikat sudah tidak ditemukan.", 3000);
     }
+
     const rowsWithUsage = rows.map((row) => ({
       row,
       relatedEntries: entriesForProductionOrder(productionEntries || [], row, null),
     }));
+
     const usedRows = rowsWithUsage.filter(({ relatedEntries }) => relatedEntries.length > 0);
     if (usedRows.length > 1) {
       setSearch(key);
       setTab("produksi");
       return showToast("Ada lebih dari 1 data produksi yang sudah dipakai borongan/setor. Cek manual, tidak dihapus otomatis.", 6000);
     }
+
     const keepRow = usedRows[0]?.row || rows.reduce((best, row) => chooseBetterProduction(best, row), null);
     const deletableRows = rowsWithUsage
       .filter(({ row, relatedEntries }) => row.id !== keepRow?.id && relatedEntries.length === 0)
       .map(({ row }) => row);
+
     if (deletableRows.length === 0) {
       setSearch(key);
       setTab("produksi");
       return showToast("Tidak ada duplikat yang aman dihapus otomatis.", 4500);
     }
+
     const ok = window.confirm(
       `Bersihkan ${deletableRows.length} data produksi duplikat yang belum punya borongan/setor?\n\n` +
       `Data yang sudah dipakai borongan/setor tidak akan dihapus.`
     );
     if (!ok) return;
+
     setIsSaving(true);
     try {
       const batch = writeBatch(db);
@@ -1977,7 +2623,7 @@ export default function App() {
       await batch.commit();
       setProduksi((prev) => (prev || []).filter((row) => !deletableRows.some((del) => del.id === row.id)));
       await refreshProduksi();
-      showToast(` ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
+      showToast(`✅ ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
     } catch (e) {
       console.error(e);
       alert(friendlyErrorMessage("Membersihkan duplikat", e));
@@ -1985,14 +2631,18 @@ export default function App() {
       setIsSaving(false);
     }
   }, [produksi, productionEntries, refreshProduksi, showToast]);
+
+  // (C) Tugas hari ini & alerts — butuh orders, produksi, productionEntries
   const dashboardInsights = useMemo(() => {
     const activeBorongan = (productionEntries || [])
-      .map((entry) => ({ entry, totals: getEntrySetorTotals(entry) }))
+      .map((entry) => ({ entry, totals: setorTotals(entry) }))
       .filter(({ totals }) => Number(totals.sisaSetor || 0) > 0)
       .sort((a, b) => Number(b.totals.sisaSetor || 0) - Number(a.totals.sisaSetor || 0));
+
     const activeProduksi = (produksi || [])
       .filter((item) => item.status !== "Selesai")
       .sort((a, b) => String(b.tanggalMulai || b.createdAt || "").localeCompare(String(a.tanggalMulai || a.createdAt || "")));
+
     const kirimBelumLengkap = (orders || [])
       .map((order) => {
         const ordered = dashboardTotalOrderedQty(order);
@@ -2003,10 +2653,12 @@ export default function App() {
       })
       .filter(({ sisa }) => sisa > 0)
       .sort((a, b) => Number(b.sisa || 0) - Number(a.sisa || 0));
+
     const alerts = [];
+
     const productionDuplicateMap = new Map();
     (produksi || []).forEach((prod) => {
-      const key = normalizeInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
+      const key = normalizedInvoice(prod.invoice || prod.orderInvoice || prod.orderId || prod.pesananId || prod.id);
       if (!key) return;
       const arr = productionDuplicateMap.get(key) || [];
       arr.push(prod);
@@ -2015,23 +2667,24 @@ export default function App() {
     productionDuplicateMap.forEach((rows) => {
       if (rows.length <= 1) return;
       const sample = rows[0] || {};
-      const duplicateKey = normalizeInvoice(sample.invoice || sample.orderInvoice || sample.orderId || sample.pesananId || sample.id);
+      const duplicateKey = normalizedInvoice(sample.invoice || sample.orderInvoice || sample.orderId || sample.pesananId || sample.id);
       alerts.push({
         type: "Produksi duplikat",
-        text: `${sample.customer || "Customer"}  ${sample.invoice || sample.orderId || sample.id || "-"}  ${rows.length} data produksi ditemukan`,
+        text: `${sample.customer || "Customer"} · ${sample.invoice || sample.orderId || sample.id || "-"} · ${rows.length} data produksi ditemukan`,
         tab: "produksi",
         search: sample.invoice || sample.orderId || sample.customer || "",
         duplicateKey,
       });
     });
+
     (productionEntries || []).forEach((entry) => {
-      const totals = getEntrySetorTotals(entry);
+      const totals = setorTotals(entry);
       const totalAktivitas = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
       const diberi = Number(entry.qty || 0);
       if (diberi > 0 && totalAktivitas > diberi) {
         alerts.push({
           type: "Setor melebihi diberi",
-          text: `${displayWorkerName(entry.employeeName)}  ${entry.process || "-"}  ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
+          text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")} (${fmtQty(totalAktivitas)} dari ${fmtQty(diberi)} pcs)`,
           tab: "borongan",
           search: displayWorkerName(entry.employeeName),
         });
@@ -2039,17 +2692,18 @@ export default function App() {
       if (Number(entry.rate || 0) <= 0) {
         alerts.push({
           type: "Tarif kosong",
-          text: `${displayWorkerName(entry.employeeName)}  ${entry.process || "-"}  ${displayModelName(entry.model || "-")}`,
+          text: `${displayWorkerName(entry.employeeName)} · ${entry.process || "-"} · ${displayModelName(entry.model || "-")}`,
           tab: "tarif",
           search: displayModelName(entry.model || ""),
         });
       }
     });
+
     (orders || []).forEach((order) => {
       if (dashboardTotalOrderedQty(order) <= 0) {
         alerts.push({
           type: "Order tanpa produk/qty",
-          text: `${order.customer || order.raw?.customer || "Tanpa nama"}  ${order.invoice || order.raw?.invoice || order.id}`,
+          text: `${order.customer || order.raw?.customer || "Tanpa nama"} · ${order.invoice || order.raw?.invoice || order.id}`,
           tab: "pesanan",
           search: order.invoice || order.customer || "",
         });
@@ -2061,7 +2715,7 @@ export default function App() {
           if (item && (item.itemIndex === undefined || item.itemIndex === null || item.itemIndex === "")) {
             alerts.push({
               type: "Pengiriman tanpa itemIndex",
-              text: `${order.customer || "Tanpa nama"}  ${order.invoice || order.id}  kirim ${dIdx + 1}.${iIdx + 1}`,
+              text: `${order.customer || "Tanpa nama"} · ${order.invoice || order.id} · kirim ${dIdx + 1}.${iIdx + 1}`,
               tab: "kirim",
               search: order.invoice || order.customer || "",
             });
@@ -2069,6 +2723,7 @@ export default function App() {
         });
       });
     });
+
     return {
       tugas: {
         boronganBelumSetor: activeBorongan.length,
@@ -2077,6 +2732,7 @@ export default function App() {
         activeBorongan: activeBorongan.slice(0, 4),
         activeProduksi: activeProduksi.slice(0, 4),
         kirimBelumLengkap: kirimBelumLengkap.slice(0, 4),
+        kirimBelumLengkapAll: kirimBelumLengkap,
       },
       topPekerja: dashboardTopPekerja.topPekerja,
       alerts: alerts.slice(0, 8),
@@ -2085,7 +2741,8 @@ export default function App() {
       maxWeeklyPcs: dashboardWeeklyRows.maxWeeklyPcs,
       monthLabel: dashboardTopPekerja.monthLabel,
     };
-  }, [orders, produksi, productionEntries, dashboardWeeklyRows, dashboardTopPekerja, getEntrySetorTotals]);
+  }, [orders, produksi, productionEntries, dashboardWeeklyRows, dashboardTopPekerja]);
+
   const workerNameOptions = useMemo(() => {
     const map = new Map();
     const addName = (raw) => {
@@ -2098,8 +2755,10 @@ export default function App() {
     masterPekerja.forEach((p) => p.nama && addName(p.nama)); // dari master daftar pekerja Gallery Kerudung
     productionEntries.forEach((e) => addName(e.employeeName));
     produksi.forEach((p) => (p.workers || []).forEach((w) => addName(w.employeeName)));
+    payrollExpenses.forEach((p) => addName(p.employeeName));
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
-  }, [masterPekerja, productionEntries, produksi]);
+  }, [masterPekerja, productionEntries, produksi, payrollExpenses]);
+
   const modelNameOptions = useMemo(() => {
     const map = new Map();
     const addModel = (raw) => {
@@ -2114,21 +2773,51 @@ export default function App() {
     produksi.forEach((p) => (p.items || []).forEach((it) => addModel(it.name || it.item)));
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
   }, [productionEntries, workRates, orders, produksi]);
+
+  const productionQtyIndex = useMemo(() => {
+    const byOrderProcess = new Map();
+    const byOrderProcessModel = new Map();
+
+    productionEntries.forEach((e) => {
+      const orderId = String(e.orderId || "").trim();
+      if (!orderId) return;
+      const processKey = normalizeProcessKey(e.process || "");
+      const modelKey = normalizeModelKey(e.model || "");
+      const qty = Number(e.qty || 0);
+
+      const processMapKey = `${orderId}||${processKey}`;
+      byOrderProcess.set(processMapKey, (byOrderProcess.get(processMapKey) || 0) + qty);
+
+      if (modelKey) {
+        const modelMapKey = `${orderId}||${processKey}||${modelKey}`;
+        byOrderProcessModel.set(modelMapKey, (byOrderProcessModel.get(modelMapKey) || 0) + qty);
+      }
+    });
+
+    return { byOrderProcess, byOrderProcessModel };
+  }, [productionEntries]);
+
   function processQtyForOrder(orderId, process) {
-    return productionEntries
-      .filter((e) => e.orderId === orderId && sameProcess(e.process, process))
-      .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+    const key = `${String(orderId || "").trim()}||${normalizeProcessKey(process || "")}`;
+    return Number(productionQtyIndex.byOrderProcess.get(key) || 0);
   }
+
   function processQtyForOrderModel(orderId, process, model, excludeEntryId = "") {
-    return productionEntries
-      .filter((e) =>
-        e.id !== excludeEntryId &&
-        e.orderId === orderId &&
-        sameProcess(e.process, process) &&
-        normalizeModelKey(e.model || "") === normalizeModelKey(model || "")
-      )
-      .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+    // Untuk validasi edit, excludeEntryId tetap dihitung langsung agar tidak memasukkan entry yang sedang diedit.
+    if (excludeEntryId) {
+      return productionEntries
+        .filter((e) =>
+          e.id !== excludeEntryId &&
+          e.orderId === orderId &&
+          sameProcess(e.process, process) &&
+          normalizeModelKey(e.model || "") === normalizeModelKey(model || "")
+        )
+        .reduce((sum, e) => sum + Number(e.qty || 0), 0);
+    }
+    const key = `${String(orderId || "").trim()}||${normalizeProcessKey(process || "")}||${normalizeModelKey(model || "")}`;
+    return Number(productionQtyIndex.byOrderProcessModel.get(key) || 0);
   }
+
   function getOrderProcessLimit(order, process, model) {
     if (!order) return { limit: 0, label: "pesanan" };
     if (isModelSpecificProcess(process) && model) {
@@ -2137,25 +2826,7 @@ export default function App() {
     }
     return { limit: Number(order.qty || 0), label: "pesanan" };
   }
-  function confirmQtyOverLimit({ process, label, limit, alreadyQty, inputQty, mode = "input" }) {
-    if (!(limit > 0) || Number(alreadyQty || 0) + Number(inputQty || 0) <= limit) return true;
-    return window.confirm(
-      ` Qty ${process} melebihi qty ${label}.\n` +
-      `Batas: ${limit} pcs\n` +
-      `Sudah input: ${alreadyQty} pcs\n` +
-      `${mode === "edit" ? "Qty baru" : "Input baru"}: ${inputQty} pcs\n\n` +
-      `Lanjutkan simpan? Gunakan ini hanya jika ada koreksi/hitungan lapangan yang memang benar.`
-    );
-  }
-  function qcProgressForOrder(order) {
-    const prod = produksiByOrderId.get(order?.id);
-    const qtyPesanan = Math.max(0, Number(prod?.qty || dashboardTotalOrderedQty(order) || order?.qty || 0));
-    const relatedEntries = entriesForProductionOrder(productionEntries, prod, order);
-    const qcSetor = relatedEntries
-      .filter((e) => sameProcess(e.process, "Pengemasan QC"))
-      .reduce((sum, e) => sum + Number(getEntrySetorTotals(e).qtySetor || 0), 0);
-    return { qtyPesanan, qcSetor, selesai: qtyPesanan > 0 && qcSetor >= qtyPesanan };
-  }
+
   function isDuplicateEntry(payload) {
     return productionEntries.some((e) =>
       normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(payload.employeeName) &&
@@ -2165,19 +2836,22 @@ export default function App() {
       String(e.tanggal || "") === String(payload.tanggal || "")
     );
   }
+
 function rateDocId(productType, model, process) {
   const typeKey = safeDocId(normalizeProductTypeKey(productType || "kerudung"), "type");
   const processKey = safeDocId(normalizeProcessKey(process || "proses") || lower(process || "proses"), "process");
   const modelKey = safeDocId(normalizeModelKey(model || "all"), "model");
   return `rate_${typeKey}_${processKey}_${modelKey}`;
 }
+
   function effectiveRateValue(rawRate, employeeName) {
     const base = Number(rawRate || 0);
     if (!Number.isFinite(base) || base <= 0) return 0;
     const isKonveksi = normalizeWorkerNameKey(employeeName).includes("konveksi");
-    const effective = isKonveksi ? base - 500 : base;
+    const effective = isKonveksi ? base - KONVEKSI_RATE_DEDUCTION : base;
     return Number.isFinite(effective) ? Math.max(0, effective) : 0;
   }
+
   function findRate(productType, model, process) {
     const expectedId = rateDocId(productType, model, process);
     const typeKey = normalizeProductTypeKey(productType);
@@ -2198,6 +2872,7 @@ function rateDocId(productType, model, process) {
       return String(b.updatedAt || b.createdAt || b.id || "").localeCompare(String(a.updatedAt || a.createdAt || a.id || ""));
     })[0] || null;
   }
+
   function getRateForEmployee(productType, model, process, employeeName) {
     const rate = findRate(productType, model, process);
     if (!rate) return null;
@@ -2205,6 +2880,7 @@ function rateDocId(productType, model, process) {
     if (effectiveRate <= 0) return null;
     return { ...rate, baseRate: Number(rate.rate || 0), rate: effectiveRate };
   }
+
   function getOrderItemModelOptions(order) {
     const map = new Map();
     (order?.items || []).forEach((it) => {
@@ -2215,10 +2891,16 @@ function rateDocId(productType, model, process) {
     });
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
   }
+
   function getRateModelOptions(productType, process, selectedOrder = null) {
+    // Potong dan QC/Packing memakai acuan model dari Master Tarif umum.
+    // Contoh: Kerudung · Potong · Kerudung.
+    // Proses model-spesifik seperti Jahit memakai model/item dari pesanan terkait,
+    // lalu tarifnya dicari otomatis di Master Tarif.
     if (isModelSpecificProcess(process)) {
       return getOrderItemModelOptions(selectedOrder);
     }
+
     const typeKey = normalizeProductTypeKey(productType);
     const processKey = normalizeProcessKey(process);
     const map = new Map();
@@ -2232,6 +2914,7 @@ function rateDocId(productType, model, process) {
       });
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
   }
+
   function getRatePreview(productType, model, process, employeeName) {
     if (!productType || !process || !model) return { status: "incomplete" };
     const rate = findRate(productType, model, process);
@@ -2241,26 +2924,35 @@ function rateDocId(productType, model, process) {
     if (!Number.isFinite(effectiveRate) || effectiveRate <= 0) return { status: "invalid", baseRate, effectiveRate };
     return { status: "found", rate, baseRate, effectiveRate };
   }
+
   async function addProduksi() {
     if (!prodForm.orderId) return alert("Pilih pesanan dulu");
+
     const order = orders.find((o) => o.id === prodForm.orderId);
     if (!order) return alert("Pesanan tidak ditemukan");
     if (produksiByOrderId.has(order.id)) return alert("Pesanan ini sudah masuk produksi");
+
     const orderItems = (order.items || []).length > 0
       ? order.items.map((it) => ({ name: it.name || it.item || "Pesanan", qty: Number(it.qty || 0), price: Number(it.price || 0) }))
       : [{ name: order.item || "Pesanan", qty: Number(order.qty || 0), price: 0 }];
+
     const prodRef = doc(db, C.PRODUKSI, `prod_${safeDocId(order.id, "order")}`);
     const orderRef = doc(db, C.ORDERS, order.id);
+
     setIsSaving(true);
     try {
+      // Pengaman tambahan: cek langsung ke Firestore, bukan hanya state lokal.
+      // Ini mencegah duplikat kalau data lokal belum refresh atau pernah ada dokumen produksi lama dengan ID berbeda.
       const existingProduksiSnap = await getDocs(query(collection(db, C.PRODUKSI), where("orderId", "==", order.id)));
       if (!existingProduksiSnap.empty) {
         await refreshProduksi();
         throw new Error("Pesanan ini sudah masuk produksi. Data produksi tidak dibuat dobel.");
       }
+
       await runTransaction(db, async (transaction) => {
         const prodSnap = await transaction.get(prodRef);
         if (prodSnap.exists()) throw new Error("Pesanan ini sudah masuk produksi.");
+
         transaction.set(prodRef, {
           orderId: order.id,
           invoice: order.invoice,
@@ -2279,6 +2971,7 @@ function rateDocId(productType, model, process) {
           updatedAt: todayStr(),
           history: [{ tanggal: todayStr(), status: "Antri", catatan: "Masuk produksi" }],
         });
+
         transaction.update(orderRef, {
           statusProduksi: "Antri",
           produksiStatus: "Antri",
@@ -2288,6 +2981,7 @@ function rateDocId(productType, model, process) {
           updatedAt: todayStr(),
         });
       });
+
       await Promise.all([refreshOrders(), refreshProduksi()]);
       setProdForm({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
       setModal(null);
@@ -2297,22 +2991,37 @@ function rateDocId(productType, model, process) {
       setIsSaving(false);
     }
   }
+
+  // Auto-update status produksi berdasarkan progress setor borongan
+  // Dipanggil setelah simpanSetor berhasil
   async function autoUpdateProduksiStatus(entryUpdated, nextHistory) {
     if (!entryUpdated?.orderId) return;
+
     const prod = produksi.find((p) => p.orderId === entryUpdated.orderId);
     if (!prod) return;
     if (prod.status === "Selesai") return; // Sudah selesai, tidak perlu update
+
+    // Kumpulkan semua entries untuk order ini (termasuk yang baru saja diupdate)
     const allEntries = productionEntries
       .map((e) => e.id === entryUpdated.id ? { ...e, setorHistory: nextHistory } : e)
       .filter((e) => e.orderId === entryUpdated.orderId);
+
     const qtyPesanan = Number(prod.qty || 0);
     if (qtyPesanan <= 0) return;
+
+    // Hitung total setor per proses.
+    // Untuk Jahit/Potong: setor dihitung per model, lalu ambil minimum progress
+    // lintas model agar tidak dianggap "selesai" saat baru 1 model yang tuntas.
     const orderItems = (prod.items || []).filter((it) => Number(it.qty || 0) > 0);
+
     function totalSetorProcess(process) {
       return allEntries
         .filter((e) => sameProcess(e.process, process))
-        .reduce((s, e) => s + getEntrySetorTotals(e).qtySetor, 0);
+        .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
     }
+
+    // Untuk proses per-model: selesai jika SETIAP model sudah tersetor >= qty-nya,
+    // atau jika tidak ada breakdown model → cek total saja (backward compat).
     function allModelsCompleted(process) {
       if (orderItems.length === 0) {
         return totalSetorProcess(process) >= qtyPesanan;
@@ -2323,15 +3032,17 @@ function rateDocId(productType, model, process) {
         const modelKey = normalizeModelKey(item.name || "");
         const modelSetor = allEntries
           .filter((e) => sameProcess(e.process, process) && normalizeModelKey(e.model || "") === modelKey)
-          .reduce((s, e) => s + getEntrySetorTotals(e).qtySetor, 0);
+          .reduce((s, e) => s + setorTotals(e).qtySetor, 0);
         return modelSetor >= modelQty;
       });
     }
+
     const totalQcSetor = totalSetorProcess("Pengemasan QC");
     const jahitSelesai = allModelsCompleted("jahit");
     const totalPotongSetor = totalSetorProcess("potong");
     const potongSelesai = totalPotongSetor >= qtyPesanan;
     const totalJahitSetor = totalSetorProcess("jahit");
+
     let newStatus = prod.status;
     if (totalQcSetor >= qtyPesanan) {
       newStatus = "Selesai";
@@ -2340,29 +3051,44 @@ function rateDocId(productType, model, process) {
     } else if (totalJahitSetor > 0) {
       newStatus = "Jahit";
     } else if (potongSelesai) {
-      newStatus = "Jahit"; // Potong sudah selesai semua  lanjut ke Jahit
+      newStatus = "Jahit"; // Potong sudah selesai semua → lanjut ke Jahit
     } else if (totalPotongSetor > 0) {
       newStatus = "Potong";
     }
+
+    // Hanya update jika status berubah ke yang lebih maju
     const statusOrder = ["Antri", "Potong", "Jahit", "Pengemasan QC", "Selesai"];
     const currentIdx = statusOrder.indexOf(prod.status);
     const newIdx = statusOrder.indexOf(newStatus);
     if (newIdx <= currentIdx) return; // Tidak mundurkan status
+
     try {
-      await updateDoc(doc(db, C.PRODUKSI, prod.id), {
-        status: newStatus,
-        updatedAt: todayStr(),
-        history: [
-          ...(prod.history || []),
-          {
-            tanggal: todayStr(), status: newStatus,
-            catatan: `Otomatis dari progress setor borongan (${newStatus})`,
-          },
-        ],
-      });
-      if (prod.orderId) {
-        try {
-          await updateDoc(doc(db, C.ORDERS, prod.orderId), {
+      await runTransaction(db, async (transaction) => {
+        const prodRef = doc(db, C.PRODUKSI, prod.id);
+        const orderRef = prod.orderId ? doc(db, C.ORDERS, prod.orderId) : null;
+        const prodSnap = await transaction.get(prodRef);
+        if (!prodSnap.exists()) return;
+
+        const liveProd = { id: prodSnap.id, ...prodSnap.data() };
+        const liveStatus = liveProd.status || prod.status || "Antri";
+        const liveIdx = statusOrder.indexOf(liveStatus);
+        if (liveIdx >= newIdx) return; // Data server sudah sama/lebih maju, jangan overwrite.
+
+        transaction.update(prodRef, {
+          status: newStatus,
+          updatedAt: todayStr(),
+          history: [
+            ...(Array.isArray(liveProd.history) ? liveProd.history : []),
+            {
+              tanggal: todayStr(),
+              status: newStatus,
+              catatan: `Otomatis dari progress setor borongan (${newStatus})`,
+            },
+          ],
+        });
+
+        if (orderRef) {
+          transaction.update(orderRef, {
             statusProduksi: newStatus,
             produksiStatus: newStatus,
             produksiSource: "gallery-produksi",
@@ -2370,16 +3096,18 @@ function rateDocId(productType, model, process) {
             ...(newStatus === "Selesai" ? { status: "Selesai Produksi" } : {}),
             updatedAt: todayStr(),
           });
-        } catch (_) {}
-      }
+        }
+      });
       await Promise.all([refreshProduksi(), refreshOrders()]);
     } catch (e) {
       console.warn("Auto-update status produksi gagal:", e);
     }
   }
+
   async function updateProduksiStatus(id, newStatus) {
     const item = produksi.find((p) => p.id === id);
     if (!item || item.status === newStatus) return;
+
     const statusOrderMap = {
       "Antri": "Proses",
       "Potong": "Proses",
@@ -2387,15 +3115,18 @@ function rateDocId(productType, model, process) {
       "Pengemasan QC": "Proses",
       "Selesai": "Selesai Produksi",
     };
+
     const prodRef = doc(db, C.PRODUKSI, id);
     const orderRef = item.orderId ? doc(db, C.ORDERS, item.orderId) : null;
     const orderStatusBaru = statusOrderMap[newStatus];
+
     setIsSaving(true);
     try {
       await runTransaction(db, async (transaction) => {
         const prodSnap = await transaction.get(prodRef);
         if (!prodSnap.exists()) throw new Error("Data produksi tidak ditemukan.");
         const liveProd = prodSnap.data();
+
         let liveOrder = null;
         if (orderRef && orderStatusBaru) {
           const orderSnap = await transaction.get(orderRef);
@@ -2404,6 +3135,7 @@ function rateDocId(productType, model, process) {
           }
           liveOrder = orderSnap.data();
         }
+
         transaction.update(prodRef, {
           status: newStatus,
           updatedAt: todayStr(),
@@ -2412,6 +3144,7 @@ function rateDocId(productType, model, process) {
             { tanggal: todayStr(), status: newStatus, catatan: "Update status manual" },
           ],
         });
+
         if (orderRef && orderStatusBaru) {
           const currentOrderStatus = String(liveOrder?.status || "");
           transaction.update(orderRef, {
@@ -2426,23 +3159,27 @@ function rateDocId(productType, model, process) {
           });
         }
       });
-      showToast(" Status produksi diperbarui", 2500);
+      showToast("✅ Status produksi diperbarui", 2500);
     } catch (e) {
       alert(friendlyErrorMessage("Update status", e));
     } finally {
       setIsSaving(false);
     }
   }
+
   async function addWorkRate() {
     const cleanProductType = displayProductTypeName(rateForm.productType);
     const cleanProcess = rateForm.process;
     const cleanModel = canonicalByExisting(rateForm.model, modelNameOptions, "model");
     const cleanRate = Number(rateForm.rate || 0);
+
     if (!cleanProductType.trim()) return alert("Jenis produk wajib diisi");
     if (!cleanModel.trim()) return alert("Model wajib diisi sesuai Master Tarif");
     if (!Number.isFinite(cleanRate) || cleanRate <= 0) return alert("Tarif wajib diisi dan harus lebih dari 0");
     if (cleanRate > 1000000) return alert("Tarif terlalu besar. Periksa kembali nominal tarif.");
+
     const rateRef = doc(db, C.WORK_RATES, rateDocId(cleanProductType, cleanModel, cleanProcess));
+
     setIsSaving(true);
     try {
       await runTransaction(db, async (transaction) => {
@@ -2460,38 +3197,34 @@ function rateDocId(productType, model, process) {
       await refreshWorkRates();
       setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
       setModal(null);
-      showToast(" Tarif berhasil disimpan", 2500);
+      showToast("✅ Tarif berhasil disimpan", 2500);
     } catch (e) {
       alert(friendlyErrorMessage("Simpan tarif", e));
     } finally {
       setIsSaving(false);
     }
   }
+
   async function addProductionEntry() {
     if (!entryForm.employeeName.trim()) return alert("Nama pekerja wajib diisi");
     if (!entryForm.qty || Number(entryForm.qty) <= 0) return alert("Qty wajib diisi");
     if (!entryForm.model.trim()) return alert("Model wajib diisi sesuai Master Tarif");
-    if (entryProcessRequiresOrder(entryForm.process) && !entryForm.orderId) {
+    if (PROCESSES_WITH_MODEL.includes(entryForm.process) && !entryForm.orderId) {
       return alert(`Proses ${entryForm.process} wajib dikaitkan ke pesanan.\nPilih pesanan di dropdown "Pesanan terkait".`);
     }
-    if (!entryForm.orderId && entryProcessWarnsWithoutOrder(entryForm.process)) {
-      const okNoOrder = window.confirm(
-        ` ${entryForm.process} belum dikaitkan ke pesanan.\n\n` +
-        `Entry tetap boleh disimpan dan tetap bisa disetor/masuk rekap gaji, tapi tidak akan ikut progress pesanan di Tab Produksi sampai dikaitkan.\n\n` +
-        `Lanjut simpan tanpa pesanan?`
-      );
-      if (!okNoOrder) return;
-    }
+
     const cleanEmployeeName = canonicalByExisting(entryForm.employeeName, workerNameOptions, "worker");
     const cleanProductType = displayProductTypeName(entryForm.productType);
     const cleanModel = canonicalByExisting(entryForm.model, modelNameOptions, "model");
     const rate = getRateForEmployee(cleanProductType, cleanModel, entryForm.process, cleanEmployeeName);
     if (!rate) return alert("Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.");
+
     const order = orders.find((o) => o.id === entryForm.orderId);
     const prod = order ? produksiByOrderId.get(order.id) : null;
     const effectiveRate = Number(rate.rate || 0);
     if (!Number.isFinite(effectiveRate) || effectiveRate <= 0) return alert("Tarif efektif tidak valid. Periksa tarif dasar dan aturan potongan konveksi.");
     const totalWage = Number(entryForm.qty) * effectiveRate;
+
     const draftPayloadForCheck = {
       employeeName: cleanEmployeeName,
       orderId: entryForm.orderId || "",
@@ -2499,26 +3232,31 @@ function rateDocId(productType, model, process) {
       model: cleanModel,
       tanggal: entryForm.tanggal,
     };
+
     if (isDuplicateEntry(draftPayloadForCheck)) {
       return alert("Data borongan ini sudah pernah diinput untuk pekerja, proses, tanggal, dan pesanan yang sama.");
     }
+
     if (order) {
       const { limit, label } = getOrderProcessLimit(order, entryForm.process, cleanModel);
       const alreadyQty = isGeneralRateProcess(entryForm.process)
         ? processQtyForOrder(order.id, entryForm.process)
         : processQtyForOrderModel(order.id, entryForm.process, cleanModel);
       const nextQty = alreadyQty + Number(entryForm.qty || 0);
-      if (!confirmQtyOverLimit({
-        process: entryForm.process,
-        label,
-        limit,
-        alreadyQty,
-        inputQty: Number(entryForm.qty || 0),
-      })) return;
+      if (limit > 0 && nextQty > limit) {
+        return alert(
+          `Qty ${entryForm.process} melebihi qty ${label}.\n` +
+          `Batas: ${limit} pcs\n` +
+          `Sudah input: ${alreadyQty} pcs\n` +
+          `Input baru: ${entryForm.qty} pcs`
+        );
+      }
     }
+
     const entryId = `entry_${safeDocId(cleanEmployeeName, "worker")}_${safeDocId(entryForm.orderId || "umum", "order")}_${safeDocId(entryForm.process, "process")}_${safeDocId(cleanModel || "all", "model")}_${safeDocId(entryForm.tanggal, "date")}`;
     const entryRef = doc(db, C.PRODUCTION_ENTRIES, entryId);
     const prodRef = prod?.id ? doc(db, C.PRODUKSI, prod.id) : null;
+
     setIsSaving(true);
     try {
       const entryPayload = {
@@ -2539,9 +3277,11 @@ function rateDocId(productType, model, process) {
         source: "gallery-produksi",
         createdAt: todayStr(),
       };
+
       await runTransaction(db, async (transaction) => {
         const entrySnap = await transaction.get(entryRef);
         if (entrySnap.exists()) throw new Error("Data borongan ini sudah pernah diinput untuk pekerja, proses, tanggal, dan pesanan yang sama.");
+
         let liveWorkers = [];
         let liveProdData = null;
         if (prodRef) {
@@ -2551,6 +3291,25 @@ function rateDocId(productType, model, process) {
             liveWorkers = Array.isArray(liveProdData.workers) ? liveProdData.workers : [];
           }
         }
+
+        if (liveProdData) {
+          const processKey = normalizeProcessKey(entryPayload.process);
+          const modelKey = normalizeModelKey(entryPayload.model || "");
+          const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
+          const matchedLiveItem = liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey);
+          const generalProcess = GENERAL_RATE_PROCESSES.some((p) => normalizeProcessKey(p) === processKey);
+          const limit = generalProcess
+            ? Number(liveProdData.qty || 0)
+            : Number(matchedLiveItem?.qty || liveProdData.qty || 0);
+          const alreadyInWorkers = liveWorkers
+            .filter((w) => normalizeProcessKey(w.process) === processKey)
+            .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
+            .reduce((sum, w) => sum + Number(w.qty || 0), 0);
+          if (limit > 0 && alreadyInWorkers + Number(entryPayload.qty || 0) > limit) {
+            throw new Error(`Qty ${entryPayload.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${entryPayload.qty} pcs.`);
+          }
+        }
+
         transaction.set(entryRef, entryPayload);
         if (prodRef) {
           transaction.update(prodRef, {
@@ -2570,6 +3329,7 @@ function rateDocId(productType, model, process) {
           });
         }
       });
+
       await Promise.all([refreshProductionEntries(), refreshProduksi()]);
       setEntryForm({
         employeeName: "",
@@ -2588,18 +3348,23 @@ function rateDocId(productType, model, process) {
       setIsSaving(false);
     }
   }
+
   async function simpanSetor() {
     if (!setorModal) return;
+
     const qtySetor = Number(setorForm.qtySetor || 0);
     const qtyReject = Number(setorForm.qtyReject || 0);
     if (qtySetor < 0 || qtyReject < 0) return alert("Qty setor/reject tidak boleh minus.");
     if (qtySetor + qtyReject <= 0) return alert("Isi qty setor atau qty reject terlebih dahulu.");
+
     const tanggalSetor = setorForm.tanggalSetor || todayStr();
     const setorBatchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const entryRef = doc(db, C.PRODUCTION_ENTRIES, setorModal.id);
     const payrollRef = doc(db, C.PAYROLL_EXPENSES, `payroll_setor_${safeDocId(setorModal.id, "entry")}_${safeDocId(setorBatchId, "batch")}`);
+
     let nextHistoryForStatus = [];
     let nextSisaForToast = 0;
+
     setIsSaving(true);
     try {
       await runTransaction(db, async (transaction) => {
@@ -2612,6 +3377,7 @@ function rateDocId(productType, model, process) {
         if (qtySetor + qtyReject > sisaSebelum) {
           throw new Error(`Total setor + reject (${qtySetor + qtyReject} pcs) melebihi sisa belum setor (${sisaSebelum} pcs).`);
         }
+
         const rate = Number(liveEntry.rate || 0);
         if (!Number.isFinite(rate) || rate <= 0) throw new Error("Tarif entry tidak valid. Perbaiki tarif/entry sebelum menyetor.");
         const totalWageSetor = qtySetor * rate;
@@ -2631,6 +3397,7 @@ function rateDocId(productType, model, process) {
         const nextTotalWageSetor = nextHistory.reduce((sum, h) => sum + Number(h.totalWageSetor || 0), 0);
         const nextSisa = Math.max(0, Number(liveEntry.qty || 0) - nextQtySetor - nextQtyReject);
         const nextStatusSetor = nextSisa <= 0 ? "sudah_setor" : "setor_sebagian";
+
         transaction.update(entryRef, {
           setorHistory: nextHistory,
           qtySetor: nextQtySetor,
@@ -2642,6 +3409,7 @@ function rateDocId(productType, model, process) {
           catatanSetor: setorForm.catatan || "",
           updatedAt: todayStr(),
         });
+
         if (totalWageSetor > 0) {
           transaction.set(payrollRef, {
             source: "gallery-produksi",
@@ -2664,12 +3432,16 @@ function rateDocId(productType, model, process) {
             sisaSetor: nextSisa,
           });
         }
+
         nextHistoryForStatus = nextHistory;
         nextSisaForToast = nextSisa;
       });
-      showToast(nextSisaForToast > 0 ? ` Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : " Setor selesai tersimpan.", 3500);
+
+      showToast(nextSisaForToast > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "✅ Setor selesai tersimpan.", 3500);
+
       await autoUpdateProduksiStatus(setorModal, nextHistoryForStatus);
       await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi(), refreshOrders()]); // setor membuat dokumen payroll baru dan bisa mengubah status produksi
+
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
     } catch (e) {
@@ -2678,32 +3450,24 @@ function rateDocId(productType, model, process) {
       setIsSaving(false);
     }
   }
+
   async function addPengiriman() {
     const selectedIds = Array.isArray(kirimForm.orderIds) && kirimForm.orderIds.length > 0
       ? kirimForm.orderIds
       : (kirimForm.pesananId ? [kirimForm.pesananId] : []);
     if (selectedIds.length === 0) return alert("Pilih minimal satu pesanan dulu");
     if (!kirimForm.penerima.trim()) return alert("Penerima wajib diisi");
+
     const selectedOrders = selectedIds.map((id) => orders.find((o) => o.id === id)).filter(Boolean);
     if (selectedOrders.length !== selectedIds.length) return alert("Ada pesanan yang tidak ditemukan");
-    const unlinkedSetorEntries = (productionEntries || []).filter((e) => !e.orderId && Number(getEntrySetorTotals(e).qtySetor || 0) > 0);
-    if (unlinkedSetorEntries.length > 0) {
-      const preview = unlinkedSetorEntries
-        .slice(0, 5)
-        .map((e) => ` ${displayWorkerName(e.employeeName)}  ${e.process}${e.model ? `  ${e.model}` : ""}  setor ${Number(getEntrySetorTotals(e).qtySetor || 0)} pcs`)
-        .join("\n");
-      const okUnlinked = window.confirm(
-        ` Ada ${unlinkedSetorEntries.length} entry borongan sudah setor tapi masih Tanpa Pesanan.\n${preview}\n\n` +
-        `Kalau entry ini milik pesanan yang akan dikirim, kaitkan dulu di Tab Borongan agar progress produksi benar.\n\n` +
-        `Tetap lanjut simpan pengiriman?`
-      );
-      if (!okUnlinked) return;
-    }
+
     const allItems = (kirimForm.items || []).map((it) => ({ ...it, orderId: it.orderId || kirimForm.pesananId || selectedIds[0] }));
     if (allItems.some((i) => Number(i.qtyKirim || 0) < 0)) return alert("Qty kirim tidak boleh negatif.");
     if (allItems.reduce((sum, item) => sum + Number(item.qtyKirim || 0), 0) <= 0) return alert("Minimal ada qty kirim lebih dari 0 pcs.");
+
     const groupId = `nota_${safeDocId(kirimForm.tanggalKirim || todayStr(), "tgl")}_${safeDocId(kirimForm.penerima, "customer")}_${Date.now()}`;
     const deliveryCreatedAt = new Date().toISOString();
+
     const totalDeliveredForItem = (base, idx, delArray) => delArray.reduce((sum, delivery) => {
       const found = (delivery.items || []).filter((it) => {
         const hasItemIndex = it.itemIndex !== undefined && it.itemIndex !== null && it.itemIndex !== "";
@@ -2712,6 +3476,7 @@ function rateDocId(productType, model, process) {
       });
       return sum + found.reduce((s, it) => s + Number(it.qty ?? it.shippedQty ?? it.qtyKirim ?? 0), 0);
     }, 0);
+
     const buildShippedItems = (baseItems, deliveriesArr) => baseItems.map((base, idx) => {
       const shippedQty = totalDeliveredForItem(base, idx, deliveriesArr);
       const ordered = Number(base.orderedQty || 0);
@@ -2729,6 +3494,7 @@ function rateDocId(productType, model, process) {
         note: diff === 0 ? "Sesuai pesanan" : diff < 0 ? `Kekurangan pengiriman ${Math.abs(diff)} pcs` : `Kelebihan pengiriman ${diff} pcs`,
       };
     });
+
     let localHasOverDelivery = false;
     selectedOrders.forEach((order) => {
       const baseItems = orderBaseItems(order);
@@ -2743,25 +3509,13 @@ function rateDocId(productType, model, process) {
       const calc = buildShippedItems(baseItems, [...getDeliveryArray(order), draftDelivery]);
       if (calc.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0))) localHasOverDelivery = true;
     });
+
     let overDeliveryConfirmed = false;
     if (localHasOverDelivery) {
       overDeliveryConfirmed = window.confirm("Ada pesanan yang akan lebih kirim. Kelebihan ini akan menambah tagihan customer di Gallery Kerudung. Lanjut simpan?");
       if (!overDeliveryConfirmed) return;
     }
-    const qcBelumSelesai = selectedOrders
-      .map((order) => ({ order, qc: qcProgressForOrder(order) }))
-      .filter(({ qc }) => qc.qtyPesanan > 0 && qc.qcSetor < qc.qtyPesanan);
-    if (qcBelumSelesai.length > 0) {
-      const detail = qcBelumSelesai
-        .slice(0, 5)
-        .map(({ order, qc }) => ` ${order.invoice || order.customer || order.id}: QC setor ${qc.qcSetor}/${qc.qtyPesanan} pcs`)
-        .join("\n");
-      const okQc = window.confirm(
-        ` QC/Pengemasan belum selesai di sistem.\n${detail}\n\n` +
-        `Tetap simpan pengiriman? Pilih OK hanya jika barang memang sudah siap/koreksi data akan dibereskan.`
-      );
-      if (!okQc) return;
-    }
+
     const totalOrderedLocal = selectedOrders.reduce((sum, order) => sum + dashboardTotalOrderedQty(order), 0);
     const totalKirimLocal = allItems.reduce((sum, item) => sum + Number(item.qtyKirim || 0), 0);
     const localIsShortShipment = totalOrderedLocal > 0 && totalKirimLocal > 0 && totalKirimLocal < totalOrderedLocal;
@@ -2769,7 +3523,9 @@ function rateDocId(productType, model, process) {
     const shortShipmentReason = isShortFinal ? String(kirimForm.shortShipmentReason || "").trim() : "";
     const shortShipmentNote = isShortFinal ? String(kirimForm.shortShipmentNote || "").trim() : "";
     if (isShortFinal && !shortShipmentReason) return alert("Pilih alasan kurang kirim final terlebih dahulu.");
+
     const orderRows = selectedOrders.map((order) => ({ order, orderRef: doc(db, C.ORDERS, order.id), prod: produksiByOrderId.get(order.id) }));
+
     setIsSaving(true);
     try {
       const batchRef = doc(collection(db, C.SHIPMENT_BATCHES));
@@ -2791,6 +3547,7 @@ function rateDocId(productType, model, process) {
           }
           liveRows.push({ ...row, orderData: orderSnap.data(), prodRef, prodSnapData });
         }
+
         for (const row of liveRows) {
           const order = row.order;
           const currentData = row.orderData;
@@ -2798,6 +3555,7 @@ function rateDocId(productType, model, process) {
           const currentDeliveries = Array.isArray(currentData.deliveries) ? currentData.deliveries : [];
           const itemsForOrder = allItems.filter((it) => it.orderId === order.id && Number(it.qtyKirim || 0) > 0);
           if (itemsForOrder.length === 0) continue;
+
           const cleanDeliveryItems = itemsForOrder.map((i, idx) => {
             const preferredIndex = Number.isInteger(Number(i.itemIndex)) ? Number(i.itemIndex) : idx;
             const base = baseItems[preferredIndex] || baseItems[idx] || baseItems[0] || {};
@@ -2816,6 +3574,7 @@ function rateDocId(productType, model, process) {
               unit: base.unit || "yard",
             };
           });
+
           const newDelivery = {
             date: kirimForm.tanggalKirim || todayStr(),
             createdAt: deliveryCreatedAt,
@@ -2833,6 +3592,7 @@ function rateDocId(productType, model, process) {
             items: cleanDeliveryItems,
             total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
           };
+
           const finalDeliveries = [...currentDeliveries, newDelivery];
           const finalShippedItems = buildShippedItems(baseItems, finalDeliveries);
           const totalOrdered = finalShippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
@@ -2841,6 +3601,7 @@ function rateDocId(productType, model, process) {
           const deliveredHppTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
           const hasOverDelivery = finalShippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
           if (hasOverDelivery && !overDeliveryConfirmed) throw new Error("Data terbaru menunjukkan pengiriman akan melebihi qty pesanan. Muat ulang data lalu konfirmasi ulang.");
+
           const isShortShipment = totalOrdered > 0 && totalShipped > 0 && totalShipped < totalOrdered;
           const finalShort = isShortShipment && kirimForm.shortShipmentMode === "final";
           const deliveryStatusRaw = totalShipped <= 0 ? "Belum Dikirim" : hasOverDelivery ? "Kelebihan Kirim" : totalShipped < totalOrdered ? "Dikirim Sebagian" : "Selesai";
@@ -2850,6 +3611,7 @@ function rateDocId(productType, model, process) {
           const shortShipmentRemaining = Math.max(0, totalOrdered - totalShipped);
           const productionDoneByDelivery = finalShort || (totalOrdered > 0 && totalShipped >= totalOrdered);
           const nextProduksiStatus = productionDoneByDelivery ? "Selesai" : (currentData.statusProduksi || currentData.produksiStatus || "Proses");
+
           const shipmentRef = shipmentRefsByOrderId.get(order.id) || doc(collection(db, C.SHIPMENTS));
           batchShipmentIds.push(shipmentRef.id);
           batchOrderSummaries.push({
@@ -2886,6 +3648,7 @@ function rateDocId(productType, model, process) {
             qtyKirim: it.shippedQty,
             total: Number(it.shippedQty || 0) * Number(it.price || 0),
           }));
+
           transaction.set(shipmentRef, {
             pesananId: order.id,
             orderId: order.id,
@@ -2924,6 +3687,7 @@ function rateDocId(productType, model, process) {
             source: "gallery-produksi",
             createdAt: todayStr(),
           });
+
           transaction.update(row.orderRef, {
             status: orderStatus,
             shippingStatus,
@@ -2946,6 +3710,7 @@ function rateDocId(productType, model, process) {
             produksiUpdatedAt: todayStr(),
             updatedAt: todayStr(),
           });
+
           if (row.prodRef && productionDoneByDelivery && row.prod?.status !== "Selesai") {
             transaction.update(row.prodRef, {
               status: "Selesai",
@@ -2957,6 +3722,7 @@ function rateDocId(productType, model, process) {
             });
           }
         }
+
         if (batchItems.length > 0) {
           const batchOrderIds = [...new Set(batchOrderSummaries.map((o) => o.orderId).filter(Boolean))];
           const batchInvoices = [...new Set(batchOrderSummaries.map((o) => o.invoice).filter(Boolean))];
@@ -2990,6 +3756,7 @@ function rateDocId(productType, model, process) {
           });
         }
       });
+
       setKirimForm({
         pesananId: "",
         orderIds: [],
@@ -3011,14 +3778,18 @@ function rateDocId(productType, model, process) {
       setIsSaving(false);
     }
   }
+
   function deleteRate(id) {
     setConfirmDelete({ type: "rate", id, step: 1 });
   }
+
   function requestDeleteEntry(entry) {
     setConfirmDelete({ type: "entry", id: entry.id, entry, step: 1 });
   }
+
   async function confirmDeleteAction() {
     if (!confirmDelete) return;
+    // 2x konfirmasi: step 1 → tampilkan konfirmasi 2, step 2 → eksekusi hapus
     if (confirmDelete.step === 1) {
       setConfirmDelete({ ...confirmDelete, step: 2 });
       return;
@@ -3035,11 +3806,12 @@ function rateDocId(productType, model, process) {
         await batch.commit();
         await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi()]);
       }
-      showToast(" Data berhasil dihapus", 3000);
+      showToast("🗑️ Data berhasil dihapus", 3000);
     } catch (e) {
       alert(friendlyErrorMessage("Hapus data", e));
     }
   }
+
   function openEditEntry(entry) {
     setEditEntryModal(entry);
     setEditEntryForm({
@@ -3047,16 +3819,17 @@ function rateDocId(productType, model, process) {
       tanggal: entry.tanggal || todayStr(),
       catatan: entry.catatan || "",
       model: entry.model || "",
-      orderId: entry.orderId || "",
     });
   }
+
   async function saveEditEntry() {
     if (!editEntryModal) return;
     const nextQty = Number(editEntryForm.qty || 0);
     if (!Number.isFinite(nextQty) || nextQty <= 0) return alert("Qty wajib diisi dan harus lebih dari 0.");
+
     const nextModel = canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
-    const nextOrderId = editEntryForm.orderId || editEntryModal.orderId || "";
-    const editOrder = orders.find((o) => o.id === nextOrderId);
+
+    const editOrder = orders.find((o) => o.id === editEntryModal.orderId);
     if (editOrder) {
       const { limit, label } = getOrderProcessLimit(editOrder, editEntryModal.process, nextModel);
       const alreadyQty = isGeneralRateProcess(editEntryModal.process)
@@ -3065,20 +3838,21 @@ function rateDocId(productType, model, process) {
             .reduce((sum, e) => sum + Number(e.qty || 0), 0)
         : processQtyForOrderModel(editOrder.id, editEntryModal.process, nextModel, editEntryModal.id);
       const combinedQty = alreadyQty + nextQty;
-      if (!confirmQtyOverLimit({
-        process: editEntryModal.process,
-        label,
-        limit,
-        alreadyQty,
-        inputQty: nextQty,
-        mode: "edit",
-      })) return;
+      if (limit > 0 && combinedQty > limit) {
+        return alert(
+          `Qty ${editEntryModal.process} melebihi qty ${label}.\n` +
+          `Batas: ${limit} pcs\n` +
+          `Sudah input lain: ${alreadyQty} pcs\n` +
+          `Qty baru: ${editEntryForm.qty} pcs`
+        );
+      }
     }
+
     const entryRef = doc(db, C.PRODUCTION_ENTRIES, editEntryModal.id);
-    const nextProd = nextOrderId ? produksiByOrderId.get(nextOrderId) : null;
     const prodRef = editEntryModal.produksiId
       ? doc(db, C.PRODUKSI, editEntryModal.produksiId)
-      : (nextProd?.id ? doc(db, C.PRODUKSI, nextProd.id) : null);
+      : null;
+
     setIsSaving(true);
     try {
       await runTransaction(db, async (transaction) => {
@@ -3087,18 +3861,22 @@ function rateDocId(productType, model, process) {
         const liveEntry = { id: editEntryModal.id, ...entrySnap.data() };
         const liveTotals = setorTotals(liveEntry);
         const hasSetor = Number(liveTotals.qtySetor || 0) > 0 || Number(liveTotals.qtyReject || 0) > 0;
+
         const modelChanged = normalizeModelKey(nextModel) !== normalizeModelKey(liveEntry.model || "");
         const qtyChanged = Number(liveEntry.qty || 0) !== nextQty;
         const tanggalChanged = String(liveEntry.tanggal || "") !== String(editEntryForm.tanggal || "");
+
         if (hasSetor && (modelChanged || qtyChanged || tanggalChanged)) {
           throw new Error("Entry yang sudah disetor tidak bisa diubah qty/model/tanggal karena sudah terkait payroll. Hapus setor/payroll terkait atau buat koreksi baru.");
         }
+
         let newRate = Number(liveEntry.rate || 0);
         if (!hasSetor) {
           const rateInfo = getRateForEmployee(liveEntry.productType || editEntryModal.productType || "Kerudung", nextModel, liveEntry.process, liveEntry.employeeName);
           if (!rateInfo) throw new Error("Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.");
           newRate = Number(rateInfo.rate || 0);
         }
+
         const updates = {
           qty: hasSetor ? Number(liveEntry.qty || 0) : nextQty,
           tanggal: hasSetor ? (liveEntry.tanggal || editEntryForm.tanggal) : editEntryForm.tanggal,
@@ -3108,21 +3886,31 @@ function rateDocId(productType, model, process) {
           updatedAt: todayStr(),
         };
         updates.model = nextModel;
-        if (!liveEntry.orderId && nextOrderId) {
-          const linkedOrder = orders.find((o) => o.id === nextOrderId);
-          updates.orderId = nextOrderId;
-          updates.pesananId = nextOrderId;
-          updates.produksiId = nextProd?.id || liveEntry.produksiId || "";
-          updates.invoice = linkedOrder?.invoice || liveEntry.invoice || "";
-          updates.customer = linkedOrder?.customer || liveEntry.customer || "";
-          updates.item = linkedOrder?.item || liveEntry.item || "";
-        }
+
         if (prodRef) {
           const prodSnap = await transaction.get(prodRef);
           if (prodSnap.exists()) {
             const liveProdData = prodSnap.data();
             const liveWorkers = Array.isArray(liveProdData.workers) ? liveProdData.workers : [];
-            let nextWorkers = liveWorkers.map((w) => {
+            if (!hasSetor) {
+              const processKey = normalizeProcessKey(liveEntry.process || "");
+              const modelKey = normalizeModelKey(nextModel);
+              const liveItems = Array.isArray(liveProdData.items) ? liveProdData.items : [];
+              const generalProcess = GENERAL_RATE_PROCESSES.some((p) => normalizeProcessKey(p) === processKey);
+              const matchedLiveItem = liveItems.find((it) => normalizeModelKey(it.name || it.item || "") === modelKey);
+              const limit = generalProcess
+                ? Number(liveProdData.qty || 0)
+                : Number(matchedLiveItem?.qty || liveProdData.qty || 0);
+              const alreadyInWorkers = liveWorkers
+                .filter((w) => w.entryId !== liveEntry.id)
+                .filter((w) => normalizeProcessKey(w.process) === processKey)
+                .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
+                .reduce((sum, w) => sum + Number(w.qty || 0), 0);
+              if (limit > 0 && alreadyInWorkers + Number(updates.qty || 0) > limit) {
+                throw new Error(`Qty ${liveEntry.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${updates.qty} pcs.`);
+              }
+            }
+            const nextWorkers = liveWorkers.map((w) => {
               if (w.entryId !== liveEntry.id) return w;
               return {
                 ...w,
@@ -3133,75 +3921,82 @@ function rateDocId(productType, model, process) {
                 process: liveEntry.process || w.process,
               };
             });
-            if (!nextWorkers.some((w) => w.entryId === liveEntry.id) && nextOrderId) {
-              nextWorkers = [
-                ...nextWorkers,
-                {
-                  employeeName: liveEntry.employeeName,
-                  process: liveEntry.process,
-                  productType: liveEntry.productType || editEntryModal.productType || "Kerudung",
-                  model: nextModel,
-                  qty: updates.qty,
-                  tanggal: updates.tanggal,
-                  entryId: liveEntry.id,
-                },
-              ];
-            }
             transaction.update(prodRef, {
               workers: nextWorkers,
               updatedAt: todayStr(),
             });
           }
         }
+
         transaction.update(entryRef, updates);
       });
-      await Promise.all([refreshProductionEntries(), refreshProduksi()]);
+
       setEditEntryModal(null);
-      showToast(" Entry berhasil diupdate", 3000);
+      showToast("✅ Entry berhasil diupdate", 3000);
     } catch (e) {
       alert(friendlyErrorMessage("Update data", e));
     } finally {
       setIsSaving(false);
     }
   }
+
+
   function isGajianMarker(p) {
     if (!p || !normalizeWorkerNameKey(p.employeeName)) return false;
+
+    // Hanya dokumen marker status gajian yang boleh dipakai untuk badge
+    // Sudah/Belum Gajian. Jangan membaca payroll gaji asli hanya karena
+    // punya status "sudah_dibayar", supaya nominal gaji tidak salah dianggap
+    // sebagai marker periode.
     const isMarkerSource = p.source === "gallery-produksi-gaji-marker";
     const isMarkerType = p.type === "status_gajian_periode";
     const zeroAmount = Number(p.totalAmount || 0) === 0;
+
     return Boolean((isMarkerSource || isMarkerType) && zeroAmount);
   }
+
   function markerMatchesPeriode(p, dari = rekapDari, sampai = rekapSampai) {
     const targetDari = dateKey(dari);
     const targetSampai = dateKey(sampai);
     if (!targetDari || !targetSampai) return false;
+
     const markerDari = dateKey(p?.periodeGajiDari || p?.periodeDari || p?.tanggalDari || p?.startDate);
     const markerSampai = dateKey(p?.periodeGajiSampai || p?.periodeSampai || p?.tanggalSampai || p?.endDate);
+
+    // Data marker lama disimpan dengan periode exact. Setelah periode rekap dibetulkan
+    // menjadi Minggu-Sabtu, marker lama seperti 2026-05-16 s/d 2026-05-23
+    // harus tetap terbaca untuk periode baru 2026-05-17 s/d 2026-05-23.
     if (markerDari === targetDari && markerSampai === targetSampai) return true;
     return dateRangesOverlap(markerDari, markerSampai, targetDari, targetSampai);
   }
+
   function payrollMarkerFor(nama, dari = rekapDari, sampai = rekapSampai) {
     const workerKey = normalizeWorkerNameKey(nama);
     if (!workerKey) return null;
+
     return payrollExpenses.find((p) =>
       isGajianMarker(p) &&
       normalizeWorkerNameKey(p.employeeName) === workerKey &&
       markerMatchesPeriode(p, dari, sampai)
     ) || null;
   }
+
   function sudahGajian(nama, dari = rekapDari, sampai = rekapSampai) {
     return Boolean(payrollMarkerFor(nama, dari, sampai));
   }
+
   async function batalkanSudahGajian(nama, dari = rekapDari, sampai = rekapSampai) {
     const marker = payrollMarkerFor(nama, dari, sampai);
     if (!marker?.id) return alert("Data status gajian tidak ditemukan.");
     if (marker.source !== "gallery-produksi-gaji-marker" && marker.type !== "status_gajian_periode") {
       return alert("Status ini berasal dari data payroll lama, tidak bisa dibatalkan otomatis dari tombol ini.");
     }
+
     const employeeDisplay = displayWorkerName(nama);
     const workerKey = normalizeWorkerNameKey(nama);
     const periodeKey = `${dateKey(dari)}_${dateKey(sampai)}`;
     const historyRef = doc(db, C.GAJIAN_HISTORY, `gajian_${safeDocId(workerKey, "worker")}_${safeDocId(periodeKey, "periode")}`);
+
     const relatedKasbon = kasbonList.filter((k) => {
       if (normalizeWorkerNameKey(k.employeeName || "") !== workerKey) return false;
       return (Array.isArray(k.cicilan) ? k.cicilan : []).some((c) =>
@@ -3210,12 +4005,14 @@ function rateDocId(productType, model, process) {
         dateKey(c?.periodeGajiSampai) === dateKey(sampai)
       );
     });
+
     let pesan = `Batalkan status sudah gajian untuk ${employeeDisplay}?`;
     if (Number(marker.potonganKasbon || 0) > 0 || relatedKasbon.length > 0) {
       pesan += `\n\nPotongan kasbon periode ini juga akan dikembalikan dan riwayat gajian otomatis akan dihapus.`;
     }
     const ok = window.confirm(pesan);
     if (!ok) return;
+
     setIsSaving(true);
     try {
       await runTransaction(db, async (transaction) => {
@@ -3226,6 +4023,7 @@ function rateDocId(productType, model, process) {
         if (liveMarker.source !== "gallery-produksi-gaji-marker" && liveMarker.type !== "status_gajian_periode") {
           throw new Error("Marker gajian ini bukan marker otomatis Gallery Produksi.");
         }
+
         const kasbonRefs = relatedKasbon.map((k) => doc(db, C.KASBON, k.id));
         const kasbonRollbackUpdates = [];
         for (const ref of kasbonRefs) {
@@ -3251,19 +4049,24 @@ function rateDocId(productType, model, process) {
             },
           });
         }
+
         kasbonRollbackUpdates.forEach(({ ref, payload }) => transaction.update(ref, payload));
         transaction.delete(markerRef);
         transaction.delete(historyRef);
       });
-      showToast(" Status gajian dibatalkan dan kasbon dikembalikan", 3500);
+      showToast("↩️ Status gajian dibatalkan dan kasbon dikembalikan", 3500);
       refreshKasbon();
       refreshPayroll();
+      refreshGajianHistory();
     } catch (e) {
       alert(friendlyErrorMessage("Membatalkan status gajian", e));
     } finally {
       setIsSaving(false);
     }
   }
+
+
+
   async function simpanGajianLama(form) {
     if (!form.employeeName || !form.tanggalGaji || !form.periodeGajiDari || !form.periodeGajiSampai || !form.jumlah) {
       return alert("Lengkapi semua field: nama pekerja, tanggal gaji, periode, dan jumlah.");
@@ -3281,7 +4084,7 @@ function rateDocId(productType, model, process) {
         source: "input_manual_lama",
         createdAt: todayStr(),
       });
-      showToast(" Riwayat gajian berhasil disimpan", 3000);
+      showToast("✅ Riwayat gajian berhasil disimpan", 3000);
       refreshGajianHistory();
       setFormGajianLama({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
     } catch (e) {
@@ -3290,6 +4093,8 @@ function rateDocId(productType, model, process) {
       setIsSaving(false);
     }
   }
+
+  // ── Helper Kasbon ────────────────────────────────────────────────────────────
   function kasbonAktifUntukPekerja(nama) {
     const key = normalizeWorkerNameKey(nama);
     return kasbonList.filter((k) =>
@@ -3298,44 +4103,42 @@ function rateDocId(productType, model, process) {
       Number(k.sisaKasbon || 0) > 0
     ).sort((a, b) => (a.tanggal || "").localeCompare(b.tanggal || ""));
   }
+
   function totalSisaKasbonPekerja(nama) {
     return kasbonAktifUntukPekerja(nama).reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
   }
+
   async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     if (!nama) return;
     if (sudahGajian(nama, dari, sampai)) {
-      showToast(" Status gajian sudah tercatat", 2500);
+      showToast("✅ Status gajian sudah tercatat", 2500);
       return;
     }
     const jumlah = Number(r?.gaji || 0);
     if (jumlah <= 0) return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
+
     const kasbonAktif = kasbonAktifUntukPekerja(nama);
     const totalKasbon = kasbonAktif.reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
     const potonganKasbonEstimasi = Math.min(totalKasbon, jumlah);
     const gajiDiterimaEstimasi = jumlah - potonganKasbonEstimasi;
-    const belumSetorPeriode = productionEntries.filter((e) =>
-      normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
-      dateInRange(e.tanggal, dari, sampai) &&
-      Number(getEntrySetorTotals(e).sisaSetor || 0) > 0
-    );
-    const belumSetorPcsPeriode = belumSetorPeriode.reduce((s, e) => s + Number(getEntrySetorTotals(e).sisaSetor || 0), 0);
+
     let konfirmasiMsg = `Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nGaji kotor: ${money(jumlah)}`;
-    if (belumSetorPcsPeriode > 0) {
-      konfirmasiMsg += `\n\n Masih ada ${belumSetorPcsPeriode} pcs borongan periode ini yang belum setor. Item itu belum masuk gaji sekarang dan akan masuk setelah disetor.`;
-    }
     if (totalKasbon > 0) {
-      konfirmasiMsg += `\n\n Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
+      konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
     }
     const ok = window.confirm(konfirmasiMsg);
     if (!ok) return;
+
     const employeeDisplay = displayWorkerName(nama);
     const workerKey = normalizeWorkerNameKey(nama);
     const periodeKey = `${dateKey(dari)}_${dateKey(sampai)}`;
     const markerRef = doc(db, C.PAYROLL_EXPENSES, `gaji_marker_${safeDocId(workerKey, "worker")}_${safeDocId(periodeKey, "periode")}`);
     const historyRef = doc(db, C.GAJIAN_HISTORY, `gajian_${safeDocId(workerKey, "worker")}_${safeDocId(periodeKey, "periode")}`);
     const kasbonRefs = kasbonAktif.map((k) => ({ local: k, ref: doc(db, C.KASBON, k.id) }));
+
     let actualPotonganKasbon = 0;
     let actualGajiDiterima = jumlah;
+
     setIsSaving(true);
     try {
       const existingSnap = await getDocs(
@@ -3348,12 +4151,14 @@ function rateDocId(productType, model, process) {
         )
       );
       if (!existingSnap.empty) {
-        showToast(" Status gajian sudah tercatat (cek server)", 2500);
+        showToast("✅ Status gajian sudah tercatat (cek server)", 2500);
         return;
       }
+
       await runTransaction(db, async (transaction) => {
         const markerSnap = await transaction.get(markerRef);
         if (markerSnap.exists()) throw new Error("Status gajian periode ini sudah tercatat.");
+
         const liveKasbon = [];
         for (const item of kasbonRefs) {
           const snap = await transaction.get(item.ref);
@@ -3364,9 +4169,11 @@ function rateDocId(productType, model, process) {
             liveKasbon.push({ ref: item.ref, data, sisaLive, id: item.local.id });
           }
         }
+
         let sisaPotong = Math.min(jumlah, liveKasbon.reduce((s, k) => s + k.sisaLive, 0));
         actualPotonganKasbon = sisaPotong;
         actualGajiDiterima = jumlah - actualPotonganKasbon;
+
         for (const kasbon of liveKasbon) {
           if (sisaPotong <= 0) break;
           const actualPotong = Math.min(sisaPotong, kasbon.sisaLive);
@@ -3392,6 +4199,7 @@ function rateDocId(productType, model, process) {
           });
           sisaPotong -= actualPotong;
         }
+
         transaction.set(markerRef, {
           source: "gallery-produksi-gaji-marker",
           type: "status_gajian_periode",
@@ -3410,6 +4218,7 @@ function rateDocId(productType, model, process) {
           detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
           createdAt: todayStr(),
         });
+
         transaction.set(historyRef, {
           employeeName: employeeDisplay,
           tanggalGaji: todayStr(),
@@ -3424,9 +4233,10 @@ function rateDocId(productType, model, process) {
           createdAt: todayStr(),
         });
       });
+
       const toastMsg = actualPotonganKasbon > 0
-        ? ` Gajian tersimpan  Kasbon dipotong ${money(actualPotonganKasbon)}`
-        : " Status berubah menjadi Sudah gajian";
+        ? `✅ Gajian tersimpan · Kasbon dipotong ${money(actualPotonganKasbon)}`
+        : "✅ Status berubah menjadi Sudah gajian";
       showToast(toastMsg, 3500);
       refreshKasbon();
       refreshPayroll();
@@ -3437,17 +4247,18 @@ function rateDocId(productType, model, process) {
       setIsSaving(false);
     }
   }
+
   async function hapusGajianHistory(id) {
     if (!window.confirm("Hapus riwayat gajian ini?")) return;
     try {
       await deleteDoc(doc(db, C.GAJIAN_HISTORY, id));
       await refreshGajianHistory();
-      showToast(" Riwayat gajian dihapus", 2500);
-      refreshGajianHistory();
+      showToast("🗑️ Riwayat gajian dihapus", 2500);
     } catch (e) {
       alert(friendlyErrorMessage("Menghapus data", e));
     }
   }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -3456,27 +4267,38 @@ function rateDocId(productType, model, process) {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
+
+  function safeFileName(value) {
+    return String(value || "SlipGaji")
+      .trim()
+      .replace(/[^a-zA-Z0-9-_]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "SlipGaji";
+  }
+
   function buildSlipHtml(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     const fmt = (v) => new Intl.NumberFormat("id-ID", {
       style: "currency",
       currency: "IDR",
       maximumFractionDigits: 0,
     }).format(Number(v || 0));
+
     const sortedDetail = [...(r?.detail || [])].sort((a, b) => {
       const da = a.tanggalSetor || a.tanggal || "";
       const db = b.tanggalSetor || b.tanggal || "";
       return da.localeCompare(db);
     });
+
     const rows = sortedDetail.map((d, i) => {
       const tgl = escapeHtml(d.tanggalSetor || d.tanggal || "-");
       const invoice = d.invoice ? `<br><span style="font-size:10px;color:#94a3b8;">${escapeHtml(d.invoice)}</span>` : "";
       const pesanan = d.customer && d.customer !== "-" ? `${escapeHtml(d.customer)}${invoice}` : escapeHtml(d.invoice || "-");
-      const prosesModel = `${escapeHtml(d.process || "")}${d.model && d.model !== "-" ? "  " + escapeHtml(d.model) : ""}`;
+      const prosesModel = `${escapeHtml(d.process || "")}${d.model && d.model !== "-" ? " · " + escapeHtml(d.model) : ""}`;
       const setor = d.sudahSetor ? Number(d.qtySetor || 0) : null;
       const reject = Number(d.qtyReject || 0);
       const pendapatan = d.sudahSetor
         ? `<strong style="color:#16a34a;">${fmt(d.gaji)}</strong>`
         : `<span style="color:#b45309;">Belum setor</span>`;
+
       return `<tr>
         <td>${i + 1}</td>
         <td>${tgl}</td>
@@ -3489,21 +4311,24 @@ function rateDocId(productType, model, process) {
         <td class="right">${pendapatan}</td>
       </tr>`;
     }).join("");
+
     const carryRows = (carryOver || []).map((e) => {
       const entryOrder = orders.find((o) => o.id === e.orderId);
-      const model = e.model && e.model !== "-" ? `  ${escapeHtml(e.model)}` : "";
+      const model = e.model && e.model !== "-" ? ` · ${escapeHtml(e.model)}` : "";
       const periodeAsli = e.tanggal ? getMingguPeriod(e.tanggal) : null;
       const periode = periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : (e.tanggal || "-");
       const cust = e.customer || entryOrder?.customer || "-";
-      const sisaSetor = Number(getEntrySetorTotals(e).sisaSetor || 0);
+      const sisaSetor = Number(setorTotals(e).sisaSetor || 0);
       return `<div class="carry-item">
         <strong>${escapeHtml(e.process || "")}${model}</strong>
-        <span>${escapeHtml(cust)}${e.invoice ? "  " + escapeHtml(e.invoice) : ""}</span>
-        <span>${escapeHtml(periode)}  ${sisaSetor} pcs belum disetor</span>
+        <span>${escapeHtml(cust)}${e.invoice ? " · " + escapeHtml(e.invoice) : ""}</span>
+        <span>${escapeHtml(periode)} · ${sisaSetor} pcs belum disetor</span>
       </div>`;
     }).join("");
+
     const cetakTgl = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
     const logoSrc = "/logo-gk.png";
+
     return `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>Slip Pendapatan - ${escapeHtml(nama)}</title>
@@ -3519,7 +4344,7 @@ function rateDocId(productType, model, process) {
     </head><body>
       <div class="toolbar"><button onclick="window.print()">Cetak / Simpan PDF</button></div>
       <div class="slip">
-        <div class="header"><img src="${logoSrc}" onerror="this.style.display='none'" /><div><h1>Slip Pendapatan Borongan</h1><p>Gallery Kerudung  Dokumen resmi penggajian borongan</p></div></div>
+        <div class="header"><img src="${logoSrc}" onerror="this.style.display='none'" /><div><h1>Slip Pendapatan Borongan</h1><p>Gallery Kerudung · Dokumen resmi penggajian borongan</p></div></div>
         <div class="body">
           <div class="info">
             <div class="info-row"><span>Nama Pekerja</span><strong>${escapeHtml(nama)}</strong></div>
@@ -3534,16 +4359,18 @@ function rateDocId(productType, model, process) {
           ${carryRows ? `<div class="carry"><h3>Tanggungan Minggu Lalu (Belum Disetor)</h3>${carryRows}</div>` : ""}
           <div class="ttd"><div class="ttd-box"><div class="label">Hormat kami,</div><div class="name">${escapeHtml(nama)}</div></div><div class="ttd-box"><div class="label">Mengetahui, Gallery Kerudung</div><div class="name">Astri Apriani</div></div></div>
         </div>
-        <div class="footer">Dicetak otomatis oleh sistem Gallery Kerudung  ${escapeHtml(cetakTgl)}</div>
+        <div class="footer">Dicetak otomatis oleh sistem Gallery Kerudung · ${escapeHtml(cetakTgl)}</div>
       </div>
     </body></html>`;
   }
+
   function downloadSlipGaji(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     try {
       const html = buildSlipHtml(nama, r, dari, sampai, carryOver);
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const filename = `SlipGaji_${safeFileName(nama)}_${safeFileName(dari)}_sd_${safeFileName(sampai)}.html`;
+
       const a = document.createElement("a");
       a.href = url;
       a.download = filename;
@@ -3551,19 +4378,22 @@ function rateDocId(productType, model, process) {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1500);
+
       const printTab = window.open("", "_blank", "noopener,noreferrer");
       if (printTab) {
         printTab.document.open();
         printTab.document.write(html);
         printTab.document.close();
       }
-      showToast(" Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.", 4500);
+
+      showToast("✅ Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.", 4500);
       return html;
     } catch (e) {
       alert(friendlyErrorMessage("Membuat slip gaji", e));
       return "";
     }
   }
+
   function drawRoundedRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -3577,6 +4407,7 @@ function rateDocId(productType, model, process) {
     ctx.quadraticCurveTo(x, y, x + r, y);
     ctx.closePath();
   }
+
   function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
     const words = String(text || "").split(/\s+/);
     let line = "";
@@ -3596,6 +4427,7 @@ function rateDocId(productType, model, process) {
     if (line) ctx.fillText(line, x, y);
     return y + lineHeight;
   }
+
   function loadImageForCanvas(src) {
     return new Promise((resolve) => {
       const img = new Image();
@@ -3604,6 +4436,7 @@ function rateDocId(productType, model, process) {
       img.src = src;
     });
   }
+
   function drawFallbackLogo(ctx, x, y, size) {
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.95)";
@@ -3617,6 +4450,7 @@ function rateDocId(productType, model, process) {
     ctx.fillText("GK", x + size / 2, y + size / 2 + 1);
     ctx.restore();
   }
+
   async function createSlipImageFile(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     try {
       const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
@@ -3627,6 +4461,7 @@ function rateDocId(productType, model, process) {
       const hasWarning = Number(r?.belumSetor || 0) > 0;
       const hasCarryOver = (carryOver || []).length > 0;
       const H = 870 + detailRows.length * 74 + (extraRows > 0 ? 28 : 0) + (hasWarning ? 56 : 0) + (hasCarryOver ? 72 : 0);
+      // Render 2× resolusi agar gambar tajam di layar HP (retina/high-DPI)
       const DPR = 2;
       const canvas = document.createElement("canvas");
       canvas.width = W * DPR;
@@ -3636,13 +4471,16 @@ function rateDocId(productType, model, process) {
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Canvas tidak tersedia di browser ini.");
       ctx.scale(DPR, DPR);
+
       ctx.fillStyle = "#fdf2f8";
       ctx.fillRect(0, 0, W, H);
+
       const grad = ctx.createLinearGradient(0, 0, W, 120);
       grad.addColorStop(0, "#ec4899");
       grad.addColorStop(1, "#a855f7");
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, W, 120);
+
       const logoImg = await loadImageForCanvas("/logo-gk.png");
       if (logoImg) {
         ctx.save();
@@ -3657,6 +4495,7 @@ function rateDocId(productType, model, process) {
       } else {
         drawFallbackLogo(ctx, 32, 22, 76);
       }
+
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 30px Segoe UI, Arial";
       ctx.fillText("Slip Pendapatan Borongan", 126, 48);
@@ -3666,6 +4505,7 @@ function rateDocId(productType, model, process) {
       ctx.font = "15px Segoe UI, Arial";
       ctx.fillStyle = "rgba(255,255,255,0.72)";
       ctx.fillText(`Periode ${dari} s/d ${sampai}`, 126, 100);
+
       let y = 148;
       drawRoundedRect(ctx, 28, y, W - 56, 96, 18);
       ctx.fillStyle = "#ffffff";
@@ -3680,6 +4520,7 @@ function rateDocId(productType, model, process) {
       ctx.fillText(String(nama || "-"), W - 52, y + 34);
       ctx.fillText(new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" }), W - 52, y + 68);
       ctx.textAlign = "left";
+
       y += 118;
       const statW = (W - 76) / 3;
       [["Diberikan", r?.pcsAwal || 0, "#ede9fe", "#5b21b6"], ["Disetor", r?.pcsSetor || 0, "#dcfce7", "#16a34a"], ["Reject", r?.pcsReject || 0, Number(r?.pcsReject || 0) > 0 ? "#fee2e2" : "#f1f5f9", Number(r?.pcsReject || 0) > 0 ? "#ef4444" : "#64748b"]].forEach(([label, val, bg, color], i) => {
@@ -3696,6 +4537,7 @@ function rateDocId(productType, model, process) {
         ctx.fillText(label, x + statW / 2, y + 54);
         ctx.textAlign = "left";
       });
+
       y += 94;
       drawRoundedRect(ctx, 28, y, W - 56, 44, 14);
       const hgrad = ctx.createLinearGradient(28, y, W - 28, y + 44);
@@ -3707,13 +4549,14 @@ function rateDocId(productType, model, process) {
       ctx.font = "bold 16px Segoe UI, Arial";
       ctx.fillText("Detail Pekerjaan", 50, y + 28);
       y += 54;
+
       detailRows.forEach((d) => {
         drawRoundedRect(ctx, 28, y, W - 56, 64, 14);
         ctx.fillStyle = d.sudahSetor ? "#f0fdf4" : "#fefce8";
         ctx.fill();
         ctx.fillStyle = "#2d1b69";
         ctx.font = "bold 16px Segoe UI, Arial";
-        drawWrappedText(ctx, `${d.process || ""}${d.model && d.model !== "-" ? "  " + d.model : ""}`, 50, y + 23, 450, 18, 1);
+        drawWrappedText(ctx, `${d.process || ""}${d.model && d.model !== "-" ? " · " + d.model : ""}`, 50, y + 23, 450, 18, 1);
         ctx.fillStyle = "#94a3b8";
         ctx.font = "13px Segoe UI, Arial";
         drawWrappedText(ctx, `${d.customer || "-"}${d.invoice ? " / " + d.invoice : ""}`, 50, y + 45, 440, 16, 1);
@@ -3727,12 +4570,14 @@ function rateDocId(productType, model, process) {
         ctx.textAlign = "left";
         y += 74;
       });
+
       if (extraRows > 0) {
         ctx.fillStyle = "#64748b";
         ctx.font = "14px Segoe UI, Arial";
         ctx.fillText(`+ ${extraRows} detail lain ada di slip PDF/HTML`, 50, y + 8);
         y += 28;
       }
+
       if (Number(r?.belumSetor || 0) > 0) {
         drawRoundedRect(ctx, 28, y, W - 56, 42, 12);
         ctx.fillStyle = "#fefce8";
@@ -3742,15 +4587,17 @@ function rateDocId(productType, model, process) {
         ctx.fillText(`Masih ada ${Number(r.belumSetor)} pcs belum disetor`, 50, y + 27);
         y += 56;
       }
+
       if ((carryOver || []).length > 0) {
         drawRoundedRect(ctx, 28, y, W - 56, 58, 12);
         ctx.fillStyle = "#fff7ed";
         ctx.fill();
         ctx.fillStyle = "#b45309";
         ctx.font = "bold 15px Segoe UI, Arial";
-        ctx.fillText(`Tanggungan minggu lalu: ${(carryOver || []).reduce((s, e) => s + Number(getEntrySetorTotals(e).sisaSetor || 0), 0)} pcs`, 50, y + 34);
+        ctx.fillText(`Tanggungan minggu lalu: ${(carryOver || []).reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0)} pcs`, 50, y + 34);
         y += 72;
       }
+
       drawRoundedRect(ctx, 28, y, W - 56, 86, 18);
       const totalGrad = ctx.createLinearGradient(28, y, W - 28, y + 86);
       totalGrad.addColorStop(0, "#f0fdf4");
@@ -3763,7 +4610,11 @@ function rateDocId(productType, model, process) {
       ctx.fillStyle = "#16a34a";
       ctx.font = "bold 34px Segoe UI, Arial";
       ctx.fillText(fmt(r?.gaji), 52, y + 66);
+
       y += 112;
+
+      // Tanda tangan ikut digambar ke PNG supaya hasil Share WA sama lengkapnya
+      // dengan slip HTML/PDF.
       const signY = y;
       const signGap = 24;
       const signW = (W - 56 - signGap) / 2;
@@ -3779,31 +4630,42 @@ function rateDocId(productType, model, process) {
         ctx.strokeStyle = "#e9d5ff";
         ctx.lineWidth = 1.5;
         ctx.stroke();
+
         ctx.textAlign = "center";
         ctx.fillStyle = "#94a3b8";
         ctx.font = "13px Segoe UI, Arial";
         ctx.fillText(box.label, box.x + signW / 2, signY + 28);
+
         ctx.strokeStyle = "#c4b5fd";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(box.x + signW * 0.2, signY + 92);
         ctx.lineTo(box.x + signW * 0.8, signY + 92);
         ctx.stroke();
+
         ctx.fillStyle = "#2d1b69";
         ctx.font = "bold 14px Segoe UI, Arial";
         ctx.fillText(box.name, box.x + signW / 2, signY + 112);
         ctx.textAlign = "left";
       });
+
       y = signY + signH + 38;
       ctx.fillStyle = "#c084fc";
       ctx.font = "bold 14px Segoe UI, Arial";
       ctx.textAlign = "center";
-      ctx.fillText(`Gallery Kerudung  ${new Date().toLocaleDateString("id-ID")}`, W / 2, y);
+      ctx.fillText(`Gallery Kerudung · ${new Date().toLocaleDateString("id-ID")}`, W / 2, y);
       ctx.textAlign = "left";
+
+      // Cara share dibuat sama seperti app Gallery Kerudung:
+      // 1) Canvas diubah menjadi data URL PNG.
+      // 2) Data URL diubah menjadi File.
+      // 3) Jika browser/device mendukung Web Share file, buka share sheet agar WhatsApp bisa dipilih.
+      // 4) Jika tidak mendukung, baru fallback download PNG.
       const imgUrl = canvas.toDataURL("image/png");
       const res = await fetch(imgUrl);
       const blob = await res.blob();
       if (!blob) throw new Error("Gagal membuat gambar slip.");
+
       const filename = `SlipGaji_${safeFileName(nama)}_${safeFileName(dari)}_sd_${safeFileName(sampai)}.png`;
       const file = new File([blob], filename, { type: "image/png" });
       return { imgUrl, file, filename, nama, dari, sampai, total: fmt(r?.gaji) };
@@ -3812,9 +4674,11 @@ function rateDocId(productType, model, process) {
       return null;
     }
   }
+
   async function shareSlipGajiAsImage(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
     const slipImage = await createSlipImageFile(nama, r, dari, sampai, carryOver);
     if (!slipImage?.file) return;
+
     try {
       if (navigator.canShare && navigator.canShare({ files: [slipImage.file] }) && navigator.share) {
         await navigator.share({
@@ -3822,21 +4686,268 @@ function rateDocId(productType, model, process) {
           title: `Slip Gaji ${slipImage.nama}`,
           text: `Slip Pendapatan Borongan - ${slipImage.nama} (${slipImage.dari} s/d ${slipImage.sampai})`,
         });
-        showToast(" Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.", 3500);
+        showToast("✅ Pilih WhatsApp di menu share untuk mengirim slip sebagai gambar.", 3500);
         return;
       }
+
       const a = document.createElement("a");
       a.href = slipImage.imgUrl;
       a.download = slipImage.filename || "SlipGaji.png";
       document.body.appendChild(a);
       a.click();
       a.remove();
-      showToast(" Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.", 6000);
+      showToast("⚠️ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.", 6000);
     } catch (e) {
       if (e?.name === "AbortError") return;
       alert(friendlyErrorMessage("Share slip gaji", e));
     }
   }
+
+  const rekapData = useMemo(() => {
+  const rekapPeriodReady = Boolean(rekapDari && rekapSampai);
+  const inRange = (tanggal) => rekapPeriodReady && dateInRange(tanggal, rekapDari, rekapSampai);
+  const filtered = productionEntries.filter((e) => {
+    const hasInputInRange = inRange(e.tanggal);
+    const hasSetorInRange = setorHistoryInRange(e, rekapDari, rekapSampai).length > 0;
+    return hasInputInRange || hasSetorInRange;
+  });
+  const byProses = {};
+  filtered.forEach((e) => {
+    const p = e.process || "Lainnya";
+    const allTotals = setorTotals(e);
+    const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
+    const inputInRange = inRange(e.tanggal);
+    // Basis "Diberi" di Rekap tidak boleh hanya melihat tanggal pemberian.
+    // Kalau pekerjaan diberi minggu lalu tetapi disetor minggu ini, qty tersebut tetap harus menjadi basis rekap periode ini.
+    // Ini mencegah tampilan tidak logis seperti Diberi 174 tetapi Setor 554.
+    const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+    const qtyBasisPeriode = inputInRange
+      ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
+      : aktivitasSetorPeriode;
+    if (!byProses[p]) byProses[p] = { qty: 0, qtySetor: 0, qtyReject: 0, gaji: 0 };
+    byProses[p].qty += Math.max(0, qtyBasisPeriode);
+    byProses[p].qtySetor += Number(rangeTotals.qtySetor || 0);
+    byProses[p].qtyReject += Number(rangeTotals.qtyReject || 0);
+    byProses[p].gaji += Number(rangeTotals.totalWageSetor || 0);
+    if (inputInRange && rangeTotals.qtySetor === 0 && rangeTotals.qtyReject === 0 && allTotals.statusSetor !== "belum_setor") {
+      // Entry masuk periode ini tetapi setor terjadi di luar periode: tetap tampil sebagai belum masuk gaji periode.
+    }
+  });
+  const totalQty = filtered.reduce((s, e) => {
+    const inputInRange = inRange(e.tanggal);
+    const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
+    const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+    const qtyBasisPeriode = inputInRange
+      ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
+      : aktivitasSetorPeriode;
+    return s + Math.max(0, qtyBasisPeriode);
+  }, 0);
+  const totalSetor = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtySetor || 0), 0);
+  const totalReject = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtyReject || 0), 0);
+  const totalGaji = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).totalWageSetor || 0), 0);
+  const prosesOrder = ["Potong", "Jahit", "Pengemasan QC"];
+  const prosesKeys = [...prosesOrder.filter((p) => byProses[p]), ...Object.keys(byProses).filter((p) => !prosesOrder.includes(p))];
+  // Rekap per proses harus berdiri sendiri per proses, bukan memakai rantai Potong -> Jahit -> QC.
+  // Alasannya: banyak pekerjaan carry-over dari periode sebelumnya disetor pada periode ini.
+  // Jadi angka "Diberi" minimal mengikuti aktivitas setor/reject periode ini agar tidak muncul Diberi < Setor.
+  Object.keys(byProses).forEach((p) => {
+    const aktivitasSetorPeriode = Number(byProses[p].qtySetor || 0) + Number(byProses[p].qtyReject || 0);
+    byProses[p].qtyDiberikan = Math.max(Number(byProses[p].qty || 0), aktivitasSetorPeriode);
+  });
+
+  // Rekap per pekerja: gaji dihitung dari transaksi setor yang masuk periode, bukan sekadar qty awal.
+  const rekapMap = {};
+  filtered.forEach((e) => {
+    const namaKey = normalizeWorkerNameKey(e.employeeName);
+    const nama = canonicalByExisting(e.employeeName, workerNameOptions, "worker");
+    const inputInRange = inRange(e.tanggal);
+    const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
+    const rangeTotals = setorTotalsFromHistory(rangeHistory);
+    const allTotals = setorTotals(e);
+    if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
+    // Basis "Diberi" per pekerja: pekerjaan yang diberi dalam periode + pekerjaan lama yang disetor/reject dalam periode.
+    // Jadi angka Diberi tidak lebih kecil dari Setor karena carry-over minggu sebelumnya.
+    const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+    const qtyBasisPeriode = inputInRange
+      ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
+      : aktivitasSetorPeriode;
+    rekapMap[nama].pcsAwal += Math.max(0, qtyBasisPeriode);
+    rekapMap[nama].pcsSetor += Number(rangeTotals.qtySetor || 0);
+    rekapMap[nama].pcsReject += Number(rangeTotals.qtyReject || 0);
+    rekapMap[nama].gaji += Number(rangeTotals.totalWageSetor || 0);
+    if (inputInRange) rekapMap[nama].belumSetor += Number(allTotals.sisaSetor || 0);
+    // Fallback customer dari orders jika entry lama tidak punya field customer
+    const entryOrder = orderLookupForCards.byId.get(String(e.orderId || "").trim());
+    rekapMap[nama].detail.push({
+      customer: e.customer || entryOrder?.customer || "-",
+      invoice: e.invoice || entryOrder?.invoice || "",
+      model: displayModelName(e.model || "-"),
+      process: e.process || "",
+      qty: Math.max(0, qtyBasisPeriode),
+      qtyAsli: Number(e.qty || 0),
+      qtySetor: Number(rangeTotals.qtySetor || 0),
+      qtyReject: Number(rangeTotals.qtyReject || 0),
+      totalSetorSemua: Number(allTotals.qtySetor || 0),
+      sisaSetor: Number(allTotals.sisaSetor || 0),
+      rate: Number(e.rate || 0),
+      sudahSetor: Number(rangeTotals.qtySetor || 0) > 0 || Number(rangeTotals.qtyReject || 0) > 0,
+      setorSebagian: allTotals.statusSetor === "setor_sebagian",
+      gaji: Number(rangeTotals.totalWageSetor || 0),
+      tanggal: e.tanggal || "",
+      tanggalSetor: rangeHistory.length > 0 ? rangeHistory[rangeHistory.length - 1].tanggalSetor : (allTotals.tanggalSetor || ""),
+      setorHistory: rangeHistory,
+    });
+  });
+  const rekapPerkerja = Object.entries(rekapMap)
+    // Rekap Gaji Per Orang hanya menampilkan pekerja yang punya aktivitas setor/reject/gaji pada periode.
+    // Borongan yang baru diberikan tetapi belum setor tetap tampil di bagian "Borongan Belum Masuk Rekap".
+    .filter(([, r]) => Number(r.pcsSetor || 0) > 0 || Number(r.pcsReject || 0) > 0 || Number(r.gaji || 0) > 0)
+    .sort((a, b) => b[1].gaji - a[1].gaji);
+  const rekapGajianKeseluruhan = rekapPerkerja.reduce((acc, [nama, r]) => {
+    const sudah = sudahGajian(nama, rekapDari, rekapSampai);
+    const nominal = Number(r?.gaji || 0);
+    acc.totalPekerja += 1;
+    acc.totalGaji += nominal;
+    acc.totalPcsSetor += Number(r?.pcsSetor || 0);
+    acc.totalPcsReject += Number(r?.pcsReject || 0);
+    acc.totalBelumSetor += Number(r?.belumSetor || 0);
+    if (sudah) {
+      acc.sudahGajian += 1;
+      acc.totalSudahDibayar += nominal;
+    } else {
+      acc.belumGajian += 1;
+      acc.totalBelumDibayar += nominal;
+    }
+    return acc;
+  }, {
+    totalPekerja: 0,
+    sudahGajian: 0,
+    belumGajian: 0,
+    totalGaji: 0,
+    totalSudahDibayar: 0,
+    totalBelumDibayar: 0,
+    totalPcsSetor: 0,
+    totalPcsReject: 0,
+    totalBelumSetor: 0,
+  });
+
+  const allTimePayrollRows = payrollExpenses
+    .filter(isOfficialGajiPayroll)
+    .sort((a, b) => String(dateKey(b.tanggal || b.tanggalSetor || b.createdAt || "")).localeCompare(String(dateKey(a.tanggal || a.tanggalSetor || a.createdAt || ""))));
+
+  const allTimePayrollMap = {};
+  allTimePayrollRows.forEach((p) => {
+    const nama = canonicalByExisting(p.employeeName, workerNameOptions, "worker");
+    const key = normalizeWorkerNameKey(nama);
+    if (!key) return;
+    if (!allTimePayrollMap[nama]) {
+      allTimePayrollMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, transaksi: 0, firstDate: "", lastDate: "", detail: [] };
+    }
+
+    const tanggal = dateKey(p.tanggal || p.tanggalSetor || p.createdAt || "");
+    const pcs = Number(p.totalPcs || p.qtySetor || p.qty || 0);
+    const reject = Number(p.totalReject || p.qtyReject || 0);
+    const gaji = Number(p.totalAmount || 0);
+
+    allTimePayrollMap[nama].pcsSetor += pcs;
+    allTimePayrollMap[nama].pcsReject += reject;
+    allTimePayrollMap[nama].pcsAwal += Math.max(0, pcs + reject);
+    allTimePayrollMap[nama].gaji += gaji;
+    allTimePayrollMap[nama].transaksi += 1;
+    if (tanggal) {
+      if (!allTimePayrollMap[nama].firstDate || tanggal < allTimePayrollMap[nama].firstDate) allTimePayrollMap[nama].firstDate = tanggal;
+      if (!allTimePayrollMap[nama].lastDate || tanggal > allTimePayrollMap[nama].lastDate) allTimePayrollMap[nama].lastDate = tanggal;
+    }
+    allTimePayrollMap[nama].detail.push({
+      tanggalSetor: tanggal || "-",
+      process: p.process || "-",
+      model: canonicalByExisting(p.model || p.productType || "-", modelNameOptions, "model"),
+      invoice: p.invoice || "",
+      customer: p.customer || "-",
+      qtySetor: pcs,
+      qtyReject: reject,
+      wage: gaji,
+      source: p.source || "payroll_expenses",
+    });
+  });
+
+  const rekapGajiAllTimeRows = Object.entries(allTimePayrollMap)
+    .filter(([, r]) => Number(r.gaji || 0) > 0 || Number(r.pcsSetor || 0) > 0)
+    .sort((a, b) => Number(b[1].gaji || 0) - Number(a[1].gaji || 0));
+
+  const rekapGajiAllTimeSummary = rekapGajiAllTimeRows.reduce((acc, [, r]) => {
+    acc.totalPekerja += 1;
+    acc.totalGaji += Number(r.gaji || 0);
+    acc.totalPcsSetor += Number(r.pcsSetor || 0);
+    acc.totalPcsReject += Number(r.pcsReject || 0);
+    acc.totalTransaksi += Number(r.transaksi || 0);
+    return acc;
+  }, { totalPekerja: 0, totalGaji: 0, totalPcsSetor: 0, totalPcsReject: 0, totalTransaksi: 0 });
+
+  const boronganBelumMasukRekap = !rekapPeriodReady ? [] : productionEntries
+    .map((e) => {
+      const totals = setorTotals(e);
+      const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
+      const rangeTotals = setorTotalsFromHistory(rangeHistory);
+      const inputInRange = inRange(e.tanggal);
+      const entryOrder = orderLookupForCards.byId.get(String(e.orderId || "").trim());
+      const totalProgress = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
+      const sisaSetor = Number(totals.sisaSetor || 0);
+      let alasan = "";
+      if (sisaSetor > 0 && inputInRange && rangeHistory.length === 0) alasan = "Diberikan periode ini, belum setor";
+      else if (sisaSetor > 0 && inputInRange && rangeHistory.length > 0) alasan = "Setor sebagian, masih ada sisa";
+      else if (sisaSetor > 0 && dateBefore(e.tanggal, rekapDari)) alasan = "Tanggungan dari periode sebelumnya";
+      // Borongan setelah periode rekap tidak ditampilkan di sini agar tidak membingungkan.
+      return {
+        ...e,
+        customer: e.customer || entryOrder?.customer || "-",
+        invoice: e.invoice || entryOrder?.invoice || "",
+        totalSetorSemua: Number(totals.qtySetor || 0),
+        totalRejectSemua: Number(totals.qtyReject || 0),
+        totalWageSemua: Number(totals.totalWageSetor || 0),
+        sisaSetor,
+        statusSetorHitung: totals.statusSetor,
+        tanggalSetorTerakhir: totals.tanggalSetor || "",
+        qtySetorPeriode: Number(rangeTotals.qtySetor || 0),
+        qtyRejectPeriode: Number(rangeTotals.qtyReject || 0),
+        gajiPeriode: Number(rangeTotals.totalWageSetor || 0),
+        alasan,
+      };
+    })
+    .filter((e) => e.alasan && Number(e.sisaSetor || 0) > 0)
+    .sort((a, b) => {
+      if (a.tanggal !== b.tanggal) return String(a.tanggal || "").localeCompare(String(b.tanggal || ""));
+      return displayWorkerName(a.employeeName).localeCompare(displayWorkerName(b.employeeName));
+    });
+
+  const totalBoronganBelumMasukPcs = boronganBelumMasukRekap.reduce((s, e) => s + Number(e.sisaSetor || 0), 0);
+  const totalBoronganBelumMasukGajiPotensi = boronganBelumMasukRekap.reduce((s, e) => s + (Number(e.sisaSetor || 0) * Number(e.rate || 0)), 0);
+
+
+    return {
+      rekapPeriodReady,
+      inRange,
+      filtered,
+      byProses,
+      totalQty,
+      totalSetor,
+      totalReject,
+      totalGaji,
+      prosesOrder,
+      prosesKeys,
+      rekapMap,
+      rekapPerkerja,
+      rekapGajianKeseluruhan,
+      allTimePayrollRows,
+      allTimePayrollMap,
+      rekapGajiAllTimeRows,
+      rekapGajiAllTimeSummary,
+      boronganBelumMasukRekap,
+      totalBoronganBelumMasukPcs,
+      totalBoronganBelumMasukGajiPotensi,
+    };
+  }, [productionEntries, rekapDari, rekapSampai, workerNameOptions, modelNameOptions, payrollExpenses, orders, orderLookupForCards]);
+
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center" style={{ background: "#fdf2f8" }}>
@@ -3845,6 +4956,7 @@ function rateDocId(productType, model, process) {
       </div>
     );
   }
+
   if (!user) {
     return (
       <div
@@ -3853,7 +4965,7 @@ function rateDocId(productType, model, process) {
       >
         <GlobalReadableStyle />
         <div className="w-full max-w-sm rounded-3xl bg-white/80 p-8 shadow-xl text-center" style={{ border: "1.5px solid #f9a8d4" }}>
-          <div className="mb-2 text-4xl"></div>
+          <div className="mb-2 text-4xl">🏭✨</div>
           <div
             className="mb-1 text-3xl font-bold"
             style={{
@@ -3882,8 +4994,9 @@ function rateDocId(productType, model, process) {
       </div>
     );
   }
+
   return (
-    <div className="mx-auto min-h-screen max-w-md" style={{ background: "linear-gradient(180deg,#fff7fb 0%,#fdf2f8 45%,#faf5ff 100%)" }}>
+    <div className="mx-auto min-h-screen max-w-md" style={{ background: "#fdf2f8" }}>
       <GlobalReadableStyle />
       {toast && (
         <div className="fixed left-4 right-4 top-4 z-[60] rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-xl"
@@ -3891,11 +5004,12 @@ function rateDocId(productType, model, process) {
           {toast}
         </div>
       )}
-      <div className="p-6 text-white relative overflow-hidden" style={{ background: "linear-gradient(135deg,#db2777 0%,#7c3aed 100%)" }}>
+
+      <div className="p-6 text-white relative overflow-hidden" style={{ background: "linear-gradient(135deg,#ec4899 0%,#a855f7 100%)" }}>
         <div className="flex items-start justify-between relative z-10">
           <div>
-            <div className="hd-header-title text-4xl font-black leading-tight">Gallery Produksi</div>
-            <div className="mt-2 text-lg font-bold opacity-95"> made by order </div>
+            <div className="text-4xl font-extrabold leading-tight">Gallery Produksi</div>
+            <div className="mt-2 text-lg opacity-90">💕 made by order ✨</div>
           </div>
           <div className="flex flex-col items-center gap-3">
             <img
@@ -3905,56 +5019,59 @@ function rateDocId(productType, model, process) {
               onError={(e) => { e.currentTarget.style.display = "none"; }}
               style={{ background: "rgba(255,255,255,0.14)", border: "3px solid rgba(255,255,255,0.35)" }}
             />
-            <button onClick={() => signOut(auth)} className="rounded-full px-6 py-3 text-sm font-black" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.28)" }}>
+            <button onClick={() => signOut(auth)} className="rounded-full px-6 py-2 text-sm font-bold" style={{ background: "rgba(255,255,255,0.25)" }}>
               Keluar
             </button>
           </div>
         </div>
-        <div className="mt-7 rounded-3xl px-5 py-4 flex items-center gap-4 relative z-10" style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.25)" }}>
-          <span className="text-2xl"></span>
-          <UiInput
+        <div className="mt-7 rounded-3xl px-5 py-4 flex items-center gap-4 relative z-10" style={{ background: "rgba(255,255,255,0.22)" }}>
+          <span className="text-2xl">🔍</span>
+          <input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(v) => setSearch(inputValue(v))}
             placeholder="Cari pesanan, produksi, kain, pengiriman..."
-            className="bg-transparent outline-none flex-1 text-white placeholder-pink-100 text-base font-semibold min-w-0"
+            className="bg-transparent outline-none flex-1 text-white placeholder-pink-100 text-base"
           />
           <button
             type="button"
             onClick={refreshDataSaatIni}
-            disabled={refreshingDataUi}
-            className="rounded-full px-4 py-2.5 text-xs font-black text-white shrink-0 disabled:opacity-60 flex items-center gap-1.5"
+            disabled={isRefreshingData}
+            className="rounded-full px-4 py-2 text-xs font-black text-white shrink-0 disabled:opacity-60 flex items-center gap-1.5"
             style={{ background: "rgba(255,255,255,0.24)", border: "1px solid rgba(255,255,255,0.35)" }}
             title="Refresh data"
           >
-            <span>{refreshingDataUi ? "..." : ""}</span>
-            <span>{refreshingDataUi ? "Memuat" : "Refresh"}</span>
+            <span>{isRefreshingData ? "..." : "↻"}</span>
+            <span>{isRefreshingData ? "Memuat" : "Refresh"}</span>
           </button>
-          {search && <button type="button" onClick={() => setSearch("")} className="text-pink-100 font-bold"></button>}
+          {search && <button type="button" onClick={() => setSearch("")} className="text-pink-100 font-bold">✕</button>}
         </div>
       </div>
-      <div className="hd-stat-grid grid grid-cols-5 gap-2 p-4">
+
+      <div className="grid grid-cols-5 gap-2 p-4">
         {[
-          { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "" },
-          { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "" },
-          { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "" },
-          { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "" },
-          { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "" },
+          { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋" },
+          { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "⏳" },
+          { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "🧵" },
+          { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "✅" },
+          { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "🔎" },
         ].map((s) => (
-          <div key={s.label} className="hd-stat-card rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1.2px solid #fbcfe8" }}>
+          <div key={s.label} className="rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1px solid #fce7f3" }}>
             <div className="text-base">{s.icon}</div>
-            <div className="text-xl font-black" style={{ color: s.color }}>{s.value}</div>
-            <div className="text-xs font-bold" style={{ color: "#64748b" }}>{s.label}</div>
+            <div className="text-lg font-bold" style={{ color: s.color }}>{s.value}</div>
+            <div className="text-xs" style={{ color: "#94a3b8" }}>{s.label}</div>
           </div>
         ))}
       </div>
+
+      {/* Alert utama dipasang paling atas setelah statistik agar admin langsung melihat data bermasalah. */}
       <div className="px-4 pb-2">
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fecaca", background: "linear-gradient(135deg,#fff1f2,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#be123c" }}> Alert Data Bermasalah</div>
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>🚨 Alert Data Bermasalah</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
               </div>
-              <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek </button>
+              <button onClick={() => setAlertDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffe4e6", color: "#be123c" }}>Cek ›</button>
             </div>
             {dashboardInsights.alerts.length === 0 ? (
               <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>Tidak ada alert data bermasalah.</div>
@@ -3988,10 +5105,11 @@ function rateDocId(productType, model, process) {
             )}
           </div>
       </div>
+
       {stats.belum > 0 && (
         <div className="mx-4 mb-2 rounded-2xl px-4 py-3 flex items-center gap-3"
           style={{ background: "linear-gradient(135deg,#fef3c7,#fde68a)", border: "1.5px solid #fbbf24" }}>
-          <span className="text-xl"></span>
+          <span className="text-xl">⚠️</span>
           <div className="flex-1">
             <div className="text-xs font-bold" style={{ color: "#92400e" }}>{stats.belum} pesanan belum masuk produksi</div>
             <div className="text-xs" style={{ color: "#b45309" }}>Tambahkan dari tab Produksi</div>
@@ -4005,18 +5123,19 @@ function rateDocId(productType, model, process) {
           </button>
         </div>
       )}
+
       {stats.perluDicek > 0 && (
         <div className="mx-4 mb-2 rounded-2xl px-4 py-3"
           style={{ background: "linear-gradient(135deg,#fff1f2,#fff7ed)", border: "1.5px solid #fb7185" }}>
           <div className="flex items-start gap-3">
-            <span className="text-xl"></span>
+            <span className="text-xl">🔎</span>
             <div className="flex-1">
               <div className="text-xs font-black" style={{ color: "#be123c" }}>{stats.perluDicek} pesanan perlu dicek</div>
               <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Keterangan ini membantu admin baru memahami kenapa pesanan tidak masuk kategori normal.</div>
               <div className="mt-2 space-y-1">
                 {ordersPerluDicek.slice(0, 4).map((o) => (
                   <div key={o.id} className="rounded-xl bg-white px-3 py-2 text-[11px]" style={{ border: "1px solid #fecdd3" }}>
-                    <div className="font-bold" style={{ color: "#2d1b69" }}>{o.customer}  {o.invoice}</div>
+                    <div className="font-bold" style={{ color: "#2d1b69" }}>{o.customer} · {o.invoice}</div>
                     <div style={{ color: "#be123c" }}>{o.alasan}</div>
                   </div>
                 ))}
@@ -4036,15 +5155,16 @@ function rateDocId(productType, model, process) {
           </div>
         </div>
       )}
-      <div className="sticky top-0 z-40 flex overflow-x-auto bg-white shadow-sm no-scrollbar" style={{ borderBottom: "2px solid #fbcfe8" }}>
+
+      <div className="sticky top-0 z-40 flex overflow-x-auto bg-white shadow-sm no-scrollbar" style={{ borderBottom: "2px solid #fce7f3" }}>
         {[
-          { id: "dashboard", label: "Dashboard", icon: "" },
-          { id: "pesanan", label: "Pesanan", icon: "", badge: stats.belum },
-          { id: "produksi", label: "Produksi", icon: "" },
-          { id: "borongan", label: "Borongan", icon: "" },
-          { id: "kirim", label: "Kirim", icon: "" },
-          { id: "rekap", label: "Rekap", icon: "" },
-          { id: "master", label: "Master", icon: "" },
+          { id: "dashboard", label: "Dashboard", icon: "🏠" },
+          { id: "pesanan", label: "Pesanan", icon: "📋", badge: stats.belum },
+          { id: "produksi", label: "Produksi", icon: "🧵" },
+          { id: "borongan", label: "Borongan", icon: "💪" },
+          { id: "kirim", label: "Kirim", icon: "🚚" },
+          { id: "rekap", label: "Rekap", icon: "📊" },
+          { id: "master", label: "Master", icon: "🗂️" },
         ].map((t) => {
           const isMasterTab = t.id === "master" && (tab === "kain" || tab === "tarif");
           const isActive = tab === t.id || isMasterTab;
@@ -4060,11 +5180,11 @@ function rateDocId(productType, model, process) {
               if (nextTab !== "kirim") setKirimOnlyBelumLengkap(false);
               setTab(nextTab);
             }}
-            className="hd-tab-button flex-none min-w-[82px] px-2 py-3 text-[11px] font-black flex flex-col items-center gap-1 relative"
+            className="flex-none min-w-[76px] px-2 py-3 text-[11px] font-bold flex flex-col items-center gap-1 relative"
             style={{
-              color: isActive ? "#db2777" : "#475569",
-              borderBottom: isActive ? "3px solid #db2777" : "3px solid transparent",
-              background: isActive ? "#fff1f8" : "white",
+              color: isActive ? "#ec4899" : "#64748b",
+              borderBottom: isActive ? "3px solid #ec4899" : "3px solid transparent",
+              background: isActive ? "#fdf2f8" : "white",
             }}
           >
             <span className="text-base">{t.icon}</span>
@@ -4079,16 +5199,18 @@ function rateDocId(productType, model, process) {
           );
         })}
       </div>
+
       {tab === "dashboard" && (
         <div className="space-y-4 p-4">
           <div className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
             <div className="flex items-center justify-between mb-3">
               <div>
-                <div className="text-lg font-black" style={{ color: "#ec4899" }}> Dashboard Produksi</div>
-                <div className="text-xs font-bold" style={{ color: "#64748b" }}>Ringkasan total keseluruhan dan periode berjalan</div>
+                <div className="text-lg font-black" style={{ color: "#ec4899" }}>📌 Dashboard Produksi</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>Ringkasan total keseluruhan dan periode berjalan</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#fdf2f8", color: "#ec4899" }}>Rekap </button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#fdf2f8", color: "#ec4899" }}>Rekap ›</button>
             </div>
+
             <div className="grid grid-cols-2 gap-3">
               {[
                 { label: "Pcs diberikan", value: dashboardSummary.totalDiberi.toLocaleString(), color: "#ec4899", sub: "semua borongan", tab: "borongan" },
@@ -4104,37 +5226,39 @@ function rateDocId(productType, model, process) {
               ))}
             </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "", detail: "allTime" },
-              { label: "Produksi aktif", value: dashboardSummary.produksiAktif.toLocaleString(), color: "#a855f7", icon: "", tab: "produksi" },
-              { label: "Borongan aktif", value: dashboardSummary.boronganAktif.toLocaleString(), color: "#f59e0b", icon: "", tab: "borongan" },
-              { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "", tab: "produksi" },
-              { label: "Pcs pesanan", value: dashboardSummary.pesananPcs.toLocaleString(), color: "#6366f1", icon: "", tab: "pesanan" },
-              { label: "Pcs terkirim", value: dashboardSummary.terkirimPcs.toLocaleString(), color: "#0ea5e9", icon: "", tab: "kirim" },
-              { label: "Pcs belum produksi", value: dashboardSummary.pcsBelumProduksi.toLocaleString(), color: dashboardSummary.pcsBelumProduksi > 0 ? "#d97706" : "#94a3b8", icon: "", tab: "pesanan" },
-              { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "", tab: "kirim" },
-              { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "", tab: "kirim" },
-              { label: "Kurang kirim final", value: dashboardSummary.kurangKirimFinal.toLocaleString(), color: dashboardSummary.kurangKirimFinal > 0 ? "#b45309" : "#94a3b8", icon: "", tab: "kirim" },
-              { label: "Master data", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "", tab: "kain" },
+              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "💰", detail: "allTime" },
+              { label: "Produksi aktif", value: dashboardSummary.produksiAktif.toLocaleString(), color: "#a855f7", icon: "🧵", tab: "produksi" },
+              { label: "Borongan aktif", value: dashboardSummary.boronganAktif.toLocaleString(), color: "#f59e0b", icon: "💪", tab: "borongan" },
+              { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "⏳", tab: "produksi" },
+              { label: "Pcs pesanan", value: dashboardSummary.pesananPcs.toLocaleString(), color: "#6366f1", icon: "📋", tab: "pesanan" },
+              { label: "Pcs terkirim", value: dashboardSummary.terkirimPcs.toLocaleString(), color: "#0ea5e9", icon: "🚚", tab: "kirim" },
+              { label: "Pcs belum produksi", value: dashboardSummary.pcsBelumProduksi.toLocaleString(), color: dashboardSummary.pcsBelumProduksi > 0 ? "#d97706" : "#94a3b8", icon: "🧵", tab: "pesanan" },
+              { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "📦", tab: "kirim" },
+              { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "⚠️", tab: "kirim" },
+              { label: "Kurang kirim final", value: dashboardSummary.kurangKirimFinal.toLocaleString(), color: dashboardSummary.kurangKirimFinal > 0 ? "#b45309" : "#94a3b8", icon: "📌", tab: "kirim" },
+              { label: "Master data", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "🗂️", tab: "kain" },
             ].map((card) => (
               <button key={card.label} onClick={() => card.detail ? setRekapDetailModal(card.detail) : setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xl">{card.icon}</span>
-                  <span className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian </span>
+                  <span className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian ›</span>
                 </div>
                 <div className="mt-2 text-xl font-black break-words" style={{ color: card.color }}>{card.value}</div>
                 <div className="text-xs font-semibold" style={{ color: "#64748b" }}>{card.label}</div>
               </button>
             ))}
           </div>
+
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fed7aa", background: "linear-gradient(135deg,#fff7ed,#ffffff)" }}>
             <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-sm font-black" style={{ color: "#c2410c" }}> Tugas Hari Ini</div>
+                <div className="text-sm font-black" style={{ color: "#c2410c" }}>✅ Tugas Hari Ini</div>
                 <div className="text-[11px]" style={{ color: "#9a3412" }}>Ringkasan yang perlu dicek admin.</div>
               </div>
-              <button onClick={() => setTugasDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan </button>
+              <button onClick={() => setTugasDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan ›</button>
             </div>
             <div className="grid grid-cols-3 gap-2">
               <button
@@ -4170,7 +5294,7 @@ function rateDocId(productType, model, process) {
                     onClick={() => { setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
-                     {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})
+                    • {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})
                   </button>
                 ))}
                 {dashboardInsights.tugas.activeProduksi.slice(0, 1).map((item) => (
@@ -4179,7 +5303,7 @@ function rateDocId(productType, model, process) {
                     onClick={() => { setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
-                     Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}
+                    • Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}
                   </button>
                 ))}
                 {dashboardInsights.tugas.kirimBelumLengkap.slice(0, 1).map(({ order, sisa }) => (
@@ -4188,19 +5312,20 @@ function rateDocId(productType, model, process) {
                     onClick={() => { setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
                     className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
                   >
-                     {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs
+                    • {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs
                   </button>
                 ))}
               </div>
             )}
           </div>
+
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bbf7d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#15803d" }}> Top Pekerja Bulan Ini</div>
-                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.monthLabel}  berdasarkan pcs setor</div>
+                <div className="text-sm font-black" style={{ color: "#15803d" }}>🏆 Top Pekerja Bulan Ini</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.monthLabel} · berdasarkan pcs setor</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dcfce7", color: "#15803d" }}>Rekap </button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dcfce7", color: "#15803d" }}>Rekap ›</button>
             </div>
             {dashboardInsights.topPekerja.length === 0 ? (
               <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada setor bulan ini.</div>
@@ -4221,13 +5346,14 @@ function rateDocId(productType, model, process) {
               </div>
             )}
           </div>
+
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #ddd6fe", background: "linear-gradient(135deg,#faf5ff,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#7c3aed" }}> Grafik Mingguan</div>
+                <div className="text-sm font-black" style={{ color: "#7c3aed" }}>📈 Grafik Mingguan</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>Pcs setor, reject, dan gaji per minggu.</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>Detail </button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>Detail ›</button>
             </div>
             <div className="space-y-2">
               {dashboardInsights.weeklyRows.map((row) => {
@@ -4237,7 +5363,7 @@ function rateDocId(productType, model, process) {
                   <div key={row.key} className="space-y-1">
                     <div className="flex justify-between text-[10px]" style={{ color: "#64748b" }}>
                       <span>{row.dari.slice(5)} s/d {row.sampai.slice(5)}</span>
-                      <span>{fmtQty(row.pcsSetor)} setor  {fmtQty(row.pcsReject)} reject  {money(row.gaji)}</span>
+                      <span>{fmtQty(row.pcsSetor)} setor · {fmtQty(row.pcsReject)} reject · {money(row.gaji)}</span>
                     </div>
                     <div className="h-3 rounded-full overflow-hidden" style={{ background: "#f3e8ff" }}>
                       <div className="h-full rounded-full" style={{ width: `${width}%`, background: "linear-gradient(90deg,#a855f7,#ec4899)" }} />
@@ -4247,13 +5373,15 @@ function rateDocId(productType, model, process) {
               })}
             </div>
           </div>
+
+          {/* Section Riwayat Gajian */}
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #a7f3d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#065f46" }}> Riwayat Gajian</div>
+                <div className="text-sm font-black" style={{ color: "#065f46" }}>💸 Riwayat Gajian</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>{gajianHistory.length} catatan gajian tersimpan</div>
               </div>
-              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#d1fae5", color: "#065f46" }}>Input </button>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#d1fae5", color: "#065f46" }}>Input ›</button>
             </div>
             {gajianHistory.length === 0 ? (
               <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada riwayat gajian. Input data lama di menu Rekap.</div>
@@ -4267,7 +5395,7 @@ function rateDocId(productType, model, process) {
                       <div className="min-w-0">
                         <div className="text-xs font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
                         <div className="text-[10px]" style={{ color: "#64748b" }}>
-                          {g.tanggalGaji}  Periode {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                          {g.tanggalGaji} · Periode {g.periodeGajiDari} s/d {g.periodeGajiSampai}
                         </div>
                         {g.source === "input_manual_lama" && (
                           <div className="text-[9px] font-bold" style={{ color: "#a855f7" }}>input manual</div>
@@ -4285,13 +5413,15 @@ function rateDocId(productType, model, process) {
               </div>
             )}
           </div>
+
+          {/* Section Riwayat Setor Terbaru */}
           <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bfdbfe", background: "linear-gradient(135deg,#eff6ff,#ffffff)" }}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-black" style={{ color: "#1e40af" }}> Riwayat Setor Terbaru</div>
+                <div className="text-sm font-black" style={{ color: "#1e40af" }}>📦 Riwayat Setor Terbaru</div>
                 <div className="text-[11px]" style={{ color: "#64748b" }}>10 transaksi setor terakhir</div>
               </div>
-              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dbeafe", color: "#1e40af" }}>Borongan </button>
+              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dbeafe", color: "#1e40af" }}>Borongan ›</button>
             </div>
             {(() => {
               const recentSetor = productionEntries
@@ -4319,7 +5449,7 @@ function rateDocId(productType, model, process) {
                     <div key={s.key} className="flex items-center justify-between gap-2 rounded-2xl p-2.5" style={{ background: "#f8fafc", border: "1px solid #bfdbfe" }}>
                       <div className="min-w-0">
                         <div className="text-xs font-black truncate" style={{ color: "#1e3a8a" }}>{s.nama}</div>
-                        <div className="text-[10px]" style={{ color: "#64748b" }}>{s.tanggalSetor}  {s.process} {s.model !== "-" ? ` ${s.model}` : ""}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>{s.tanggalSetor} · {s.process} {s.model !== "-" ? `· ${s.model}` : ""}</div>
                         {s.qtyReject > 0 && <div className="text-[10px]" style={{ color: "#ef4444" }}>reject: {fmtQty(s.qtyReject)} pcs</div>}
                       </div>
                       <div className="text-right shrink-0">
@@ -4332,14 +5462,16 @@ function rateDocId(productType, model, process) {
               );
             })()}
           </div>
+
         </div>
       )}
+
       {tab === "pesanan" && (
         <div className="space-y-3 p-4">
-          <InfoBox title="Sumber: Gallery Kerudung" subtitle="Data realtime dari collection orders" icon="" />
+          <InfoBox title="Sumber: Gallery Kerudung" subtitle="Data realtime dari collection orders" icon="🏪" />
           {pesananOnlyNeedCheck && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fb7185" }}>
-              <span className="text-xl"></span>
+              <span className="text-xl">🔎</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#be123c" }}>Hanya menampilkan pesanan yang perlu dicek</div>
                 <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Admin bisa langsung membuka pengiriman dari kartu ini. Pesanan lain disembunyikan sementara agar tidak membingungkan.</div>
@@ -4364,18 +5496,20 @@ function rateDocId(productType, model, process) {
               <div key={o.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: canStart ? "2px solid #fbbf24" : "1px solid #fce7f3" }}>
                 <div className="flex justify-between items-start">
                   <div className="flex-1 mr-2">
-                    <div className="font-bold text-base" style={{ color: "#2d1b69" }}> {o.customer}</div>
-                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}> <b>{o.item}</b></div>
-                    {o.invoice && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}> {o.invoice}</div>}
-                    {o.createdAt && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}> {o.createdAt}</div>}
-                    {o.warna && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}> {o.warna}</div>}
+                    <div className="font-bold text-base" style={{ color: "#2d1b69" }}>👤 {o.customer}</div>
+                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}>👗 <b>{o.item}</b></div>
+                    {o.invoice && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>🧾 {o.invoice}</div>}
+                    {o.createdAt && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>📅 {o.createdAt}</div>}
+                    {o.warna && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>🎨 {o.warna}</div>}
                     <div className="mt-2 text-xs font-bold" style={{ color: small.color }}>{small.label}</div>
                   </div>
                   <div className="text-right">
                     <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{o.qty}</div>
-                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>total pcs</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>total pcs</div>
                   </div>
                 </div>
+
+                {/* Breakdown per model - selalu tampil jika ada items */}
                 {(() => {
                   const its = (o.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
                   if (its.length === 0) return null;
@@ -4384,7 +5518,7 @@ function rateDocId(productType, model, process) {
                     <div className="mt-2">
                       {isMulti && (
                         <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>
-                           {its.length} model
+                          📦 {its.length} model
                         </div>
                       )}
                       <div className="flex flex-wrap gap-1">
@@ -4398,17 +5532,18 @@ function rateDocId(productType, model, process) {
                     </div>
                   );
                 })()}
+
                 {prod && (
                   <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#ede9fe" }}>
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold" style={{ color: "#5b21b6" }}> Status produksi</span>
+                      <span className="text-xs font-bold" style={{ color: "#5b21b6" }}>🧵 Status produksi</span>
                       <StatusBadge status={prod.status} />
                     </div>
                     {(prod.workers || []).length > 0 && (
                       <div className="mt-2 space-y-1">
                         {(prod.workers || []).slice(-3).map((w, idx) => (
                           <div key={idx} className="text-xs" style={{ color: "#7c3aed" }}>
-                             {displayWorkerName(w.employeeName)}  {w.process}  {w.qty} pcs
+                            👤 {displayWorkerName(w.employeeName)} · {w.process} · {w.qty} pcs
                           </div>
                         ))}
                       </div>
@@ -4417,7 +5552,7 @@ function rateDocId(productType, model, process) {
                 )}
                 {needCheckInfo && (
                   <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#fff1f2", border: "1px solid #fecdd3" }}>
-                    <div className="text-xs font-black" style={{ color: "#be123c" }}> Perlu Dicek</div>
+                    <div className="text-xs font-black" style={{ color: "#be123c" }}>🔎 Perlu Dicek</div>
                     <div className="text-xs mt-1" style={{ color: "#9f1239" }}>{needCheckInfo.alasan}</div>
                     <div className="grid grid-cols-2 gap-2 mt-2">
                       <Button
@@ -4426,7 +5561,7 @@ function rateDocId(productType, model, process) {
                         className="text-xs"
                         style={{ background: "linear-gradient(135deg,#0ea5e9,#2563eb)" }}
                       >
-                         Edit Pengiriman
+                        🚚 Edit Pengiriman
                       </Button>
                       <Button
                         type="button"
@@ -4484,6 +5619,7 @@ function rateDocId(productType, model, process) {
                     })()}
                   </div>
                 )}
+
                 {canStart && (
                   <Button
                     onClick={() => {
@@ -4493,7 +5629,7 @@ function rateDocId(productType, model, process) {
                     className="mt-3 w-full"
                     style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                   >
-                     Mulai Produksi
+                    🧵 Mulai Produksi
                   </Button>
                 )}
               </div>
@@ -4501,14 +5637,17 @@ function rateDocId(productType, model, process) {
           })}
         </div>
       )}
+
       {tab === "produksi" && (
         <div className="space-y-3 p-4">
           <Button onClick={() => setModal("produksi")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
-             + Tambah ke Produksi
+            🧵 + Tambah ke Produksi
           </Button>
+
+          {/* Banner filter belum selesai */}
           {produksiOnlyBelumSelesai && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}>
-              <span className="text-xl"></span>
+              <span className="text-xl">🧵</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#5b21b6" }}>Hanya menampilkan produksi belum selesai</div>
                 <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Update status produksi di bawah ini.</div>
@@ -4523,6 +5662,7 @@ function rateDocId(productType, model, process) {
               </button>
             </div>
           )}
+
           {(() => {
             const displayedProduksi = produksiOnlyBelumSelesai
               ? filteredProduksi.filter((p) => p.status !== "Selesai")
@@ -4533,12 +5673,13 @@ function rateDocId(productType, model, process) {
                 {displayedProduksi.map((p) => {
             const qtyPesanan = Number(p.qty || 0);
             const rekapProses = [
-              { label: " Potong", qty: processQtyForOrder(p.orderId, "Potong") },
-              { label: " Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
-              { label: " Pengemasan QC", qty: processQtyForOrder(p.orderId, "Pengemasan QC") },
+              { label: "✂️ Potong", qty: processQtyForOrder(p.orderId, "Potong") },
+              { label: "🧵 Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
+              { label: "📦 Pengemasan QC", qty: processQtyForOrder(p.orderId, "Pengemasan QC") },
             ].filter((r) => r.qty > 0);
             return (
             <div key={p.id} className="rounded-2xl bg-white shadow-sm overflow-hidden" style={{ border: "1px solid #fce7f3" }}>
+              {/* Header compact */}
               <div className="flex items-center justify-between px-4 pt-3 pb-2">
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-sm truncate" style={{ color: "#2d1b69" }}>{p.customer}</div>
@@ -4547,15 +5688,20 @@ function rateDocId(productType, model, process) {
                 <div className="flex items-center gap-2 ml-2">
                   <div className="text-right">
                     <div className="text-lg font-bold" style={{ color: "#ec4899" }}>{p.qty}</div>
-                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>pcs</div>
                   </div>
                   <StatusBadge status={p.status} />
                 </div>
               </div>
+
+              {/* Per model — breakdown jelas dengan progress per proses */}
               {(() => {
-                const order = orders.find(o => o.id === p.orderId);
+                const order = orderLookupForCards.byId.get(String(p.orderId || "").trim());
                 const orderItems = (order?.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
                 const prodItems = (p.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
+
+                // Deteksi data lama: p.items hanya 1 item dengan qty = total order
+                // atau p.items berbeda jumlah model dengan order.items → pakai order.items
                 const isStaleData = prodItems.length === 1 && orderItems.length > 1 &&
                   Number(prodItems[0]?.qty) === Number(p.qty);
                 const displayItems = (isStaleData || prodItems.length === 0) ? orderItems : prodItems;
@@ -4563,38 +5709,32 @@ function rateDocId(productType, model, process) {
                 return (
                   <div className="px-4 pb-2">
                     <div className="text-xs font-bold mb-1.5" style={{ color: "#7c3aed" }}>
-                       Rincian Model ({displayItems.length} model  {p.qty} pcs total):
+                      📋 Rincian Model ({displayItems.length} model · {p.qty} pcs total):
                     </div>
                     <div className="space-y-1.5">
                       {displayItems.map((it, i) => {
                         const modelName = it.name || it.item || "-";
                         const modelQty = Number(it.qty || 0);
-                        const potongQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Potong") && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
-                          .reduce((s, e) => s + Number(e.qty || 0), 0);
-                        const jahitQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Jahit") && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
-                          .reduce((s, e) => s + Number(e.qty || 0), 0);
-                        const qcQty = productionEntries
-                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Pengemasan QC"))
-                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const potongQty = processQtyForOrderModel(p.orderId, "Potong", modelName);
+                        const jahitQty = processQtyForOrderModel(p.orderId, "Jahit", modelName);
+                        const qcQty = processQtyForOrder(p.orderId, "Pengemasan QC");
                         const jahitDone = jahitQty >= modelQty;
                         return (
                           <div key={i} className="rounded-xl p-2.5" style={{ background: jahitDone ? "#dcfce7" : "#ede9fe", border: `1px solid ${jahitDone ? "#bbf7d0" : "#c4b5fd"}` }}>
                             <div className="flex justify-between items-center mb-1">
                               <div className="font-bold text-xs" style={{ color: jahitDone ? "#16a34a" : "#5b21b6" }}>
-                                {modelName} {jahitDone ? "" : ""}
+                                {modelName} {jahitDone ? "✅" : ""}
                               </div>
                               <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>{modelQty} pcs</div>
                             </div>
                             <div className="flex gap-2 text-xs">
                               {potongQty > 0 && (
                                 <span className="rounded-full px-2 py-0.5" style={{ background: "#dbeafe", color: "#1e40af" }}>
-                                   {potongQty}/{modelQty}
+                                  ✂️ {potongQty}/{modelQty}
                                 </span>
                               )}
                               <span className="rounded-full px-2 py-0.5" style={{ background: jahitDone ? "#bbf7d0" : "#fce7f3", color: jahitDone ? "#16a34a" : "#be185d" }}>
-                                 {jahitQty}/{modelQty}
+                                🧵 {jahitQty}/{modelQty}
                               </span>
                             </div>
                           </div>
@@ -4604,7 +5744,10 @@ function rateDocId(productType, model, process) {
                   </div>
                 );
               })()}
+
               <ProgressBar status={p.status} />
+
+              {/* Rekap proses — compact grid */}
               {rekapProses.length > 0 && (
                 <div className="px-4 py-2 grid grid-cols-3 gap-1">
                   {rekapProses.map((r) => {
@@ -4612,12 +5755,14 @@ function rateDocId(productType, model, process) {
                     return (
                       <div key={r.label} className="rounded-xl p-2 text-center" style={{ background: sesuai ? "#dcfce7" : "#fef3c7" }}>
                         <div className="text-xs font-bold" style={{ color: sesuai ? "#16a34a" : "#b45309" }}>{r.qty}</div>
-                        <div className="text-xs font-bold" style={{ color: "#64748b" }}>{r.label}</div>
+                        <div className="text-xs" style={{ color: "#94a3b8" }}>{r.label}</div>
                       </div>
                     );
                   })}
                 </div>
               )}
+
+              {/* Ubah status — compact pills */}
               <div className="px-4 pb-3">
                 <div className="flex gap-1 flex-wrap">
                   {PROD_STATUS.map((s) => (
@@ -4641,14 +5786,17 @@ function rateDocId(productType, model, process) {
           })()}
         </div>
       )}
+
       {tab === "borongan" && (
         <div className="space-y-3 p-4">
           <Button onClick={() => setModal("borongan")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
-             + Input Hasil Borongan
+            💪 + Input Hasil Borongan
           </Button>
+
+          {/* Banner filter belum setor */}
           {boronganOnlyBelumSetor && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fefce8", border: "1.5px solid #fbbf24" }}>
-              <span className="text-xl"></span>
+              <span className="text-xl">🟡</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#92400e" }}>Hanya menampilkan yang belum setor</div>
                 <div className="text-xs mt-1" style={{ color: "#b45309" }}>Setor hasil kerjaan di bawah ini agar masuk rekap gaji.</div>
@@ -4663,12 +5811,13 @@ function rateDocId(productType, model, process) {
               </button>
             </div>
           )}
+
           {boronganOnlyOverSetor && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fecaca" }}>
-              <span className="text-xl"></span>
+              <span className="text-xl">🚨</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#be123c" }}>Hanya menampilkan yang setor melebihi diberi</div>
-                <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Data ini perlu dicek  total setor + reject melebihi qty yang diberikan.</div>
+                <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Data ini perlu dicek — total setor + reject melebihi qty yang diberikan.</div>
               </div>
               <button
                 type="button"
@@ -4680,21 +5829,24 @@ function rateDocId(productType, model, process) {
               </button>
             </div>
           )}
+
           <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #fce7f3" }}>
             <div className="text-xs font-bold" style={{ color: "#a855f7" }}>Total hasil borongan</div>
             <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{stats.boronganPcs} pcs</div>
-            <div className="text-xs font-bold" style={{ color: "#64748b" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
+            <div className="text-xs" style={{ color: "#94a3b8" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
           </div>
+
+
           {(boronganOnlyBelumSetor
-            ? filteredEntries.filter((e) => getEntrySetorTotals(e).statusSetor !== "sudah_setor")
+            ? filteredEntries.filter((e) => setorTotals(e).statusSetor !== "sudah_setor")
             : boronganOnlyOverSetor
               ? filteredEntries.filter((e) => {
-                  const totals = getEntrySetorTotals(e);
+                  const totals = setorTotals(e);
                   return (Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0)) > Number(e.qty || 0);
                 })
               : filteredEntries
           ).map((e) => {
-            const totals = getEntrySetorTotals(e);
+            const totals = setorTotals(e);
             const sudahSetor = totals.statusSetor === "sudah_setor";
             const setorSebagian = totals.statusSetor === "setor_sebagian";
             const qtyReject = Number(totals.qtyReject || 0);
@@ -4703,21 +5855,21 @@ function rateDocId(productType, model, process) {
             const statusSetorPanel = (sudahSetor || setorSebagian) ? (
               <div className="mt-3 rounded-2xl p-3 space-y-2" style={{ background: sudahSetor ? "#f0fdf4" : "#fff7ed", border: `1px solid ${sudahSetor ? "#bbf7d0" : "#fed7aa"}` }}>
                 <div className="text-xs font-bold" style={{ color: sudahSetor ? "#16a34a" : "#b45309" }}>
-                  {sudahSetor ? " Sudah Setor" : " Setor Sebagian"}  terakhir {totals.tanggalSetor || "-"}
+                  {sudahSetor ? "✅ Sudah Setor" : "🟠 Setor Sebagian"} — terakhir {totals.tanggalSetor || "-"}
                 </div>
                 <div className="flex flex-wrap gap-3 text-sm">
-                  <span> Setor: <strong>{qtySetor} pcs</strong></span>
-                  {qtyReject > 0 && <span> Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
-                  {selisih > 0 && <span> Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
+                  <span>✔️ Setor: <strong>{qtySetor} pcs</strong></span>
+                  {qtyReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
+                  {selisih > 0 && <span>⚠️ Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
                 </div>
                 {totals.totalWageSetor > 0 && (
-                  <div className="text-sm font-bold" style={{ color: "#a855f7" }}> Total gaji setor: {money(totals.totalWageSetor)}</div>
+                  <div className="text-sm font-bold" style={{ color: "#a855f7" }}>💰 Total gaji setor: {money(totals.totalWageSetor)}</div>
                 )}
                 {totals.history.length > 0 && (
                   <div className="space-y-1">
                     {totals.history.slice(-3).map((h, idx) => (
                       <div key={h.id || idx} className="rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,.75)", color: "#64748b", border: "1px solid #f3e8ff" }}>
-                         {h.tanggalSetor}  Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `  Reject ${Number(h.qtyReject || 0)} pcs` : ""}  {money(h.totalWageSetor || 0)}
+                        📅 {h.tanggalSetor} · Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? ` · Reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}
                       </div>
                     ))}
                   </div>
@@ -4734,9 +5886,9 @@ function rateDocId(productType, model, process) {
               </div>
             ) : (
               <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
-                <span className="text-xs font-bold" style={{ color: "#b45309" }}> Belum Setor</span>
+                <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
                 <button
-                  onClick={() => { const t = getEntrySetorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                  onClick={() => { const t = setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
                   className="rounded-xl px-3 py-1 text-xs font-bold text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
@@ -4748,45 +5900,35 @@ function rateDocId(productType, model, process) {
               <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
               <div className="flex justify-between">
                 <div>
-                  <div className="font-bold" style={{ color: "#2d1b69" }}> {displayWorkerName(e.employeeName)}</div>
-                  <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType}  {e.process}{e.model ? `  ${e.model}` : ""}</div>
-                  {e.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}> {e.invoice}</div>}
-                  {!e.orderId && (
-                    <div className="mt-1 flex flex-wrap gap-1.5">
-                      <span className="rounded-full px-2 py-0.5 text-[11px] font-black" style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}> Tanpa Pesanan</span>
-                    </div>
-                  )}
-                  <div className="text-xs font-bold" style={{ color: "#64748b" }}> {e.tanggal}</div>
+                  <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
+                  <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
+                  {e.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {e.invoice}</div>}
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>📅 {e.tanggal}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-2xl font-bold" style={{ color: "#10b981" }}>{e.qty}</div>
-                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs diberikan</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
                 </div>
               </div>
+
+              {/* Status setor bertahap */}
               {statusSetorPanel}
+
+              {/* Tombol Edit & Hapus */}
               <div className="mt-2 flex gap-2">
                 <button
                   onClick={() => openEditEntry(e)}
                   className="flex-1 rounded-2xl py-2 text-xs font-bold"
                   style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
                 >
-                   Edit
+                  ✏️ Edit
                 </button>
-                {!e.orderId && (
-                  <button
-                    onClick={() => openEditEntry(e)}
-                    className="flex-1 rounded-2xl py-2 text-xs font-bold"
-                    style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}
-                  >
-                     Kaitkan ke Pesanan
-                  </button>
-                )}
                 <button
                   onClick={() => requestDeleteEntry(e)}
                   className="flex-1 rounded-2xl py-2 text-xs font-bold"
                   style={{ background: "#fff1f2", color: "#e11d48", border: "1px solid #fecaca" }}
                 >
-                   Hapus
+                  🗑️ Hapus
                 </button>
               </div>
             </div>
@@ -4794,215 +5936,44 @@ function rateDocId(productType, model, process) {
           })}
         </div>
       )}
+
       {tab === "rekap" && (() => {
-        const rekapPeriodReady = Boolean(rekapDari && rekapSampai);
-        const inRange = (tanggal) => rekapPeriodReady && dateInRange(tanggal, rekapDari, rekapSampai);
-        const filtered = productionEntries.filter((e) => {
-          const hasInputInRange = inRange(e.tanggal);
-          const hasSetorInRange = setorHistoryInRange(e, rekapDari, rekapSampai).length > 0;
-          return hasInputInRange || hasSetorInRange;
-        });
-        const byProses = {};
-        filtered.forEach((e) => {
-          const p = e.process || "Lainnya";
-          const allTotals = getEntrySetorTotals(e);
-          const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
-          const inputInRange = inRange(e.tanggal);
-          const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
-          const qtyBasisPeriode = inputInRange
-            ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
-            : aktivitasSetorPeriode;
-          if (!byProses[p]) byProses[p] = { qty: 0, qtySetor: 0, qtyReject: 0, gaji: 0 };
-          byProses[p].qty += Math.max(0, qtyBasisPeriode);
-          byProses[p].qtySetor += Number(rangeTotals.qtySetor || 0);
-          byProses[p].qtyReject += Number(rangeTotals.qtyReject || 0);
-          byProses[p].gaji += Number(rangeTotals.totalWageSetor || 0);
-          if (inputInRange && rangeTotals.qtySetor === 0 && rangeTotals.qtyReject === 0 && allTotals.statusSetor !== "belum_setor") {
-          }
-        });
-        const totalQty = filtered.reduce((s, e) => {
-          const inputInRange = inRange(e.tanggal);
-          const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
-          const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
-          const qtyBasisPeriode = inputInRange
-            ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
-            : aktivitasSetorPeriode;
-          return s + Math.max(0, qtyBasisPeriode);
-        }, 0);
-        const totalSetor = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtySetor || 0), 0);
-        const totalReject = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtyReject || 0), 0);
-        const totalGaji = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).totalWageSetor || 0), 0);
-        const prosesOrder = ["Potong", "Jahit", "Pengemasan QC"];
-        const prosesKeys = [...prosesOrder.filter((p) => byProses[p]), ...Object.keys(byProses).filter((p) => !prosesOrder.includes(p))];
-        Object.keys(byProses).forEach((p) => {
-          const aktivitasSetorPeriode = Number(byProses[p].qtySetor || 0) + Number(byProses[p].qtyReject || 0);
-          byProses[p].qtyDiberikan = Math.max(Number(byProses[p].qty || 0), aktivitasSetorPeriode);
-        });
-        const rekapMap = {};
-        filtered.forEach((e) => {
-          const namaKey = normalizeWorkerNameKey(e.employeeName);
-          const nama = canonicalByExisting(e.employeeName, workerNameOptions, "worker");
-          const inputInRange = inRange(e.tanggal);
-          const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
-          const rangeTotals = setorTotalsFromHistory(rangeHistory);
-          const allTotals = getEntrySetorTotals(e);
-          if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
-          const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
-          const qtyBasisPeriode = inputInRange
-            ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
-            : aktivitasSetorPeriode;
-          rekapMap[nama].pcsAwal += Math.max(0, qtyBasisPeriode);
-          rekapMap[nama].pcsSetor += Number(rangeTotals.qtySetor || 0);
-          rekapMap[nama].pcsReject += Number(rangeTotals.qtyReject || 0);
-          rekapMap[nama].gaji += Number(rangeTotals.totalWageSetor || 0);
-          if (inputInRange) rekapMap[nama].belumSetor += Number(allTotals.sisaSetor || 0);
-          const entryOrder = orders.find(o => o.id === e.orderId);
-          rekapMap[nama].detail.push({
-            customer: e.customer || entryOrder?.customer || "-",
-            invoice: e.invoice || entryOrder?.invoice || "",
-            model: displayModelName(e.model || "-"),
-            process: e.process || "",
-            qty: Math.max(0, qtyBasisPeriode),
-            qtyAsli: Number(e.qty || 0),
-            qtySetor: Number(rangeTotals.qtySetor || 0),
-            qtyReject: Number(rangeTotals.qtyReject || 0),
-            totalSetorSemua: Number(allTotals.qtySetor || 0),
-            sisaSetor: Number(allTotals.sisaSetor || 0),
-            rate: Number(e.rate || 0),
-            sudahSetor: Number(rangeTotals.qtySetor || 0) > 0 || Number(rangeTotals.qtyReject || 0) > 0,
-            setorSebagian: allTotals.statusSetor === "setor_sebagian",
-            gaji: Number(rangeTotals.totalWageSetor || 0),
-            tanggal: e.tanggal || "",
-            tanggalSetor: rangeHistory.length > 0 ? rangeHistory[rangeHistory.length - 1].tanggalSetor : (allTotals.tanggalSetor || ""),
-            setorHistory: rangeHistory,
-          });
-        });
-        const rekapPerkerja = Object.entries(rekapMap)
-          .filter(([, r]) => Number(r.pcsSetor || 0) > 0 || Number(r.pcsReject || 0) > 0 || Number(r.gaji || 0) > 0)
-          .sort((a, b) => b[1].gaji - a[1].gaji);
-        const rekapGajianKeseluruhan = rekapPerkerja.reduce((acc, [nama, r]) => {
-          const sudah = sudahGajian(nama, rekapDari, rekapSampai);
-          const nominal = Number(r?.gaji || 0);
-          acc.totalPekerja += 1;
-          acc.totalGaji += nominal;
-          acc.totalPcsSetor += Number(r?.pcsSetor || 0);
-          acc.totalPcsReject += Number(r?.pcsReject || 0);
-          acc.totalBelumSetor += Number(r?.belumSetor || 0);
-          if (sudah) {
-            acc.sudahGajian += 1;
-            acc.totalSudahDibayar += nominal;
-          } else {
-            acc.belumGajian += 1;
-            acc.totalBelumDibayar += nominal;
-          }
-          return acc;
-        }, {
-          totalPekerja: 0,
-          sudahGajian: 0,
-          belumGajian: 0,
-          totalGaji: 0,
-          totalSudahDibayar: 0,
-          totalBelumDibayar: 0,
-          totalPcsSetor: 0,
-          totalPcsReject: 0,
-          totalBelumSetor: 0,
-        });
-        const allTimePayrollRows = payrollExpenses
-          .filter(isOfficialGajiPayroll)
-          .sort((a, b) => String(dateKey(b.tanggal || b.tanggalSetor || b.createdAt || "")).localeCompare(String(dateKey(a.tanggal || a.tanggalSetor || a.createdAt || ""))));
-        const allTimePayrollMap = {};
-        allTimePayrollRows.forEach((p) => {
-          const nama = canonicalByExisting(p.employeeName, workerNameOptions, "worker");
-          const key = normalizeWorkerNameKey(nama);
-          if (!key) return;
-          if (!allTimePayrollMap[nama]) {
-            allTimePayrollMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, transaksi: 0, firstDate: "", lastDate: "", detail: [] };
-          }
-          const tanggal = dateKey(p.tanggal || p.tanggalSetor || p.createdAt || "");
-          const pcs = Number(p.totalPcs || p.qtySetor || p.qty || 0);
-          const reject = Number(p.totalReject || p.qtyReject || 0);
-          const gaji = Number(p.totalAmount || 0);
-          allTimePayrollMap[nama].pcsSetor += pcs;
-          allTimePayrollMap[nama].pcsReject += reject;
-          allTimePayrollMap[nama].pcsAwal += Math.max(0, pcs + reject);
-          allTimePayrollMap[nama].gaji += gaji;
-          allTimePayrollMap[nama].transaksi += 1;
-          if (tanggal) {
-            if (!allTimePayrollMap[nama].firstDate || tanggal < allTimePayrollMap[nama].firstDate) allTimePayrollMap[nama].firstDate = tanggal;
-            if (!allTimePayrollMap[nama].lastDate || tanggal > allTimePayrollMap[nama].lastDate) allTimePayrollMap[nama].lastDate = tanggal;
-          }
-          allTimePayrollMap[nama].detail.push({
-            tanggalSetor: tanggal || "-",
-            process: p.process || "-",
-            model: canonicalByExisting(p.model || p.productType || "-", modelNameOptions, "model"),
-            invoice: p.invoice || "",
-            customer: p.customer || "-",
-            qtySetor: pcs,
-            qtyReject: reject,
-            wage: gaji,
-            source: p.source || "payroll_expenses",
-          });
-        });
-        const rekapGajiAllTimeRows = Object.entries(allTimePayrollMap)
-          .filter(([, r]) => Number(r.gaji || 0) > 0 || Number(r.pcsSetor || 0) > 0)
-          .sort((a, b) => Number(b[1].gaji || 0) - Number(a[1].gaji || 0));
-        const rekapGajiAllTimeSummary = rekapGajiAllTimeRows.reduce((acc, [, r]) => {
-          acc.totalPekerja += 1;
-          acc.totalGaji += Number(r.gaji || 0);
-          acc.totalPcsSetor += Number(r.pcsSetor || 0);
-          acc.totalPcsReject += Number(r.pcsReject || 0);
-          acc.totalTransaksi += Number(r.transaksi || 0);
-          return acc;
-        }, { totalPekerja: 0, totalGaji: 0, totalPcsSetor: 0, totalPcsReject: 0, totalTransaksi: 0 });
-        const boronganBelumMasukRekap = !rekapPeriodReady ? [] : productionEntries
-          .map((e) => {
-            const totals = getEntrySetorTotals(e);
-            const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
-            const rangeTotals = setorTotalsFromHistory(rangeHistory);
-            const inputInRange = inRange(e.tanggal);
-            const entryOrder = orders.find(o => o.id === e.orderId);
-            const totalProgress = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
-            const sisaSetor = Number(totals.sisaSetor || 0);
-            let alasan = "";
-            if (sisaSetor > 0 && inputInRange && rangeHistory.length === 0) alasan = "Diberikan periode ini, belum setor";
-            else if (sisaSetor > 0 && inputInRange && rangeHistory.length > 0) alasan = "Setor sebagian, masih ada sisa";
-            else if (sisaSetor > 0 && dateBefore(e.tanggal, rekapDari)) alasan = "Tanggungan dari periode sebelumnya";
-            return {
-              ...e,
-              customer: e.customer || entryOrder?.customer || "-",
-              invoice: e.invoice || entryOrder?.invoice || "",
-              totalSetorSemua: Number(totals.qtySetor || 0),
-              totalRejectSemua: Number(totals.qtyReject || 0),
-              totalWageSemua: Number(totals.totalWageSetor || 0),
-              sisaSetor,
-              statusSetorHitung: totals.statusSetor,
-              tanggalSetorTerakhir: totals.tanggalSetor || "",
-              qtySetorPeriode: Number(rangeTotals.qtySetor || 0),
-              qtyRejectPeriode: Number(rangeTotals.qtyReject || 0),
-              gajiPeriode: Number(rangeTotals.totalWageSetor || 0),
-              alasan,
-            };
-          })
-          .filter((e) => e.alasan && Number(e.sisaSetor || 0) > 0)
-          .sort((a, b) => {
-            if (a.tanggal !== b.tanggal) return String(a.tanggal || "").localeCompare(String(b.tanggal || ""));
-            return displayWorkerName(a.employeeName).localeCompare(displayWorkerName(b.employeeName));
-          });
-        const totalBoronganBelumMasukPcs = boronganBelumMasukRekap.reduce((s, e) => s + Number(e.sisaSetor || 0), 0);
-        const totalBoronganBelumMasukGajiPotensi = boronganBelumMasukRekap.reduce((s, e) => s + (Number(e.sisaSetor || 0) * Number(e.rate || 0)), 0);
+        const {
+          rekapPeriodReady,
+          inRange,
+          filtered,
+          byProses,
+          totalQty,
+          totalSetor,
+          totalReject,
+          totalGaji,
+          prosesOrder,
+          prosesKeys,
+          rekapMap,
+          rekapPerkerja,
+          rekapGajianKeseluruhan,
+          allTimePayrollRows,
+          allTimePayrollMap,
+          rekapGajiAllTimeRows,
+          rekapGajiAllTimeSummary,
+          boronganBelumMasukRekap,
+          totalBoronganBelumMasukPcs,
+          totalBoronganBelumMasukGajiPotensi,
+        } = rekapData;
         return (
           <div className="space-y-3 p-4">
+            {/* Filter Tanggal Manual */}
             <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #e9d5ff" }}>
-              <div className="text-xs font-bold mb-3" style={{ color: "#7c3aed" }}> Filter Periode</div>
+              <div className="text-xs font-bold mb-3" style={{ color: "#7c3aed" }}>📅 Filter Periode</div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
-                  <UiInput type="date" value={rekapDari} onChange={(e) => handleRekapDariChange(e.target.value)}
+                  <input type="date" value={rekapDari} onChange={(v) => handleRekapDariChange(inputValue(v))}
                     className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
                 </div>
                 <div>
                   <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Sampai</div>
-                  <UiInput type="date" value={rekapSampai} onChange={(e) => handleRekapSampaiChange(e.target.value)}
+                  <input type="date" value={rekapSampai} onChange={(v) => handleRekapSampaiChange(inputValue(v))}
                     className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
                 </div>
               </div>
@@ -5018,25 +5989,28 @@ function rateDocId(productType, model, process) {
                 </button>
               </div>
             </div>
+
             {!rekapPeriodReady && (
               <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-semibold" style={{ border: "1px solid #fde68a", color: "#92400e" }}>
-                 Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
+                📌 Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
               </div>
             )}
+
+            {/* Form Input Riwayat Gajian Lama */}
             <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
               <button
                 type="button"
                 onClick={() => setShowFormGajianLama((v) => !v)}
                 className="w-full flex items-center justify-between"
               >
-                <div className="text-xs font-bold" style={{ color: "#065f46" }}> Input Riwayat Gajian Lama</div>
-                <span className="text-xs font-bold" style={{ color: "#64748b" }}>{showFormGajianLama ? " Tutup" : " Buka"}</span>
+                <div className="text-xs font-bold" style={{ color: "#065f46" }}>📝 Input Riwayat Gajian Lama</div>
+                <span className="text-xs" style={{ color: "#94a3b8" }}>{showFormGajianLama ? "▲ Tutup" : "▼ Buka"}</span>
               </button>
               {showFormGajianLama && (
                 <div className="space-y-2 pt-1">
                   <div>
                     <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Nama Pekerja</div>
-                    <UiSelect
+                    <select
                       value={formGajianLama.employeeName}
                       onChange={(e) => setFormGajianLama((f) => ({ ...f, employeeName: e.target.value }))}
                       className="w-full rounded-xl border px-3 py-2 text-sm"
@@ -5046,33 +6020,33 @@ function rateDocId(productType, model, process) {
                       {workerNameOptions.map((w) => (
                         <option key={w} value={w}>{displayWorkerName(w)}</option>
                       ))}
-                    </UiSelect>
+                    </select>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Tanggal Digaji</div>
-                      <UiInput type="date" value={formGajianLama.tanggalGaji}
-                        onChange={(e) => setFormGajianLama((f) => ({ ...f, tanggalGaji: e.target.value }))}
+                      <input type="date" value={formGajianLama.tanggalGaji}
+                        onChange={(v) => setFormGajianLama((f) => ({ ...f, tanggalGaji: inputValue(v) }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Jumlah Dibayar</div>
-                      <UiInput type="number" placeholder="0" value={formGajianLama.jumlah}
-                        onChange={(e) => setFormGajianLama((f) => ({ ...f, jumlah: e.target.value }))}
+                      <input type="number" placeholder="0" value={formGajianLama.jumlah}
+                        onChange={(v) => setFormGajianLama((f) => ({ ...f, jumlah: inputValue(v) }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Dari</div>
-                      <UiInput type="date" value={formGajianLama.periodeGajiDari}
-                        onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiDari: e.target.value }))}
+                      <input type="date" value={formGajianLama.periodeGajiDari}
+                        onChange={(v) => setFormGajianLama((f) => ({ ...f, periodeGajiDari: inputValue(v) }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
                     <div>
                       <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Sampai</div>
-                      <UiInput type="date" value={formGajianLama.periodeGajiSampai}
-                        onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiSampai: e.target.value }))}
+                      <input type="date" value={formGajianLama.periodeGajiSampai}
+                        onChange={(v) => setFormGajianLama((f) => ({ ...f, periodeGajiSampai: inputValue(v) }))}
                         className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
                     </div>
                   </div>
@@ -5083,16 +6057,18 @@ function rateDocId(productType, model, process) {
                     className="w-full rounded-xl py-2.5 text-sm font-bold text-white"
                     style={{ background: "linear-gradient(135deg,#065f46,#16a34a)" }}
                   >
-                    {isSaving ? "Menyimpan..." : " Simpan Riwayat Gajian"}
+                    {isSaving ? "Menyimpan..." : "💾 Simpan Riwayat Gajian"}
                   </button>
                 </div>
               )}
             </div>
+
+            {/* Daftar Riwayat Gajian Tersimpan */}
             {gajianHistory.length > 0 && (
               <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #a7f3d0" }}>
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-black" style={{ color: "#065f46" }}> Semua Riwayat Gajian ({gajianHistory.length})</div>
+                    <div className="text-sm font-black" style={{ color: "#065f46" }}>📋 Semua Riwayat Gajian ({gajianHistory.length})</div>
                     <div className="text-xs" style={{ color: "#64748b" }}>Daftar bisa discroll agar halaman tidak terlalu panjang.</div>
                   </div>
                 </div>
@@ -5104,7 +6080,7 @@ function rateDocId(productType, model, process) {
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
                           <div className="text-xs leading-snug" style={{ color: "#64748b" }}>
-                            Digaji: {g.tanggalGaji}  Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                            Digaji: {g.tanggalGaji} · Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
                           </div>
                           {g.source === "input_manual_lama" && (
                             <div className="text-xs font-bold" style={{ color: "#a855f7" }}>input manual lama</div>
@@ -5122,40 +6098,43 @@ function rateDocId(productType, model, process) {
                 </div>
               </div>
             )}
+
+            {/* Ringkasan total */}
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fce7f3" }}>
                 <div className="text-xl font-bold" style={{ color: "#ec4899" }}>{totalQty.toLocaleString()}</div>
-                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs diberikan</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs diberikan</div>
               </div>
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #bbf7d0" }}>
                 <div className="text-xl font-bold" style={{ color: "#16a34a" }}>{totalSetor.toLocaleString()}</div>
-                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs disetor</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs disetor</div>
               </div>
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fde68a" }}>
                 <div className="text-xl font-bold" style={{ color: "#d97706" }}>{totalReject.toLocaleString()}</div>
-                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs reject</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>pcs reject</div>
               </div>
               <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="text-base font-bold" style={{ color: "#7c3aed" }}>{money(totalGaji)}</div>
-                <div className="text-xs font-bold" style={{ color: "#64748b" }}>total gaji</div>
+                <div className="text-xs" style={{ color: "#94a3b8" }}>total gaji</div>
               </div>
             </div>
+
             {rekapPerkerja.length > 0 && (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}> Rekap Gajian Keseluruhan</div>
-                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}</div>
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>💰 Rekap Gajian Keseluruhan</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button type="button" onClick={() => setRekapDetailModal("sudah")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
                     <div className="text-xs font-bold" style={{ color: "#16a34a" }}>Sudah Gajian</div>
                     <div className="text-lg font-black" style={{ color: "#16a34a" }}>{money(rekapGajianKeseluruhan.totalSudahDibayar)}</div>
-                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.sudahGajian} pekerja</span><span>Rincian </span></div>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.sudahGajian} pekerja</span><span>Rincian ›</span></div>
                   </button>
                   <button type="button" onClick={() => setRekapDetailModal("belum")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
                     <div className="text-xs font-bold" style={{ color: "#b45309" }}>Belum Gajian</div>
                     <div className="text-lg font-black" style={{ color: "#b45309" }}>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</div>
-                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.belumGajian} pekerja</span><span>Rincian </span></div>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.belumGajian} pekerja</span><span>Rincian ›</span></div>
                   </button>
                 </div>
                 <div onClick={() => setRekapDetailModal("total")} className="w-full rounded-xl p-3 text-left active:scale-[0.99] transition-transform cursor-pointer" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", border: "1px solid #e9d5ff" }}>
@@ -5186,10 +6165,11 @@ function rateDocId(productType, model, process) {
                 </div>
               </div>
             )}
+
             {rekapDetailModal && (() => {
               const getCarryOver = (nama) => productionEntries.filter((e) =>
                 normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
-                getEntrySetorTotals(e).sisaSetor > 0 &&
+                setorTotals(e).sisaSetor > 0 &&
                 dateBefore(e.tanggal, rekapDari)
               );
               const isAllTimeDetail = rekapDetailModal === "allTime";
@@ -5234,7 +6214,7 @@ function rateDocId(productType, model, process) {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-base font-black" style={{ color: "#2d1b69" }}>{titleMap[rekapDetailModal] || "Rincian Rekap"}</div>
-                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{isAllTimeDetail ? "Semua waktu" : (rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih")}  {filteredRows.length} pekerja</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{isAllTimeDetail ? "Semua waktu" : (rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih")} · {filteredRows.length} pekerja</div>
                         </div>
                         <button type="button" onClick={() => setRekapDetailModal(null)} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#f1f5f9", color: "#64748b" }}>Tutup</button>
                       </div>
@@ -5260,18 +6240,18 @@ function rateDocId(productType, model, process) {
                         <div key={nama} className="rounded-2xl p-3" style={{ border: "1px solid #e9d5ff", background: sudah ? "#f0fdf4" : "#fff7ed" }}>
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {nama}</div>
+                              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {isAllTimeDetail ? (
                                   <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#ecfdf5", color: "#047857" }}>
-                                     Semua waktu  {Number(r.transaksi || 0).toLocaleString()} transaksi
+                                    📚 Semua waktu · {Number(r.transaksi || 0).toLocaleString()} transaksi
                                   </span>
                                 ) : (
                                   <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: sudah ? "#dcfce7" : "#fef3c7", color: sudah ? "#16a34a" : "#b45309" }}>
-                                    {sudah ? " Sudah gajian" : " Belum gajian"}
+                                    {sudah ? "✅ Sudah gajian" : "⏳ Belum gajian"}
                                   </span>
                                 )}
-                                {Number(r.belumSetor || 0) > 0 && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#fffbeb", color: "#b45309" }}> {r.belumSetor} blm setor</span>}
+                                {Number(r.belumSetor || 0) > 0 && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#fffbeb", color: "#b45309" }}>⏳ {r.belumSetor} blm setor</span>}
                               </div>
                             </div>
                             <div className="text-right">
@@ -5291,7 +6271,7 @@ function rateDocId(productType, model, process) {
                               className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
                               style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                             >
-                               Lihat Slip
+                              👁️ Lihat Slip
                             </button>
                           )}
                         </div>
@@ -5301,11 +6281,12 @@ function rateDocId(productType, model, process) {
                 </div>
               );
             })()}
+
             {boronganBelumMasukRekap.length > 0 && (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #fed7aa", background: "#fff7ed" }}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-xs font-bold" style={{ color: "#c2410c" }}> Borongan Belum Masuk Rekap Gaji</div>
+                    <div className="text-xs font-bold" style={{ color: "#c2410c" }}>⚠️ Borongan Belum Masuk Rekap Gaji</div>
                     <div className="text-[11px] mt-1" style={{ color: "#9a3412" }}>
                       Data ini ada di Borongan, tapi belum menghasilkan gaji pada periode {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}.
                     </div>
@@ -5320,9 +6301,9 @@ function rateDocId(productType, model, process) {
                     <div key={e.id} className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid #fed7aa" }}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {e.employeeName || "Tidak diketahui"}</div>
+                          <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {e.employeeName || "Tidak diketahui"}</div>
                           <div className="text-xs mt-0.5" style={{ color: "#64748b" }}>
-                            {e.process || "-"}  {e.model || "-"}  {e.customer || "-"}{e.invoice ? `  ${e.invoice}` : ""}
+                            {e.process || "-"} · {e.model || "-"} · {e.customer || "-"}{e.invoice ? ` · ${e.invoice}` : ""}
                           </div>
                           <div className="text-[11px] mt-1 font-semibold" style={{ color: "#c2410c" }}>{e.alasan}</div>
                         </div>
@@ -5350,13 +6331,15 @@ function rateDocId(productType, model, process) {
                         </div>
                       </div>
                       <div className="flex items-center justify-between mt-2 text-[11px]" style={{ color: "#94a3b8" }}>
-                        <span> Diberikan: {e.tanggal || "-"}</span>
+                        <span>📅 Diberikan: {e.tanggal || "-"}</span>
                         <span>{e.tanggalSetorTerakhir ? `Setor terakhir: ${e.tanggalSetorTerakhir}` : "Belum ada setor"}</span>
                       </div>
                       {Number(e.sisaSetor || 0) > 0 && (
                         <button
                           type="button"
                           onClick={() => {
+                            // Selalu pakai entry asli dari productionEntries agar setorTotals
+                            // tidak membaca field derived (qtySetor, statusSetor, dll) sebagai legacy data.
                             const rawEntry = productionEntries.find((pe) => pe.id === e.id) || e;
                             const t = setorTotals(rawEntry);
                             setSetorModal(rawEntry);
@@ -5365,7 +6348,7 @@ function rateDocId(productType, model, process) {
                           className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
                           style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}
                         >
-                           Setor Hasil / Masukkan ke Rekap
+                          ✅ Setor Hasil / Masukkan ke Rekap
                         </button>
                       )}
                     </div>
@@ -5373,12 +6356,14 @@ function rateDocId(productType, model, process) {
                 </div>
               </div>
             )}
+
+            {/* Rekap per proses */}
             {prosesKeys.length > 0 ? (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
-                <div className="text-xs font-bold" style={{ color: "#7c3aed" }}> Per Proses</div>
+                <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📋 Per Proses</div>
                 {prosesKeys.map((p) => {
                   const r = byProses[p];
-                  const icon = p === "Potong" ? "" : p === "Jahit" ? "" : sameProcess(p, "Pengemasan QC") ? "" : "";
+                  const icon = p === "Potong" ? "✂️" : p === "Jahit" ? "🧵" : sameProcess(p, "Pengemasan QC") ? "📦" : "🔧";
                   const reject = r.qtyReject;
                   return (
                     <div key={p} className="rounded-xl p-3" style={{ background: "#fdf4ff", border: "1px solid #f3e8ff" }}>
@@ -5407,54 +6392,59 @@ function rateDocId(productType, model, process) {
             ) : (
               <Empty text="Tidak ada data borongan di periode ini" />
             )}
+
+            {/* Rekap Gaji per Pekerja + Download Slip */}
             {rekapPerkerja.length > 0 && (
               <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}> Rekap Gaji per Pekerja</div>
-                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPerkerja.length} pekerja</div>
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>📊 Rekap Gaji per Pekerja</div>
+                  <div className="text-xs" style={{ color: "#94a3b8" }}>{rekapPerkerja.length} pekerja</div>
                 </div>
                 {rekapPerkerja.map(([nama, r]) => {
                   const sudahGajianPerkerja = sudahGajian(nama, rekapDari, rekapSampai);
                   const carryOver = productionEntries.filter((e) =>
                     normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
-                    Number(getEntrySetorTotals(e).sisaSetor || 0) > 0 &&
+                    Number(setorTotals(e).sisaSetor || 0) > 0 &&
                     dateBefore(e.tanggal, rekapDari)
                   );
-                  const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number(getEntrySetorTotals(e).sisaSetor || 0), 0);
+                  const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0);
                   return (
                   <div key={nama} className="rounded-xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
+                    {/* Header pekerja */}
                     <div className="px-3 py-2" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)" }}>
                       <div className="flex justify-between items-start">
-                        <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {nama}</div>
+                        <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {nama}</div>
                         <div className="text-sm font-bold" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
                       </div>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {sudahGajianPerkerja
-                          ? <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#dcfce7", color: "#16a34a" }}> Sudah gajian</span>
-                          : <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}> Belum gajian</span>}
+                          ? <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#dcfce7", color: "#16a34a" }}>✅ Sudah gajian</span>
+                          : <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>⏳ Belum gajian</span>}
                         {totalCarryOverPcs > 0 && (
                           <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fff1f2", color: "#e11d48" }}>
-                             {totalCarryOverPcs} pcs tanggungan minggu lalu
+                            ⚠️ {totalCarryOverPcs} pcs tanggungan minggu lalu
                           </span>
                         )}
                       </div>
                     </div>
+                    {/* Ringkasan */}
                     <div className="flex gap-3 px-3 py-1.5 text-xs border-b" style={{ color: "#64748b", borderColor: "#f3e8ff" }}>
-                      <span> Diberi: <strong>{r.pcsAwal}</strong></span>
-                      <span> Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
-                      {r.pcsReject > 0 && <span> Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
-                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}> <strong>{r.belumSetor}</strong> blm setor</span>}
+                      <span>📦 Diberi: <strong>{r.pcsAwal}</strong></span>
+                      <span>✅ Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
+                      {r.pcsReject > 0 && <span>❌ Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
+                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}>⏳ <strong>{r.belumSetor}</strong> blm setor</span>}
                     </div>
+                    {/* Detail per pesanan & model */}
                     <div className="px-3 py-2 space-y-1.5">
                       {r.detail.map((d, i) => (
                         <div key={i} className="flex justify-between items-start text-xs rounded-lg px-2 py-1.5"
                           style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
                           <div>
                             <div className="font-semibold" style={{ color: "#2d1b69" }}>
-                               {d.model}  {d.process}
+                              👗 {d.model} — {d.process}
                             </div>
                             <div style={{ color: "#94a3b8" }}>
-                              {d.customer}{d.invoice ? `  ${d.invoice}` : ""}
+                              {d.customer}{d.invoice ? ` · ${d.invoice}` : ""}
                             </div>
                           </div>
                           <div className="text-right ml-2">
@@ -5464,18 +6454,19 @@ function rateDocId(productType, model, process) {
                             {d.sudahSetor && d.gaji > 0 && (
                               <div style={{ color: "#a855f7" }}>{money(d.gaji)}</div>
                             )}
-                            {!d.sudahSetor && <div style={{ color: "#b45309" }}> blm setor</div>}
+                            {!d.sudahSetor && <div style={{ color: "#b45309" }}>⏳ blm setor</div>}
                           </div>
                         </div>
                       ))}
                     </div>
+                    {/* Tombol Lihat & Download Slip */}
                     <div className="px-3 pb-3">
                       <button
                         onClick={() => setSlipPreview({ nama, r, dari: rekapDari, sampai: rekapSampai, carryOver })}
                         className="w-full rounded-xl py-2.5 text-xs font-bold text-white flex items-center justify-center gap-2"
                         style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                       >
-                         Lihat Slip Gaji  {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}
+                        👁️ Lihat Slip Gaji · {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}
                       </button>
                     </div>
                   </div>
@@ -5486,6 +6477,7 @@ function rateDocId(productType, model, process) {
           </div>
         );
       })()}
+
       {tab === "kain" && (
         <div className="space-y-3 p-4">
           <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
@@ -5495,7 +6487,7 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-               Kain
+              🎨 Kain
             </button>
             <button
               type="button"
@@ -5503,14 +6495,14 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-               Tarif
+              🏷️ Tarif
             </button>
           </div>
-          <InfoBox title="Data kain dari Gallery Kerudung" subtitle="Sumber data: collection materials. Gallery Produksi hanya melihat stok kain." icon="" />
+          <InfoBox title="Data kain dari Gallery Kerudung" subtitle="Sumber data: collection materials. Gallery Produksi hanya melihat stok kain." icon="🎨" />
           {filteredMaterials.length === 0 && <Empty text="Tidak ada data kain/materials" />}
           {filteredMaterials.map((k) => (
             <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-lg" style={{ color: "#2d1b69" }}> {k.namaKain}</div>
+              <div className="font-bold text-lg" style={{ color: "#2d1b69" }}>🎨 {k.namaKain}</div>
               <div className="text-xs" style={{ color: "#a855f7" }}>Satuan: {k.satuan || "-"}</div>
               <div className="mt-3 space-y-2">
                 {(k.warnas || []).map((w, idx) => (
@@ -5528,14 +6520,17 @@ function rateDocId(productType, model, process) {
           ))}
         </div>
       )}
+
       {tab === "kirim" && (
         <div className="space-y-3 p-4">
           <Button onClick={() => setModal("kirim")} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
-             + Catat Pengiriman
+            🚚 + Catat Pengiriman
           </Button>
+
+          {/* Banner filter belum lengkap */}
           {kirimOnlyBelumLengkap && (
             <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}>
-              <span className="text-xl"></span>
+              <span className="text-xl">🚚</span>
               <div className="flex-1">
                 <div className="text-sm font-black" style={{ color: "#1d4ed8" }}>Hanya menampilkan pengiriman belum lengkap</div>
                 <div className="text-xs mt-1" style={{ color: "#2563eb" }}>Catat sisa pengiriman untuk pesanan di bawah ini.</div>
@@ -5550,19 +6545,26 @@ function rateDocId(productType, model, process) {
               </button>
             </div>
           )}
+
           {(() => {
             const kirimBelumLengkapIds = new Set(
-              dashboardInsights.tugas.kirimBelumLengkap.map(({ order }) => order.id)
+              (dashboardInsights.tugas.kirimBelumLengkapAll || dashboardInsights.tugas.kirimBelumLengkap).map(({ order }) => order.id)
             );
             const displayed = kirimOnlyBelumLengkap
               ? filteredShipments.filter((k) => kirimBelumLengkapIds.has(k.orderId) || kirimBelumLengkapIds.has(k.pesananId))
               : filteredShipments;
             if (displayed.length === 0) return <Empty text={kirimOnlyBelumLengkap ? "Semua pengiriman sudah lengkap" : "Tidak ada data pengiriman"} />;
-            return displayed.map((k) => (
+            return displayed.map((k) => {
+              const relatedOrder =
+                orderLookupForCards.byId.get(String(k.orderId || k.pesananId || "").trim()) ||
+                orderLookupForCards.byId.get(String(k.pesananId || k.orderId || "").trim()) ||
+                orderLookupForCards.byInvoice.get(normalizedInvoice(k.invoice || "")) ||
+                null;
+              return (
             <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
-              <div className="font-bold" style={{ color: "#2d1b69" }}>{k.customer || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.customer || "-"}</div>
-              <div className="text-xs" style={{ color: "#a855f7" }}> {k.produk || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.item || "-"}</div>
-              <div className="text-xs font-bold" style={{ color: "#64748b" }}> {k.tanggalKirim || "-"}  {k.ekspedisi || "-"}</div>
+              <div className="font-bold" style={{ color: "#2d1b69" }}>{k.customer || relatedOrder?.customer || "-"}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}>👗 {k.produk || relatedOrder?.item || "-"}</div>
+              <div className="text-xs" style={{ color: "#94a3b8" }}>🚚 {k.tanggalKirim || "-"} · {k.ekspedisi || "-"}</div>
               <div className="mt-3 rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
                 {(k.items || []).map((item, i) => (
                   <div key={i} className="flex justify-between text-xs py-1">
@@ -5572,10 +6574,12 @@ function rateDocId(productType, model, process) {
                 ))}
               </div>
             </div>
-          ));
+              );
+            });
           })()}
         </div>
       )}
+
       {tab === "tarif" && (
         <div className="space-y-3 p-4">
           <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
@@ -5585,7 +6589,7 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-               Kain
+              🎨 Kain
             </button>
             <button
               type="button"
@@ -5593,17 +6597,17 @@ function rateDocId(productType, model, process) {
               className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
               style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
             >
-               Tarif
+              🏷️ Tarif
             </button>
           </div>
           <Button onClick={() => setModal("tarif")} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
-             + Tambah Tarif Borongan
+            🏷️ + Tambah Tarif Borongan
           </Button>
           {workRates.map((r) => (
             <div key={r.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               <div className="flex justify-between items-start gap-3">
                 <div>
-                  <div className="font-bold" style={{ color: "#2d1b69" }}>{r.productType}{r.model ? `  ${r.model}` : ""}</div>
+                  <div className="font-bold" style={{ color: "#2d1b69" }}>{r.productType}{r.model ? ` · ${r.model}` : ""}</div>
                   <div className="text-xs" style={{ color: "#a855f7" }}>{r.process}</div>
                 </div>
                 <div className="text-right">
@@ -5615,26 +6619,28 @@ function rateDocId(productType, model, process) {
           ))}
         </div>
       )}
+
       {modal === "produksi" && (
-        <UiModal title=" Tambah ke Produksi" onClose={() => setModal(null)}>
+        <Modal title="🧵 Tambah ke Produksi" onClose={closeMainModal}>
           <div className="space-y-3">
-            <UiSelect label="Pilih Pesanan" value={prodForm.orderId} onChange={(v) => setProdForm((f) => ({ ...f, orderId: v }))}>
+            <Select label="Pilih Pesanan" value={prodForm.orderId} onChange={(v) => setProdForm((f) => ({ ...f, orderId: v }))}>
               <option value="">-- Pilih Pesanan --</option>
-              {ordersBelumProduksi.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.item}  {o.qty} pcs</option>)}
-            </UiSelect>
-            <UiInput label="Tanggal Mulai" type="date" value={prodForm.tanggalMulai} onChange={(v) => setProdForm((f) => ({ ...f, tanggalMulai: v }))} />
-            <UiInput label="Catatan" value={prodForm.catatan} onChange={(v) => setProdForm((f) => ({ ...f, catatan: v }))} placeholder="Catatan produksi" />
+              {ordersBelumProduksi.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.item} · {o.qty} pcs</option>)}
+            </Select>
+            <Input label="Tanggal Mulai" type="date" value={prodForm.tanggalMulai} onChange={(v) => setProdForm((f) => ({ ...f, tanggalMulai: v }))} />
+            <Input label="Catatan" value={prodForm.catatan} onChange={(v) => setProdForm((f) => ({ ...f, catatan: v }))} placeholder="Catatan produksi" />
             <Button onClick={addProduksi} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
               Simpan Produksi
             </Button>
           </div>
-        </UiModal>
+        </Modal>
       )}
+
       {modal === "borongan" && (
-        <UiModal title=" Input Hasil Borongan" onClose={() => setModal(null)}>
+        <Modal title="💪 Input Hasil Borongan" onClose={closeMainModal}>
           <div className="space-y-3">
             <div>
-              <UiInput
+              <Input
                 label="Nama Pekerja"
                 value={entryForm.employeeName}
                 onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: v }))}
@@ -5659,7 +6665,7 @@ function rateDocId(productType, model, process) {
                 Master data otomatis dari nama yang sudah pernah dipakai. Nama mirip akan dirapikan dan digabung saat disimpan.
               </div>
             </div>
-            <UiSelect
+            <Select
               label="Pesanan terkait"
               value={entryForm.orderId}
               onChange={(v) => {
@@ -5668,14 +6674,16 @@ function rateDocId(productType, model, process) {
               }}
             >
               <option value="">Tidak dikaitkan ke pesanan</option>
-              {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.invoice || o.item}  {o.qty} pcs</option>)}
-            </UiSelect>
-            <UiSelect label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
+              {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer} · {o.invoice || o.item} · {o.qty} pcs</option>)}
+            </Select>
+
+            <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
-            </UiSelect>
-            <UiSelect label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "" }))}>
+            </Select>
+            <Select label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "" }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
-            </UiSelect>
+            </Select>
+
             {(() => {
               const selectedOrder = orders.find((o) => o.id === entryForm.orderId);
               const rateModels = getRateModelOptions(entryForm.productType, entryForm.process, selectedOrder);
@@ -5689,68 +6697,66 @@ function rateDocId(productType, model, process) {
               const sisaQty = limit > 0 ? Math.max(0, limit - alreadyQty) : 0;
               return (
                 <div className="space-y-2">
-                  <UiSelect
+                  <Select
                     label="Model / Acuan Tarif"
                     value={entryForm.model}
                     onChange={(v) => setEntryForm((f) => ({ ...f, model: v, qty: sisaQty > 0 ? String(sisaQty) : f.qty }))}
                   >
                     <option value="">{isModelSpecificProcess(entryForm.process) ? "-- Pilih model dari pesanan terkait --" : "-- Pilih acuan tarif dari Master Tarif --"}</option>
                     {rateModels.map((name) => <option key={name} value={name}>{name}</option>)}
-                  </UiSelect>
-                  {entryProcessRequiresOrder(entryForm.process) && !selectedOrder && (
+                  </Select>
+                  {isModelSpecificProcess(entryForm.process) && !selectedOrder && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                       Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
-                    </div>
-                  )}
-                  {entryProcessWarnsWithoutOrder(entryForm.process) && !selectedOrder && (
-                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
-                       {entryForm.process} boleh tanpa pesanan, tapi nanti tidak ikut progress di Tab Produksi sampai dikaitkan lewat tombol  Kaitkan ke Pesanan.
+                      ⚠️ Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
                     </div>
                   )}
                   {rateModels.length === 0 && (!isModelSpecificProcess(entryForm.process) || selectedOrder) && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                       {isModelSpecificProcess(entryForm.process)
+                      ⚠️ {isModelSpecificProcess(entryForm.process)
                         ? `Pesanan terkait belum memiliki item/model untuk proses ${entryForm.process}.`
-                        : `Tarif belum ada di Master Tarif untuk ${entryForm.productType}  ${entryForm.process}. Silakan buat tarif baru di menu Master Tarif.`}
+                        : `Tarif belum ada di Master Tarif untuk ${entryForm.productType} · ${entryForm.process}. Silakan buat tarif baru di menu Master Tarif.`}
                     </div>
                   )}
                   {selectedPreview.status === "found" && (
                     <div className="rounded-2xl border p-3 text-xs" style={{ background: "#ecfdf5", borderColor: "#86efac", color: "#166534" }}>
-                      <div className="font-black"> Tarif yang dipakai</div>
-                      <div className="mt-1 font-bold">{entryForm.productType}  {entryForm.process}  {entryForm.model}</div>
+                      <div className="font-black">✅ Tarif yang dipakai</div>
+                      <div className="mt-1 font-bold">{entryForm.productType} · {entryForm.process} · {entryForm.model}</div>
                       <div className="mt-1 text-base font-black">{money(selectedPreview.effectiveRate)} / pcs</div>
                       {normalizeWorkerNameKey(entryForm.employeeName).includes("konveksi") && (
-                        <div className="mt-1 text-[11px] font-semibold">Tarif Master {money(selectedPreview.baseRate)} / pcs  Tarif Konveksi {money(selectedPreview.effectiveRate)} / pcs</div>
+                        <div className="mt-1 text-[11px] font-semibold">Tarif Master {money(selectedPreview.baseRate)} / pcs · Tarif Konveksi {money(selectedPreview.effectiveRate)} / pcs</div>
                       )}
                     </div>
                   )}
                   {selectedPreview.status === "missing" && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
-                       Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.
+                      ⚠️ Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.
                     </div>
                   )}
                   {selectedPreview.status === "invalid" && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
-                       Tarif Konveksi tidak valid. Silakan perbaiki tarif di Master Tarif.
+                      ⚠️ Tarif Konveksi tidak valid. Silakan perbaiki tarif di Master Tarif.
                     </div>
                   )}
                   {selectedOrder && entryForm.model && limit > 0 && (
                     <div className="rounded-2xl px-3 py-2 text-xs font-semibold" style={{ background: "#f8fafc", color: "#475569", border: "1px solid #e2e8f0" }}>
-                      Batas {label}: {limit} pcs  sudah input {alreadyQty} pcs  sisa {sisaQty} pcs.
+                      Batas {label}: {limit} pcs · sudah input {alreadyQty} pcs · sisa {sisaQty} pcs.
                     </div>
                   )}
                 </div>
               );
             })()}
-            <UiInput label="Jumlah pcs" type="number" value={entryForm.qty} onChange={(v) => setEntryForm((f) => ({ ...f, qty: v }))} placeholder="Contoh: 500" />
-            <UiInput label="Tanggal" type="date" value={entryForm.tanggal} onChange={(v) => setEntryForm((f) => ({ ...f, tanggal: v }))} />
-            <UiInput label="Catatan" value={entryForm.catatan} onChange={(v) => setEntryForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
+
+            <Input label="Jumlah pcs" type="number" value={entryForm.qty} onChange={(v) => setEntryForm((f) => ({ ...f, qty: v }))} placeholder="Contoh: 500" />
+            <Input label="Tanggal" type="date" value={entryForm.tanggal} onChange={(v) => setEntryForm((f) => ({ ...f, tanggal: v }))} />
+            <Input label="Catatan" value={entryForm.catatan} onChange={(v) => setEntryForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
             <Button onClick={addProductionEntry} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
               Simpan Hasil Borongan
             </Button>
           </div>
-        </UiModal>
+        </Modal>
       )}
+
+      {/* Modal Setor Hasil Borongan Bertahap */}
       {setorModal && (() => {
         const modalTotals = setorTotals(setorModal);
         const sisa = Number(modalTotals.sisaSetor || 0);
@@ -5758,11 +6764,11 @@ function rateDocId(productType, model, process) {
         const inputReject = Number(setorForm.qtyReject || 0);
         const sisaSetelahInput = Math.max(0, sisa - inputSetor - inputReject);
         return (
-        <UiModal title=" Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
+        <Modal title="📦 Setor Hasil Borongan" onClose={closeSetorModal}>
           <div className="space-y-3">
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {displayWorkerName(setorModal.employeeName)}</div>
-              <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType}  {setorModal.process}{setorModal.model ? `  ${setorModal.model}` : ""}</div>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(setorModal.employeeName)}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType} · {setorModal.process}{setorModal.model ? ` · ${setorModal.model}` : ""}</div>
               <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
                 <div className="rounded-xl py-2" style={{ background: "#ede9fe", color: "#5b21b6" }}><strong>{setorModal.qty}</strong><br/>diberi</div>
                 <div className="rounded-xl py-2" style={{ background: "#dcfce7", color: "#16a34a" }}><strong>{modalTotals.qtySetor}</strong><br/>sudah setor</div>
@@ -5773,19 +6779,19 @@ function rateDocId(productType, model, process) {
               <div className="rounded-2xl p-3 text-xs space-y-1" style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#92400e" }}>
                 <div className="font-bold">Riwayat setor sebelumnya</div>
                 {modalTotals.history.map((h, idx) => (
-                  <div key={h.id || idx}> {h.tanggalSetor}: setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `, reject ${Number(h.qtyReject || 0)} pcs` : ""}  {money(h.totalWageSetor || 0)}</div>
+                  <div key={h.id || idx}>• {h.tanggalSetor}: setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `, reject ${Number(h.qtyReject || 0)} pcs` : ""} · {money(h.totalWageSetor || 0)}</div>
                 ))}
               </div>
             )}
-            <UiInput
+            <Input
               label="Qty Disetor (pcs)"
               type="number"
               value={setorForm.qtySetor}
               onChange={(v) => setSetorForm((f) => ({ ...f, qtySetor: v }))}
               placeholder={`Maks ${sisa} pcs`}
             />
-            <UiInput
-              label="Qty Reject (pcs)  opsional"
+            <Input
+              label="Qty Reject (pcs) — opsional"
               type="number"
               value={setorForm.qtyReject}
               onChange={(v) => setSetorForm((f) => ({ ...f, qtyReject: v }))}
@@ -5793,27 +6799,27 @@ function rateDocId(productType, model, process) {
             />
             {inputSetor + inputReject > sisa && (
               <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fee2e2", color: "#b91c1c" }}>
-                 Total input melebihi sisa {sisa} pcs.
+                ⚠️ Total input melebihi sisa {sisa} pcs.
               </div>
             )}
             {inputSetor + inputReject > 0 && inputSetor + inputReject <= sisa && sisaSetelahInput > 0 && (
               <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>
-                 Setelah setor ini masih tersisa {sisaSetelahInput} pcs.
+                ⚠️ Setelah setor ini masih tersisa {sisaSetelahInput} pcs.
               </div>
             )}
             {inputSetor > 0 && Number(setorModal.rate) > 0 && (
               <div className="rounded-xl px-3 py-2 text-sm font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>
-                 Gaji transaksi ini: {money(inputSetor * Number(setorModal.rate))}
-                <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs  {money(setorModal.rate)})</span>
+                💰 Gaji transaksi ini: {money(inputSetor * Number(setorModal.rate))}
+                <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs × {money(setorModal.rate)})</span>
               </div>
             )}
-            <UiInput
+            <Input
               label="Tanggal Setor"
               type="date"
               value={setorForm.tanggalSetor}
               onChange={(v) => setSetorForm((f) => ({ ...f, tanggalSetor: v }))}
             />
-            <UiInput
+            <Input
               label="Catatan"
               value={setorForm.catatan}
               onChange={(v) => setSetorForm((f) => ({ ...f, catatan: v }))}
@@ -5823,20 +6829,22 @@ function rateDocId(productType, model, process) {
               {sisaSetelahInput > 0 ? "Simpan Setor Sebagian" : "Simpan Setor Selesai"}
             </Button>
           </div>
-        </UiModal>
+        </Modal>
         );
       })()}
+
+
       {modal === "tarif" && (
-        <UiModal title=" Tambah Tarif Borongan" onClose={() => setModal(null)}>
+        <Modal title="🏷️ Tambah Tarif Borongan" onClose={closeMainModal}>
           <div className="space-y-3">
-            <UiSelect label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
+            <Select label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
-            </UiSelect>
-            <UiSelect label="Proses" value={rateForm.process} onChange={(v) => setRateForm((f) => ({ ...f, process: v }))}>
+            </Select>
+            <Select label="Proses" value={rateForm.process} onChange={(v) => setRateForm((f) => ({ ...f, process: v }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
-            </UiSelect>
+            </Select>
             <div>
-              <UiInput label="Model / Acuan Tarif" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Kerudung / Alya L / Gamis" />
+              <Input label="Model / Acuan Tarif" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Kerudung / Alya L / Gamis" />
               <div className="mt-1 text-[11px] font-semibold" style={{ color: "#64748b" }}>
                 Isi sesuai Master Tarif. Untuk Potong/Pengemasan-QC boleh memakai acuan umum seperti Kerudung.
               </div>
@@ -5856,17 +6864,18 @@ function rateDocId(productType, model, process) {
                 </div>
               )}
             </div>
-            <UiInput label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
+            <Input label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
             <Button onClick={addWorkRate} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
               Simpan Tarif
             </Button>
           </div>
-        </UiModal>
+        </Modal>
       )}
+
       {modal === "kirim" && (
-        <UiModal title=" Catat Pengiriman" onClose={() => setModal(null)}>
+        <Modal title="🚚 Catat Pengiriman" onClose={closeMainModal}>
           <div className="space-y-3">
-            <UiSelect
+            <Select
               label="Pilih Customer"
               value={kirimForm.customerKey || ""}
               onChange={(v) => {
@@ -5902,8 +6911,8 @@ function rateDocId(productType, model, process) {
               }}
             >
               <option value="">-- Pilih Customer --</option>
-              {shipmentCustomerOptions.map((c) => <option key={c.key} value={c.key}>{c.name}  {c.count} pesanan siap/sisa kirim</option>)}
-            </UiSelect>
+              {shipmentCustomerOptions.map((c) => <option key={c.key} value={c.key}>{c.name} · {c.count} pesanan siap/sisa kirim</option>)}
+            </Select>
             {kirimForm.customerKey && (
               <div className="rounded-2xl border p-3 text-xs space-y-2" style={{ background: "#f8fafc", borderColor: "#e2e8f0", color: "#475569" }}>
                 <div className="font-black" style={{ color: "#0f172a" }}>Pesanan dalam nota ini</div>
@@ -5911,11 +6920,12 @@ function rateDocId(productType, model, process) {
                   const checked = (kirimForm.orderIds || []).includes(o.id);
                   return (
                     <label key={o.id} className="flex items-center gap-2 rounded-xl bg-white p-2">
-                      <UiInput
+                      <input
                         type="checkbox"
                         checked={checked}
                         onChange={(e) => {
-                          const nextIds = e.target.checked
+                          const isChecked = e?.target?.checked ?? Boolean(e);
+                          const nextIds = isChecked
                             ? Array.from(new Set([...(kirimForm.orderIds || []), o.id]))
                             : (kirimForm.orderIds || []).filter((id) => id !== o.id);
                           const selectedOrders = ordersForShipment.filter((x) => nextIds.includes(x.id));
@@ -5937,19 +6947,19 @@ function rateDocId(productType, model, process) {
                           setKirimForm((f) => ({ ...f, orderIds: nextIds, pesananId: nextIds[0] || "", items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }] }));
                         }}
                       />
-                      <span className="flex-1"><b>{o.invoice || o.item}</b>  {o.item}  {o.qty} pcs</span>
+                      <span className="flex-1"><b>{o.invoice || o.item}</b> · {o.item} · {o.qty} pcs</span>
                     </label>
                   );
                 })}
               </div>
             )}
-            <UiInput label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
-            <UiInput label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
-            <UiInput label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
+            <Input label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
+            <Input label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
+            <Input label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
             {kirimForm.items.map((item, idx) => (
               <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
-                {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"}  {item.customer || kirimForm.penerima}</div>}
-                <UiInput
+                {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"} · {item.customer || kirimForm.penerima}</div>}
+                <Input
                   label="Item"
                   value={item.nama}
                   onChange={(v) => {
@@ -5959,8 +6969,8 @@ function rateDocId(productType, model, process) {
                   }}
                 />
                 <div className="grid grid-cols-2 gap-2 mt-2">
-                  <UiInput label="Qty Pesan" value={item.qtyPesan} readOnly />
-                  <UiInput
+                  <Input label="Qty Pesan" value={item.qtyPesan} readOnly />
+                  <Input
                     label="Qty Kirim"
                     type="number"
                     value={item.qtyKirim}
@@ -5982,7 +6992,7 @@ function rateDocId(productType, model, process) {
               if (lebih > 0) {
                 return (
                   <div className="rounded-2xl border p-3 text-xs" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
-                    <div className="font-bold mb-1"> Kelebihan kirim {formatNumber(lebih)} pcs</div>
+                    <div className="font-bold mb-1">⚠️ Kelebihan kirim {lebih.toLocaleString("id-ID")} pcs</div>
                     <div>Qty kirim lebih besar dari pesanan. Kelebihan ini akan ikut menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim.</div>
                   </div>
                 );
@@ -5990,60 +7000,53 @@ function rateDocId(productType, model, process) {
               return (
                 <div className="rounded-2xl border p-3 text-xs space-y-3" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
                   <div>
-                    <div className="font-bold mb-1"> Pengiriman kurang dari pesanan</div>
-                    <div>Pesanan {formatNumber(totalPesan)} pcs  dikirim {formatNumber(totalKirim)} pcs  sisa {formatNumber(sisa)} pcs.</div>
+                    <div className="font-bold mb-1">⚠️ Pengiriman kurang dari pesanan</div>
+                    <div>Pesanan {totalPesan.toLocaleString("id-ID")} pcs · dikirim {totalKirim.toLocaleString("id-ID")} pcs · sisa {sisa.toLocaleString("id-ID")} pcs.</div>
                   </div>
                   <div className="grid gap-2">
                     <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
-                      <UiInput type="radio" checked={(kirimForm.shortShipmentMode || "temporary") === "temporary"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "temporary" }))} />
+                      <input type="radio" checked={(kirimForm.shortShipmentMode || "temporary") === "temporary"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "temporary" }))} />
                       <span><b>Kurang kirim sementara</b><br/>Pilih ini jika sisa barang masih akan diproduksi/dikirim lagi nanti. Status menjadi Dikirim Sebagian dan sisa tetap tampil di Dashboard.</span>
                     </label>
                     <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
-                      <UiInput type="radio" checked={kirimForm.shortShipmentMode === "final"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "final" }))} />
+                      <input type="radio" checked={kirimForm.shortShipmentMode === "final"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "final" }))} />
                       <span><b>Kurang kirim final</b><br/>Pilih ini jika sisa tidak akan dikirim lagi. Order ditutup sebagai Kurang Kirim Final, sisa tidak jadi tanggungan aktif, dan tagihan tetap hanya dari qty terkirim.</span>
                     </label>
                   </div>
                   {kirimForm.shortShipmentMode === "final" && (
                     <div className="grid gap-2">
-                      <UiSelect label="Alasan kurang kirim final" value={kirimForm.shortShipmentReason || "Stok kain habis"} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentReason: v }))}>
+                      <Select label="Alasan kurang kirim final" value={kirimForm.shortShipmentReason || "Stok kain habis"} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentReason: v }))}>
                         <option value="Stok kain habis">Stok kain habis</option>
                         <option value="Produksi hanya jadi segitu">Produksi hanya jadi segitu</option>
                         <option value="Customer setuju dikurangi">Customer setuju dikurangi</option>
                         <option value="Lainnya">Lainnya</option>
-                      </UiSelect>
-                      <UiInput label="Catatan penutupan" value={kirimForm.shortShipmentNote || ""} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentNote: v }))} placeholder="Opsional" />
+                      </Select>
+                      <Input label="Catatan penutupan" value={kirimForm.shortShipmentNote || ""} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentNote: v }))} placeholder="Opsional" />
                     </div>
                   )}
                 </div>
               );
             })()}
-            {(() => {
-              const unlinkedCount = (productionEntries || []).filter((e) => !e.orderId && Number(getEntrySetorTotals(e).qtySetor || 0) > 0).length;
-              if (unlinkedCount <= 0) return null;
-              return (
-                <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
-                   Ada {unlinkedCount} entry borongan sudah setor tapi masih Tanpa Pesanan. Cek Tab Borongan dan kaitkan dulu kalau entry itu milik pesanan yang akan dikirim.
-                </div>
-              );
-            })()}
-            <UiInput label="Catatan" value={kirimForm.catatan} onChange={(v) => setKirimForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
+            <Input label="Catatan" value={kirimForm.catatan} onChange={(v) => setKirimForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
             <Button onClick={addPengiriman} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
               Simpan Pengiriman
             </Button>
           </div>
-        </UiModal>
+        </Modal>
       )}
+
+      {/* Konfirmasi Hapus 2x */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
             {confirmDelete.step === 1 ? (
               <>
                 <div className="text-center mb-4">
-                  <div className="text-4xl mb-2"></div>
+                  <div className="text-4xl mb-2">🗑️</div>
                   <div className="text-lg font-bold" style={{ color: "#1e293b" }}>Hapus Data?</div>
                   <div className="text-sm mt-1" style={{ color: "#64748b" }}>
                     {confirmDelete.entry
-                      ? `Entry borongan ${displayWorkerName(confirmDelete.entry.employeeName)}  ${confirmDelete.entry.model || confirmDelete.entry.process}  ${confirmDelete.entry.qty} pcs`
+                      ? `Entry borongan ${displayWorkerName(confirmDelete.entry.employeeName)} — ${confirmDelete.entry.model || confirmDelete.entry.process} · ${confirmDelete.entry.qty} pcs`
                       : "Data ini akan dihapus."
                     }
                   </div>
@@ -6064,7 +7067,7 @@ function rateDocId(productType, model, process) {
             ) : (
               <>
                 <div className="text-center mb-4">
-                  <div className="text-4xl mb-2"></div>
+                  <div className="text-4xl mb-2">⚠️</div>
                   <div className="text-lg font-bold" style={{ color: "#e11d48" }}>Yakin Hapus Permanen?</div>
                   <div className="text-sm mt-2 rounded-xl px-3 py-2" style={{ background: "#fff1f2", color: "#b91c1c" }}>
                     Data yang dihapus <strong>tidak bisa dikembalikan</strong>. Termasuk data payroll terkait.
@@ -6079,7 +7082,7 @@ function rateDocId(productType, model, process) {
                   <button onClick={confirmDeleteAction}
                     className="flex-1 rounded-2xl py-3 font-semibold text-white"
                     style={{ background: "#e11d48" }}>
-                     Hapus Sekarang
+                    🗑️ Hapus Sekarang
                   </button>
                 </div>
               </>
@@ -6087,68 +7090,68 @@ function rateDocId(productType, model, process) {
           </div>
         </div>
       )}
+
+      {/* Modal Edit Entry Borongan */}
       {editEntryModal && (
-        <UiModal title=" Edit Entry Borongan" onClose={() => setEditEntryModal(null)}>
+        <Modal title="✏️ Edit Entry Borongan" onClose={closeEditEntryModal}>
           <div className="space-y-3">
+            {/* Info tidak bisa diubah */}
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
-              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {displayWorkerName(editEntryModal.employeeName)}</div>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(editEntryModal.employeeName)}</div>
               <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
-                {editEntryModal.productType}  {editEntryModal.process}
-                {editEntryModal.customer ? `  ${editEntryModal.customer}` : ""}
+                {editEntryModal.productType} · {editEntryModal.process}
+                {editEntryModal.customer ? ` · ${editEntryModal.customer}` : ""}
               </div>
               <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
-                 Nama pekerja & proses tidak bisa diubah di sini
+                ⚠️ Nama pekerja & proses tidak bisa diubah di sini
               </div>
             </div>
-            {!editEntryModal.orderId && (
-              <UiSelect
-                label="Kaitkan ke Pesanan"
-                value={editEntryForm.orderId}
-                onChange={(v) => setEditEntryForm(f => ({ ...f, orderId: v, model: v ? "" : f.model }))}
-              >
-                <option value="">Belum dikaitkan</option>
-                {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.invoice || o.item}  {o.qty} pcs</option>)}
-              </UiSelect>
-            )}
+
+            {/* Model — hanya untuk non-QC */}
             {!isGeneralRateProcess(editEntryModal.process) && (
-              <UiInput
+              <Input
                 label="Model"
                 value={editEntryForm.model}
                 onChange={(v) => setEditEntryForm(f => ({ ...f, model: v }))}
                 placeholder="Contoh: Alya L"
               />
             )}
-            <UiInput
+
+            <Input
               label="Jumlah pcs diberikan"
               type="number"
               value={editEntryForm.qty}
               onChange={(v) => setEditEntryForm(f => ({ ...f, qty: v }))}
               placeholder="Contoh: 62"
             />
-            <UiInput
+            <Input
               label="Tanggal"
               type="date"
               value={editEntryForm.tanggal}
               onChange={(v) => setEditEntryForm(f => ({ ...f, tanggal: v }))}
             />
-            <UiInput
+            <Input
               label="Catatan"
               value={editEntryForm.catatan}
               onChange={(v) => setEditEntryForm(f => ({ ...f, catatan: v }))}
               placeholder="Opsional"
             />
+
             {setorTotals(editEntryModal).statusSetor !== "belum_setor" && (
               <div className="rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#fef3c7", color: "#b45309" }}>
-                 Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
+                ⚠️ Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
               </div>
             )}
+
             <Button onClick={saveEditEntry} disabled={isSaving} className="w-full"
               style={{ background: "linear-gradient(135deg,#2563eb,#7c3aed)" }}>
-               Simpan Perubahan
+              💾 Simpan Perubahan
             </Button>
           </div>
-        </UiModal>
+        </Modal>
       )}
+
+      {/* Modal Preview Slip Gaji */}
       {slipPreview && (() => {
         const { nama, r, dari, sampai, carryOver = [] } = slipPreview;
         const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
@@ -6156,49 +7159,56 @@ function rateDocId(productType, model, process) {
         return (
           <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
             <div className="w-full max-h-[92vh] overflow-auto bg-white" style={{ borderRadius: "32px 32px 0 0", borderTop: "3px solid #a855f7" }}>
+              {/* Header */}
               <div className="px-5 pt-5 pb-3" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-3">
                     <img src="/logo-gk.png" alt="Gallery Kerudung" className="h-12 w-12 rounded-2xl bg-white object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-                    <div className="text-white font-extrabold text-lg"> Slip Pendapatan Borongan</div>
+                    <div className="text-white font-extrabold text-lg">🧾 Slip Pendapatan Borongan</div>
                   </div>
                   <button onClick={() => setSlipPreview(null)}
                     className="rounded-full px-4 py-1.5 text-sm font-bold"
                     style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
-                     Tutup
+                    ✕ Tutup
                   </button>
                 </div>
                 <div className="text-white text-sm opacity-90">Gallery Kerudung</div>
               </div>
+
               <div ref={slipRef} className="p-5 space-y-4">
+                {/* Info pekerja & periode */}
                 <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fdf4ff", border: "1px solid #e9d5ff" }}>
                   <div className="flex justify-between text-sm">
                     <span style={{ color: "#94a3b8" }}>Nama Pekerja</span>
-                    <strong style={{ color: "#2d1b69" }}> {nama}</strong>
+                    <strong style={{ color: "#2d1b69" }}>👤 {nama}</strong>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span style={{ color: "#94a3b8" }}>Periode</span>
-                    <strong style={{ color: "#2d1b69" }}> {dari} s/d {sampai}</strong>
+                    <strong style={{ color: "#2d1b69" }}>📅 {dari} s/d {sampai}</strong>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span style={{ color: "#94a3b8" }}>Tanggal Cetak</span>
                     <strong style={{ color: "#2d1b69" }}>{new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })}</strong>
                   </div>
                 </div>
+
+                {/* Ringkasan */}
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="rounded-xl p-2" style={{ background: "#ede9fe" }}>
                     <div className="font-bold text-base" style={{ color: "#5b21b6" }}>{r.pcsAwal}</div>
-                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Diberikan</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>Diberikan</div>
                   </div>
                   <div className="rounded-xl p-2" style={{ background: "#dcfce7" }}>
                     <div className="font-bold text-base" style={{ color: "#16a34a" }}>{r.pcsSetor}</div>
-                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Disetor</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>Disetor</div>
                   </div>
                   <div className="rounded-xl p-2" style={{ background: r.pcsReject > 0 ? "#fee2e2" : "#f1f5f9" }}>
                     <div className="font-bold text-base" style={{ color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" }}>{r.pcsReject}</div>
-                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Reject</div>
+                    <div className="text-xs" style={{ color: "#94a3b8" }}>Reject</div>
                   </div>
                 </div>
+
+                {/* Detail per entry */}
                 <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
                   <div className="px-3 py-2 text-xs font-bold" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", color: "#7c3aed" }}>
                     Detail Pekerjaan
@@ -6209,17 +7219,17 @@ function rateDocId(productType, model, process) {
                         style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
                         <div className="flex-1 mr-2">
                           <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>
-                            {d.process}{d.model && d.model !== "-" ? "  " + d.model : ""}
+                            {d.process}{d.model && d.model !== "-" ? " · " + d.model : ""}
                           </div>
                           <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
                             {d.customer}{d.invoice ? " / " + d.invoice : ""}
                           </div>
                           <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
-                             {d.tanggalSetor || d.tanggal || "-"}
+                            📅 {d.tanggalSetor || d.tanggal || "-"}
                           </div>
                           {d.rate > 0 && (
                             <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
-                              {fmt(d.rate)}/pcs  {d.sudahSetor ? d.qtySetor : d.qty} pcs
+                              {fmt(d.rate)}/pcs × {d.sudahSetor ? d.qtySetor : d.qty} pcs
                             </div>
                           )}
                         </div>
@@ -6227,13 +7237,13 @@ function rateDocId(productType, model, process) {
                           {d.sudahSetor ? (
                             <>
                               <div className="text-xs font-bold" style={{ color: "#16a34a" }}>{d.qtySetor} pcs</div>
-                              {d.qtyReject > 0 && <div className="text-xs" style={{ color: "#ef4444" }}> {d.qtyReject} reject</div>}
+                              {d.qtyReject > 0 && <div className="text-xs" style={{ color: "#ef4444" }}>❌ {d.qtyReject} reject</div>}
                               <div className="text-sm font-bold mt-0.5" style={{ color: "#7c3aed" }}>{fmt(d.gaji)}</div>
                             </>
                           ) : (
                             <>
                               <div className="text-xs font-bold" style={{ color: "#b45309" }}>{d.qty} pcs</div>
-                              <div className="text-xs mt-0.5" style={{ color: "#b45309" }}> Blm setor</div>
+                              <div className="text-xs mt-0.5" style={{ color: "#b45309" }}>⏳ Blm setor</div>
                             </>
                           )}
                         </div>
@@ -6241,15 +7251,21 @@ function rateDocId(productType, model, process) {
                     ))}
                   </div>
                 </div>
+
+                {/* Belum setor warning */}
                 {r.belumSetor > 0 && (
                   <div className="rounded-xl px-4 py-3 text-xs font-semibold" style={{ background: "#fefce8", border: "1px solid #fde68a", color: "#b45309" }}>
-                     Masih ada <strong>{r.belumSetor} pcs</strong> belum disetor, belum termasuk total di bawah.
+                    ⚠️ Masih ada <strong>{r.belumSetor} pcs</strong> belum disetor, belum termasuk total di bawah.
                   </div>
                 )}
+
+                {/* Total pendapatan */}
                 <div className="rounded-2xl p-4" style={{ background: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "1.5px solid #bbf7d0" }}>
                   <div className="text-xs mb-1" style={{ color: "#64748b" }}>Total Pendapatan Bersih</div>
                   <div className="text-3xl font-black" style={{ color: "#16a34a" }}>{fmt(r.gaji)}</div>
                 </div>
+
+                {/* Info kasbon aktif — tampil sebelum tombol gajian */}
                 {(() => {
                   const kasbonAktif = kasbonAktifUntukPekerja(nama);
                   if (kasbonAktif.length === 0) return null;
@@ -6258,10 +7274,10 @@ function rateDocId(productType, model, process) {
                   const diterima = Number(r.gaji || 0) - potongan;
                   return (
                     <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}>
-                      <div className="text-xs font-black" style={{ color: "#92400e" }}> Kasbon Aktif  akan dipotong saat gajian</div>
+                      <div className="text-xs font-black" style={{ color: "#92400e" }}>💰 Kasbon Aktif — akan dipotong saat gajian</div>
                       {kasbonAktif.map((k) => (
                         <div key={k.id} className="flex justify-between text-xs" style={{ color: "#78716c" }}>
-                          <span> {k.tanggal}{k.keterangan ? `  ${k.keterangan}` : ""}</span>
+                          <span>📅 {k.tanggal}{k.keterangan ? ` · ${k.keterangan}` : ""}</span>
                           <span className="font-bold text-amber-700">{money(k.sisaKasbon)} sisa</span>
                         </div>
                       ))}
@@ -6278,11 +7294,13 @@ function rateDocId(productType, model, process) {
                     </div>
                   );
                 })()}
+
+                {/* Status gajian - hanya tampil di modal slip agar rekap tetap rapi */}
                 <div className="rounded-2xl p-4 space-y-3" style={{ background: slipSudahGajian ? "#f0fdf4" : "#fff7ed", border: `1.5px solid ${slipSudahGajian ? "#bbf7d0" : "#fed7aa"}` }}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-xs font-bold" style={{ color: slipSudahGajian ? "#16a34a" : "#b45309" }}>
-                        {slipSudahGajian ? " Sudah gajian" : " Belum gajian"}
+                        {slipSudahGajian ? "✅ Sudah gajian" : "⏳ Belum gajian"}
                       </div>
                       <div className="mt-1 text-xs" style={{ color: "#64748b" }}>
                         Status ini hanya untuk periode {dari} s/d {sampai}.
@@ -6309,47 +7327,53 @@ function rateDocId(productType, model, process) {
                     )}
                   </div>
                 </div>
+
+                {/* Tanggungan minggu lalu (carry over) */}
                 {carryOver.length > 0 && (
                   <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fff7ed", border: "1.5px solid #fed7aa" }}>
                     <div className="text-xs font-bold" style={{ color: "#b45309" }}>
-                       Tanggungan Minggu Lalu (Belum Disetor)
+                      ⚠️ Tanggungan Minggu Lalu (Belum Disetor)
                     </div>
                     <div className="text-xs" style={{ color: "#92400e" }}>
                       Pekerjaan berikut belum disetor dan <strong>akan masuk gaji minggu depan</strong> setelah disetor:
                     </div>
                     {carryOver.map((e, i) => {
-                      const entryOrder = orders.find(o => o.id === e.orderId);
+                      const entryOrder = orderLookupForCards.byId.get(String(e.orderId || "").trim());
                       const namaModel = e.model && e.model !== "-" ? e.model : "-";
                       const periodeAsli = e.tanggal ? getMingguPeriod(e.tanggal) : null;
                       return (
                         <div key={i} className="rounded-xl px-3 py-2 text-xs" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
                           <div className="font-semibold" style={{ color: "#2d1b69" }}>
-                             {e.process}{namaModel !== "-" ? `  ${namaModel}` : ""}
+                            🧵 {e.process}{namaModel !== "-" ? ` · ${namaModel}` : ""}
                           </div>
                           {(e.customer || entryOrder?.customer) && (
-                            <div style={{ color: "#94a3b8" }}>{e.customer || entryOrder?.customer}{e.invoice ? `  ${e.invoice}` : ""}</div>
+                            <div style={{ color: "#94a3b8" }}>{e.customer || entryOrder?.customer}{e.invoice ? ` · ${e.invoice}` : ""}</div>
                           )}
                           <div className="flex justify-between mt-1">
                             <span style={{ color: "#b45309" }}>
-                               {periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : e.tanggal}
+                              📅 {periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : e.tanggal}
                             </span>
-                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(getEntrySetorTotals(e).sisaSetor || 0)} pcs  belum disetor</span>
+                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(setorTotals(e).sisaSetor || 0)} pcs · belum disetor</span>
                           </div>
                         </div>
                       );
                     })}
                     <div className="text-xs font-semibold text-center" style={{ color: "#b45309" }}>
-                      Total tanggungan: {carryOver.reduce((s, e) => s + Number(getEntrySetorTotals(e).sisaSetor || 0), 0)} pcs
+                      Total tanggungan: {carryOver.reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0)} pcs
                     </div>
                   </div>
                 )}
+
+                {/* Tombol Download Slip */}
                 <button
                   onClick={() => downloadSlipGaji(nama, r, dari, sampai, carryOver)}
                   className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
                   style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                 >
-                   Download / Cetak Slip PDF
+                  🖨️ Download / Cetak Slip PDF
                 </button>
+
+                {/* Tombol Share WA sebagai Gambar (Canvas Native) */}
                 <button
                   onClick={() => shareSlipGajiAsImage(nama, r, dari, sampai, carryOver)}
                   className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
@@ -6363,6 +7387,8 @@ function rateDocId(productType, model, process) {
           </div>
         );
       })()}
+
+      {/* Modal Tugas Hari Ini */}
       {tugasDetailModal && (
         <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }}>
           <motion.div
@@ -6373,7 +7399,7 @@ function rateDocId(productType, model, process) {
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-black" style={{ color: "#c2410c" }}> Tugas Hari Ini</h2>
+                <h2 className="text-lg font-black" style={{ color: "#c2410c" }}>✅ Tugas Hari Ini</h2>
                 <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>Ketuk item untuk langsung ke datanya</div>
               </div>
               <button
@@ -6384,10 +7410,12 @@ function rateDocId(productType, model, process) {
                 Tutup
               </button>
             </div>
+
+            {/* Bagian Borongan Belum Setor */}
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-black" style={{ color: "#c2410c" }}>
-                   Borongan Belum Setor
+                  💪 Borongan Belum Setor
                   <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
                     {dashboardInsights.tugas.boronganBelumSetor}
                   </span>
@@ -6397,11 +7425,11 @@ function rateDocId(productType, model, process) {
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
-                  Lihat Semua 
+                  Lihat Semua ›
                 </button>
               </div>
               {dashboardInsights.tugas.activeBorongan.length === 0 ? (
-                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}> Semua sudah setor</div>
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua sudah setor</div>
               ) : (
                 <div className="space-y-2">
                   {dashboardInsights.tugas.activeBorongan.map(({ entry, totals }) => (
@@ -6411,10 +7439,10 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}
                     >
-                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {displayWorkerName(entry.employeeName)}</div>
-                      <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>{entry.process || "-"}{entry.model && entry.model !== "-" ? `  ${displayModelName(entry.model)}` : ""}</div>
-                      {entry.customer && <div className="text-xs font-bold" style={{ color: "#64748b" }}>{entry.customer}{entry.invoice ? `  ${entry.invoice}` : ""}</div>}
-                      <div className="mt-1 text-sm font-black" style={{ color: "#c2410c" }}> Sisa {fmtQty(totals.sisaSetor)} pcs belum setor</div>
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(entry.employeeName)}</div>
+                      <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>{entry.process || "-"}{entry.model && entry.model !== "-" ? ` · ${displayModelName(entry.model)}` : ""}</div>
+                      {entry.customer && <div className="text-xs" style={{ color: "#94a3b8" }}>{entry.customer}{entry.invoice ? ` · ${entry.invoice}` : ""}</div>}
+                      <div className="mt-1 text-sm font-black" style={{ color: "#c2410c" }}>⏳ Sisa {fmtQty(totals.sisaSetor)} pcs belum setor</div>
                     </button>
                   ))}
                   {dashboardInsights.tugas.boronganBelumSetor > dashboardInsights.tugas.activeBorongan.length && (
@@ -6423,16 +7451,18 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#ffedd5", color: "#c2410c" }}
                     >
-                      + {dashboardInsights.tugas.boronganBelumSetor - dashboardInsights.tugas.activeBorongan.length} lainnya  Lihat semua borongan belum setor
+                      + {dashboardInsights.tugas.boronganBelumSetor - dashboardInsights.tugas.activeBorongan.length} lainnya → Lihat semua borongan belum setor
                     </button>
                   )}
                 </div>
               )}
             </div>
+
+            {/* Bagian Produksi Belum Selesai */}
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-black" style={{ color: "#c2410c" }}>
-                   Produksi Belum Selesai
+                  🧵 Produksi Belum Selesai
                   <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
                     {dashboardInsights.tugas.produksiBelumSelesai}
                   </span>
@@ -6442,11 +7472,11 @@ function rateDocId(productType, model, process) {
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
-                  Lihat Semua 
+                  Lihat Semua ›
                 </button>
               </div>
               {dashboardInsights.tugas.activeProduksi.length === 0 ? (
-                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}> Semua produksi selesai</div>
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua produksi selesai</div>
               ) : (
                 <div className="space-y-2">
                   {dashboardInsights.tugas.activeProduksi.map((item) => (
@@ -6456,8 +7486,8 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}
                     >
-                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {item.customer || item.orderCustomer || "-"}</div>
-                      {item.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}> {item.invoice}</div>}
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {item.customer || item.orderCustomer || "-"}</div>
+                      {item.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {item.invoice}</div>}
                       <div className="mt-1 text-sm font-black" style={{ color: "#7c3aed" }}>
                         Status: {item.status || "Antri"}
                       </div>
@@ -6469,16 +7499,18 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#ede9fe", color: "#7c3aed" }}
                     >
-                      + {dashboardInsights.tugas.produksiBelumSelesai - dashboardInsights.tugas.activeProduksi.length} lainnya  Lihat semua produksi
+                      + {dashboardInsights.tugas.produksiBelumSelesai - dashboardInsights.tugas.activeProduksi.length} lainnya → Lihat semua produksi
                     </button>
                   )}
                 </div>
               )}
             </div>
+
+            {/* Bagian Kirim Belum Lengkap */}
             <div className="mb-2">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-black" style={{ color: "#c2410c" }}>
-                   Kirim Belum Lengkap
+                  🚚 Kirim Belum Lengkap
                   <span className="ml-2 rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>
                     {dashboardInsights.tugas.kirimanBelumLengkap}
                   </span>
@@ -6488,11 +7520,11 @@ function rateDocId(productType, model, process) {
                   className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
-                  Lihat Semua 
+                  Lihat Semua ›
                 </button>
               </div>
               {dashboardInsights.tugas.kirimBelumLengkap.length === 0 ? (
-                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}> Semua pengiriman lengkap</div>
+                <div className="rounded-2xl p-3 text-xs font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>✅ Semua pengiriman lengkap</div>
               ) : (
                 <div className="space-y-2">
                   {dashboardInsights.tugas.kirimBelumLengkap.map(({ order, sisa }) => (
@@ -6502,9 +7534,9 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl p-3 text-left"
                       style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}
                     >
-                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {order.customer || "-"}</div>
-                      {order.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}> {order.invoice}</div>}
-                      <div className="mt-1 text-sm font-black" style={{ color: "#1d4ed8" }}> Sisa kirim {fmtQty(sisa)} pcs</div>
+                      <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>👤 {order.customer || "-"}</div>
+                      {order.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {order.invoice}</div>}
+                      <div className="mt-1 text-sm font-black" style={{ color: "#1d4ed8" }}>⏳ Sisa kirim {fmtQty(sisa)} pcs</div>
                     </button>
                   ))}
                   {dashboardInsights.tugas.kirimanBelumLengkap > dashboardInsights.tugas.kirimBelumLengkap.length && (
@@ -6513,7 +7545,7 @@ function rateDocId(productType, model, process) {
                       className="w-full rounded-2xl py-2 text-xs font-bold"
                       style={{ background: "#dbeafe", color: "#1d4ed8" }}
                     >
-                      + {dashboardInsights.tugas.kirimanBelumLengkap - dashboardInsights.tugas.kirimBelumLengkap.length} lainnya  Lihat semua pengiriman
+                      + {dashboardInsights.tugas.kirimanBelumLengkap - dashboardInsights.tugas.kirimBelumLengkap.length} lainnya → Lihat semua pengiriman
                     </button>
                   )}
                 </div>
@@ -6522,6 +7554,8 @@ function rateDocId(productType, model, process) {
           </motion.div>
         </div>
       )}
+
+      {/* Modal Alert Data Bermasalah */}
       {alertDetailModal && (
         <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }}>
           <motion.div
@@ -6532,7 +7566,7 @@ function rateDocId(productType, model, process) {
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-black" style={{ color: "#be123c" }}> Data Bermasalah</h2>
+                <h2 className="text-lg font-black" style={{ color: "#be123c" }}>🚨 Data Bermasalah</h2>
                 <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{dashboardInsights.alertCount} temuan perlu dicek</div>
               </div>
               <button
@@ -6545,7 +7579,7 @@ function rateDocId(productType, model, process) {
             </div>
             {dashboardInsights.alerts.length === 0 ? (
               <div className="rounded-2xl p-6 text-center text-sm font-bold" style={{ background: "#f0fdf4", color: "#16a34a" }}>
-                 Tidak ada data bermasalah saat ini.
+                ✅ Tidak ada data bermasalah saat ini.
               </div>
             ) : (
               <div className="space-y-3">
@@ -6571,7 +7605,7 @@ function rateDocId(productType, model, process) {
                         className="rounded-xl px-4 py-2 text-xs font-bold text-white"
                         style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
                       >
-                        Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} 
+                        Buka Tab {alert.tab === "borongan" ? "Borongan" : alert.tab === "tarif" ? "Master" : alert.tab === "pesanan" ? "Pesanan" : alert.tab === "kirim" ? "Kirim" : alert.tab} ›
                       </button>
                       {alert.type === "Produksi duplikat" && (
                         <button
@@ -6596,6 +7630,7 @@ function rateDocId(productType, model, process) {
           </motion.div>
         </div>
       )}
+
       {isSaving && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
           <div className="rounded-2xl bg-white px-8 py-5 shadow-xl flex items-center gap-3">
@@ -6607,6 +7642,7 @@ function rateDocId(productType, model, process) {
     </div>
   );
 }
+
 function InfoBox({ title, subtitle, icon }) {
   return (
     <div className="rounded-2xl px-4 py-3 flex items-center gap-3" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", border: "1px solid #e9d5ff" }}>
@@ -6615,13 +7651,15 @@ function InfoBox({ title, subtitle, icon }) {
         <div className="text-xs font-bold" style={{ color: "#7c3aed" }}>{title}</div>
         <div className="text-xs" style={{ color: "#a855f7" }}>{subtitle}</div>
       </div>
-      <span className="ml-auto text-green-500 text-lg"></span>
+      <span className="ml-auto text-green-500 text-lg">●</span>
     </div>
   );
 }
+
 function Empty({ text }) {
   return <div className="text-center py-10" style={{ color: "#c084fc" }}>{text}</div>;
 }
+
 function MiniStat({ label, value, bg, color }) {
   return (
     <div className="rounded-xl p-2" style={{ background: bg }}>
@@ -6630,22 +7668,3 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
