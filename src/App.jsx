@@ -24,21 +24,6 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import "./index.css";
-import DashboardTab from "./tabs/DashboardTab";
-import PesananTab from "./tabs/PesananTab";
-import ProduksiTab from "./tabs/ProduksiTab";
-import BoronganTab from "./tabs/BoronganTab";
-import KainTab from "./tabs/KainTab";
-import KirimTab from "./tabs/KirimTab";
-import TarifTab from "./tabs/TarifTab";
-import RekapTab from "./tabs/RekapTab";
-import ProduksiModal from "./modals/ProduksiModal";
-import BoronganModal from "./modals/BoronganModal";
-import SetorModal from "./modals/SetorModal";
-import TarifModal from "./modals/TarifModal";
-import KirimModal from "./modals/KirimModal";
-import ConfirmDeleteModal from "./modals/ConfirmDeleteModal";
-import EditEntryModal from "./modals/EditEntryModal";
 import { sameProcess, entryProcessRequiresOrder, entryProcessWarnsWithoutOrder } from "./utils/processUtils";
 const provider = new GoogleAuthProvider();
 const C = {
@@ -4094,246 +4079,2291 @@ function rateDocId(productType, model, process) {
           );
         })}
       </div>
-      <DashboardTab
-        tab={tab}
-        setTab={setTab}
-        dashboardSummary={dashboardSummary}
-        stats={stats}
-        dashboardInsights={dashboardInsights}
-        setBoronganOnlyBelumSetor={setBoronganOnlyBelumSetor}
-        setProduksiOnlyBelumSelesai={setProduksiOnlyBelumSelesai}
-        setKirimOnlyBelumLengkap={setKirimOnlyBelumLengkap}
-        setTugasDetailModal={setTugasDetailModal}
-        productionEntries={productionEntries}
-        setorHistoryInRange={setorHistoryInRange}
-        setorTotalsFromHistory={setorTotalsFromHistory}
-        displayWorkerName={displayWorkerName}
-        displayModelName={displayModelName}
-        fmtQty={fmtQty}
-        money={money}
-      />      <PesananTab
-        tab={tab}
-        visiblePesananOrders={visiblePesananOrders}
-        ordersBelumProduksi={ordersBelumProduksi}
-        ordersPerluDicek={ordersPerluDicek}
-        ordersPerluDicekIds={ordersPerluDicekIds}
-        pesananOnlyNeedCheck={pesananOnlyNeedCheck}
-        setPesananOnlyNeedCheck={setPesananOnlyNeedCheck}
-        setNeedCheckContextId={setNeedCheckContextId}
-        setSearch={setSearch}
-        setTab={setTab}
-        setModal={setModal}
-        setProdForm={setProdForm}
-        todayStr={todayStr}
-        orderSmallStatus={orderSmallStatus}
-        produksiByOrderId={produksiByOrderId}
-        shipmentByOrderId={shipmentByOrderId}
-        orderHasCompletedProduction={orderHasCompletedProduction}
-        isOrderClosedForNewWork={isOrderClosedForNewWork}
-        isShortShipmentClosed={isShortShipmentClosed}
-        dashboardTotalOrderedQty={dashboardTotalOrderedQty}
-        dashboardTotalShippedQty={dashboardTotalShippedQty}
-        fmtQty={fmtQty}
-        openPengirimanForOrder={openPengirimanForOrder}
-        Card={Card}
-        Button={Button}
-        StatusBadge={StatusBadge}
-        ProgressBar={ProgressBar}
-        Badge={Badge}
-        UiButton={UiButton}
-      />      <ProduksiTab
-        tab={tab}
-        orders={orders}
-        filteredProduksi={filteredProduksi}
-        produksiOnlyBelumSelesai={produksiOnlyBelumSelesai}
-        setProduksiOnlyBelumSelesai={setProduksiOnlyBelumSelesai}
-        setModal={setModal}
-        processQtyForOrder={processQtyForOrder}
-        processQtyForOrderModel={processQtyForOrderModel}
-        productionEntries={productionEntries}
-        getEntrySetorTotals={getEntrySetorTotals}
-        updateProduksiStatus={updateProduksiStatus}
-        displayModelName={displayModelName}
-        normalizeModelKey={normalizeModelKey}
-        sameProcess={sameProcess}
-        fmtQty={fmtQty}
-        formatNumber={formatNumber}
-        Empty={Empty}
-        Button={Button}
-        Card={Card}
-        StatusBadge={StatusBadge}
-        ProgressBar={ProgressBar}
-        PROD_STATUS={PROD_STATUS}
-      />      <BoronganTab
-        tab={tab}
-        setTab={setTab}
-        setModal={setModal}
-        setSearch={setSearch}
-
-        filteredEntries={filteredEntries}
-        productionEntries={productionEntries}
-        ordersForBoronganLink={ordersForBoronganLink}
-        orders={orders}
-        produksiByOrderId={produksiByOrderId}
-        shipmentByOrderId={shipmentByOrderId}
-
-        boronganOnlyBelumSetor={boronganOnlyBelumSetor}
-        setBoronganOnlyBelumSetor={setBoronganOnlyBelumSetor}
-        boronganOnlyOverSetor={boronganOnlyOverSetor}
-        setBoronganOnlyOverSetor={setBoronganOnlyOverSetor}
-
-        getEntrySetorTotals={getEntrySetorTotals}
-        displayWorkerName={displayWorkerName}
-        displayModelName={displayModelName}
-        displayProductTypeName={displayProductTypeName}
-        normalizeWorkerNameKey={normalizeWorkerNameKey}
-        normalizeModelKey={normalizeModelKey}
-        normalizeProcessKey={normalizeProcessKey}
-        normalizeProductTypeKey={normalizeProductTypeKey}
-        sameProcess={sameProcess}
-        fmtQty={fmtQty}
-        formatNumber={formatNumber}
-        money={money}
-        todayStr={todayStr}
-
-        setSetorModal={setSetorModal}
-        setSetorForm={setSetorForm}
-        openEditEntry={openEditEntry}
-        requestDeleteEntry={requestDeleteEntry}
-
-        Card={Card}
-        Button={Button}
-        Badge={Badge}
-        Empty={Empty}
-        UiButton={UiButton}
-      />      <RekapTab
-        tab={tab}
-        setTab={setTab}
-
-        rekapDari={rekapDari}
-        rekapSampai={rekapSampai}
-        handleRekapDariChange={handleRekapDariChange}
-        handleRekapSampaiChange={handleRekapSampaiChange}
-        resetRekapToCurrentWeek={resetRekapToCurrentWeek}
-
-        productionEntries={productionEntries}
-        payrollExpenses={payrollExpenses}
-        gajianHistory={gajianHistory}
-        kasbonPegawai={kasbonList}
-        orders={orders}
-        materials={materials}
-
-        setorHistoryInRange={setorHistoryInRange}
-        setorTotalsFromHistory={setorTotalsFromHistory}
-        getEntrySetorTotals={getEntrySetorTotals}
-        setorTotals={setorTotals}
-        dateBefore={dateBefore}
-        dateKey={dateKey}
-        localDateStr={localDateStr}
-        currentSundayToSaturdayPeriod={currentSundayToSaturdayPeriod}
-
-        workerNameOptions={workerNameOptions}
-        modelNameOptions={modelNameOptions}
-        canonicalByExisting={canonicalByExisting}
-        normalizeWorkerNameKey={normalizeWorkerNameKey}
-        displayWorkerName={displayWorkerName}
-        displayModelName={displayModelName}
-        displayProductTypeName={displayProductTypeName}
-        displayProcessName={displayProcessName}
-
-        fmtQty={fmtQty}
-        formatNumber={formatNumber}
-        money={money}
-
-        showFormGajianLama={showFormGajianLama}
-        setShowFormGajianLama={setShowFormGajianLama}
-        formGajianLama={formGajianLama}
-        setFormGajianLama={setFormGajianLama}
-        saveGajianLama={simpanGajianLama}
-        deleteGajianHistory={hapusGajianHistory}
-
-        setRekapDetailModal={setRekapDetailModal}
-        setSlipPreview={setSlipPreview}
-        slipRef={slipRef}
-
-        Card={Card}
-        Button={Button}
-        Badge={Badge}
-        Empty={Empty}
-        Input={UiInput}
-        Select={UiSelect}
-        UiInput={UiInput}
-        UiSelect={UiSelect}
-        UiButton={UiButton}
-      />      <ProduksiModal
-        modal={modal}
-        setModal={setModal}
-        prodForm={prodForm}
-        setProdForm={setProdForm}
-        ordersBelumProduksi={ordersBelumProduksi}
-        addProduksi={addProduksi}
-        isSaving={isSaving}
-        Button={Button}
-      />      <BoronganModal
-        modal={modal}
-        setModal={setModal}
-        prodForm={prodForm}
-        setProdForm={setProdForm}
-        ordersForBoronganLink={ordersForBoronganLink}
-        addBorongan={addBorongan}
-        isSaving={isSaving}
-        Button={Button}
-      />
-      <SetorModal
-        setorModal={setorModal}
-        setSetorModal={setSetorModal}
-        setorForm={setorForm}
-        setSetorForm={setSetorForm}
-        saveSetor={saveSetor}
-        isSaving={isSaving}
-        getEntrySetorTotals={getEntrySetorTotals}
-        setorTotals={setorTotals}
-        fmtQty={fmtQty}
-        money={money}
-        displayWorkerName={displayWorkerName}
-        displayModelName={displayModelName}
-        displayProductTypeName={displayProductTypeName}
-        Button={Button}
-      />      <TarifModal
-        modal={modal}
-        setModal={setModal}
-        rateForm={rateForm}
-        setRateForm={setRateForm}
-        saveRate={saveRate}
-        isSaving={isSaving}
-        Button={Button}
-      />      <KirimModal
-        modal={modal}
-        setModal={setModal}
-        shipForm={shipForm}
-        setShipForm={setShipForm}
-        ordersForShipment={ordersForShipment}
-        saveShipment={saveShipment}
-        isSaving={isSaving}
-        Button={Button}
-      />      <ConfirmDeleteModal
-        confirmDelete={confirmDelete}
-        setConfirmDelete={setConfirmDelete}
-        confirmDeleteAction={confirmDeleteAction}
-        displayWorkerName={displayWorkerName}
-      />      <EditEntryModal
-        editEntryModal={editEntryModal}
-        setEditEntryModal={setEditEntryModal}
-        editEntryForm={editEntryForm}
-        setEditEntryForm={setEditEntryForm}
-        saveEditEntry={saveEditEntry}
-        isSaving={isSaving}
-        ordersForBoronganLink={ordersForBoronganLink}
-        isGeneralRateProcess={isGeneralRateProcess}
-        setorTotals={setorTotals}
-        displayWorkerName={displayWorkerName}
-        Button={Button}
-      />      {tugasDetailModal && (
+      {tab === "dashboard" && (
+        <div className="space-y-4 p-4">
+          <div className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-lg font-black" style={{ color: "#ec4899" }}> Dashboard Produksi</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>Ringkasan total keseluruhan dan periode berjalan</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#fdf2f8", color: "#ec4899" }}>Rekap </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: "Pcs diberikan", value: dashboardSummary.totalDiberi.toLocaleString(), color: "#ec4899", sub: "semua borongan", tab: "borongan" },
+                { label: "Pcs disetor", value: dashboardSummary.totalSetor.toLocaleString(), color: "#16a34a", sub: "semua waktu", tab: "rekap" },
+                { label: "Pcs reject", value: dashboardSummary.totalReject.toLocaleString(), color: "#d97706", sub: "semua waktu", tab: "rekap" },
+                { label: "Sisa setor", value: dashboardSummary.totalSisaSetor.toLocaleString(), color: dashboardSummary.totalSisaSetor > 0 ? "#b45309" : "#94a3b8", sub: "belum disetor", tab: "borongan" },
+              ].map((card) => (
+                <button key={card.label} onClick={() => setTab(card.tab)} className="rounded-2xl bg-white p-3 text-left active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
+                  <div className="text-xl font-black" style={{ color: card.color }}>{card.value}</div>
+                  <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>{card.label}</div>
+                  <div className="text-[10px]" style={{ color: "#94a3b8" }}>{card.sub}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: "Total gaji", value: money(dashboardSummary.gajiKeseluruhan), color: "#7c3aed", icon: "", detail: "allTime" },
+              { label: "Produksi aktif", value: dashboardSummary.produksiAktif.toLocaleString(), color: "#a855f7", icon: "", tab: "produksi" },
+              { label: "Borongan aktif", value: dashboardSummary.boronganAktif.toLocaleString(), color: "#f59e0b", icon: "", tab: "borongan" },
+              { label: "Pesanan belum produksi", value: stats.belum.toLocaleString(), color: "#ef4444", icon: "", tab: "produksi" },
+              { label: "Pcs pesanan", value: dashboardSummary.pesananPcs.toLocaleString(), color: "#6366f1", icon: "", tab: "pesanan" },
+              { label: "Pcs terkirim", value: dashboardSummary.terkirimPcs.toLocaleString(), color: "#0ea5e9", icon: "", tab: "kirim" },
+              { label: "Pcs belum produksi", value: dashboardSummary.pcsBelumProduksi.toLocaleString(), color: dashboardSummary.pcsBelumProduksi > 0 ? "#d97706" : "#94a3b8", icon: "", tab: "pesanan" },
+              { label: "Sisa kirim siap", value: dashboardSummary.sisaKirim.toLocaleString(), color: dashboardSummary.sisaKirim > 0 ? "#b45309" : "#94a3b8", icon: "", tab: "kirim" },
+              { label: "Kelebihan kirim", value: dashboardSummary.kelebihanKirim.toLocaleString(), color: dashboardSummary.kelebihanKirim > 0 ? "#e11d48" : "#94a3b8", icon: "", tab: "kirim" },
+              { label: "Kurang kirim final", value: dashboardSummary.kurangKirimFinal.toLocaleString(), color: dashboardSummary.kurangKirimFinal > 0 ? "#b45309" : "#94a3b8", icon: "", tab: "kirim" },
+              { label: "Master data", value: dashboardSummary.bahanTotal.toLocaleString(), color: "#10b981", icon: "", tab: "kain" },
+            ].map((card) => (
+              <button key={card.label} onClick={() => card.detail ? setRekapDetailModal(card.detail) : setTab(card.tab)} className="rounded-3xl bg-white p-4 text-left shadow-sm active:scale-[0.99] transition-transform" style={{ border: "1px solid #fce7f3" }}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xl">{card.icon}</span>
+                  <span className="text-[10px] font-bold" style={{ color: "#94a3b8" }}>Rincian </span>
+                </div>
+                <div className="mt-2 text-xl font-black break-words" style={{ color: card.color }}>{card.value}</div>
+                <div className="text-xs font-semibold" style={{ color: "#64748b" }}>{card.label}</div>
+              </button>
+            ))}
+          </div>
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #fed7aa", background: "linear-gradient(135deg,#fff7ed,#ffffff)" }}>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#c2410c" }}> Tugas Hari Ini</div>
+                <div className="text-[11px]" style={{ color: "#9a3412" }}>Ringkasan yang perlu dicek admin.</div>
+              </div>
+              <button onClick={() => setTugasDetailModal(true)} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#ffedd5", color: "#c2410c" }}>Lihat kerjaan </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => { setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
+                style={{ border: "1px solid #fed7aa" }}
+              >
+                <div className="text-lg font-black" style={{ color: dashboardInsights.tugas.boronganBelumSetor > 0 ? "#c2410c" : "#16a34a" }}>{dashboardInsights.tugas.boronganBelumSetor.toLocaleString()}</div>
+                <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Borongan belum setor</div>
+              </button>
+              <button
+                onClick={() => { setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
+                className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
+                style={{ border: "1px solid #fed7aa" }}
+              >
+                <div className="text-lg font-black" style={{ color: dashboardInsights.tugas.produksiBelumSelesai > 0 ? "#c2410c" : "#16a34a" }}>{dashboardInsights.tugas.produksiBelumSelesai.toLocaleString()}</div>
+                <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Produksi belum selesai</div>
+              </button>
+              <button
+                onClick={() => { setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
+                className="rounded-2xl bg-white p-2 text-left active:scale-[0.97] transition-transform"
+                style={{ border: "1px solid #fed7aa" }}
+              >
+                <div className="text-lg font-black" style={{ color: dashboardInsights.tugas.kirimanBelumLengkap > 0 ? "#c2410c" : "#16a34a" }}>{dashboardInsights.tugas.kirimanBelumLengkap.toLocaleString()}</div>
+                <div className="text-[10px] font-semibold leading-tight" style={{ color: "#9a3412" }}>Kirim belum lengkap</div>
+              </button>
+            </div>
+            {(dashboardInsights.tugas.activeBorongan.length > 0 || dashboardInsights.tugas.activeProduksi.length > 0 || dashboardInsights.tugas.kirimBelumLengkap.length > 0) && (
+              <div className="space-y-1 text-[11px]" style={{ color: "#7c2d12" }}>
+                {dashboardInsights.tugas.activeBorongan.slice(0, 2).map(({ entry, totals }) => (
+                  <button
+                    key={`bor-${entry.id}`}
+                    onClick={() => { setBoronganOnlyBelumSetor(true); setTab("borongan"); }}
+                    className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
+                  >
+                     {displayWorkerName(entry.employeeName)} belum setor {fmtQty(totals.sisaSetor)} pcs ({entry.process || "-"} {displayModelName(entry.model || "-")})
+                  </button>
+                ))}
+                {dashboardInsights.tugas.activeProduksi.slice(0, 1).map((item) => (
+                  <button
+                    key={`prod-${item.id}`}
+                    onClick={() => { setProduksiOnlyBelumSelesai(true); setTab("produksi"); }}
+                    className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
+                  >
+                     Produksi {item.customer || item.orderCustomer || item.orderId || "pesanan"} masih {item.status || "proses"}
+                  </button>
+                ))}
+                {dashboardInsights.tugas.kirimBelumLengkap.slice(0, 1).map(({ order, sisa }) => (
+                  <button
+                    key={`ship-${order.id}`}
+                    onClick={() => { setKirimOnlyBelumLengkap(true); setTab("kirim"); }}
+                    className="w-full text-left rounded-xl px-2 py-1 active:bg-orange-100 transition-colors"
+                  >
+                     {order.customer || "Customer"} sisa kirim {fmtQty(sisa)} pcs
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bbf7d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#15803d" }}> Top Pekerja Bulan Ini</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{dashboardInsights.monthLabel}  berdasarkan pcs setor</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dcfce7", color: "#15803d" }}>Rekap </button>
+            </div>
+            {dashboardInsights.topPekerja.length === 0 ? (
+              <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada setor bulan ini.</div>
+            ) : (
+              <div className="space-y-2">
+                {dashboardInsights.topPekerja.map((row, idx) => (
+                  <div key={row.nama} className="flex items-center justify-between gap-2 rounded-2xl p-2" style={{ background: "#f8fafc" }}>
+                    <div className="min-w-0">
+                      <div className="text-xs font-black truncate" style={{ color: "#14532d" }}>{idx + 1}. {row.nama}</div>
+                      <div className="text-[10px]" style={{ color: "#64748b" }}>{row.transaksi} transaksi</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-xs font-black" style={{ color: "#16a34a" }}>{fmtQty(row.pcs)} pcs</div>
+                      <div className="text-[10px]" style={{ color: "#64748b" }}>{money(row.gaji)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #ddd6fe", background: "linear-gradient(135deg,#faf5ff,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#7c3aed" }}> Grafik Mingguan</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>Pcs setor, reject, dan gaji per minggu.</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>Detail </button>
+            </div>
+            <div className="space-y-2">
+              {dashboardInsights.weeklyRows.map((row) => {
+                const totalPcs = Number(row.pcsSetor || 0) + Number(row.pcsReject || 0);
+                const width = Math.max(2, Math.round((totalPcs / dashboardInsights.maxWeeklyPcs) * 100));
+                return (
+                  <div key={row.key} className="space-y-1">
+                    <div className="flex justify-between text-[10px]" style={{ color: "#64748b" }}>
+                      <span>{row.dari.slice(5)} s/d {row.sampai.slice(5)}</span>
+                      <span>{fmtQty(row.pcsSetor)} setor  {fmtQty(row.pcsReject)} reject  {money(row.gaji)}</span>
+                    </div>
+                    <div className="h-3 rounded-full overflow-hidden" style={{ background: "#f3e8ff" }}>
+                      <div className="h-full rounded-full" style={{ width: `${width}%`, background: "linear-gradient(90deg,#a855f7,#ec4899)" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #a7f3d0", background: "linear-gradient(135deg,#f0fdf4,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#065f46" }}> Riwayat Gajian</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>{gajianHistory.length} catatan gajian tersimpan</div>
+              </div>
+              <button onClick={() => setTab("rekap")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#d1fae5", color: "#065f46" }}>Input </button>
+            </div>
+            {gajianHistory.length === 0 ? (
+              <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada riwayat gajian. Input data lama di menu Rekap.</div>
+            ) : (
+              <div className="space-y-2">
+                {[...gajianHistory]
+                  .sort((a, b) => String(b.tanggalGaji || "").localeCompare(String(a.tanggalGaji || "")))
+                  .slice(0, 5)
+                  .map((g) => (
+                    <div key={g.id} className="flex items-center justify-between gap-2 rounded-2xl p-2.5" style={{ background: "#f8fafc", border: "1px solid #d1fae5" }}>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>
+                          {g.tanggalGaji}  Periode {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                        </div>
+                        {g.source === "input_manual_lama" && (
+                          <div className="text-[9px] font-bold" style={{ color: "#a855f7" }}>input manual</div>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-xs font-black" style={{ color: "#16a34a" }}>{money(g.jumlah)}</div>
+                        {g.totalPcs > 0 && <div className="text-[10px]" style={{ color: "#64748b" }}>{fmtQty(g.totalPcs)} pcs</div>}
+                      </div>
+                    </div>
+                  ))}
+                {gajianHistory.length > 5 && (
+                  <div className="text-[10px] text-center" style={{ color: "#94a3b8" }}>+{gajianHistory.length - 5} riwayat lainnya di menu Rekap</div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="rounded-3xl bg-white p-4 space-y-3 shadow-sm" style={{ border: "1px solid #bfdbfe", background: "linear-gradient(135deg,#eff6ff,#ffffff)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-black" style={{ color: "#1e40af" }}> Riwayat Setor Terbaru</div>
+                <div className="text-[11px]" style={{ color: "#64748b" }}>10 transaksi setor terakhir</div>
+              </div>
+              <button onClick={() => setTab("borongan")} className="rounded-full px-3 py-1 text-[11px] font-bold" style={{ background: "#dbeafe", color: "#1e40af" }}>Borongan </button>
+            </div>
+            {(() => {
+              const recentSetor = productionEntries
+                .flatMap((e) =>
+                  normalizeSetorHistory(e).map((s) => ({
+                    nama: displayWorkerName(e.employeeName),
+                    process: e.process || "-",
+                    model: displayModelName(e.model || "-"),
+                    tanggalSetor: s.tanggalSetor || "-",
+                    qtySetor: Number(s.qtySetor || 0),
+                    qtyReject: Number(s.qtyReject || 0),
+                    gaji: Number(s.totalWageSetor || 0),
+                    key: s.id || `${e.id}-${s.tanggalSetor}`,
+                  }))
+                )
+                .filter((s) => s.qtySetor > 0 || s.qtyReject > 0)
+                .sort((a, b) => String(b.tanggalSetor).localeCompare(String(a.tanggalSetor)))
+                .slice(0, 10);
+              if (recentSetor.length === 0) return (
+                <div className="rounded-2xl p-3 text-xs" style={{ background: "#f8fafc", color: "#94a3b8" }}>Belum ada transaksi setor.</div>
+              );
+              return (
+                <div className="space-y-2">
+                  {recentSetor.map((s) => (
+                    <div key={s.key} className="flex items-center justify-between gap-2 rounded-2xl p-2.5" style={{ background: "#f8fafc", border: "1px solid #bfdbfe" }}>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black truncate" style={{ color: "#1e3a8a" }}>{s.nama}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>{s.tanggalSetor}  {s.process} {s.model !== "-" ? ` ${s.model}` : ""}</div>
+                        {s.qtyReject > 0 && <div className="text-[10px]" style={{ color: "#ef4444" }}>reject: {fmtQty(s.qtyReject)} pcs</div>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-xs font-black" style={{ color: "#16a34a" }}>{money(s.gaji)}</div>
+                        <div className="text-[10px]" style={{ color: "#64748b" }}>{fmtQty(s.qtySetor)} pcs</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+      {tab === "pesanan" && (
+        <div className="space-y-3 p-4">
+          <InfoBox title="Sumber: Gallery Kerudung" subtitle="Data realtime dari collection orders" icon="" />
+          {pesananOnlyNeedCheck && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fb7185" }}>
+              <span className="text-xl"></span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>Hanya menampilkan pesanan yang perlu dicek</div>
+                <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Admin bisa langsung membuka pengiriman dari kartu ini. Pesanan lain disembunyikan sementara agar tidak membingungkan.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPesananOnlyNeedCheck(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+          {visiblePesananOrders.length === 0 && <Empty text={pesananOnlyNeedCheck ? "Tidak ada pesanan yang perlu dicek" : "Tidak ada data pesanan"} />}
+          {visiblePesananOrders.map((o) => {
+            const prod = produksiByOrderId.get(o.id);
+            const small = orderSmallStatus(o);
+            const canStart = ordersBelumProduksi.some((x) => x.id === o.id);
+            const needCheckInfo = ordersPerluDicek.find((x) => x.id === o.id);
+            return (
+              <div key={o.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: canStart ? "2px solid #fbbf24" : "1px solid #fce7f3" }}>
+                <div className="flex justify-between items-start">
+                  <div className="flex-1 mr-2">
+                    <div className="font-bold text-base" style={{ color: "#2d1b69" }}> {o.customer}</div>
+                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}> <b>{o.item}</b></div>
+                    {o.invoice && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}> {o.invoice}</div>}
+                    {o.createdAt && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}> {o.createdAt}</div>}
+                    {o.warna && <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}> {o.warna}</div>}
+                    <div className="mt-2 text-xs font-bold" style={{ color: small.color }}>{small.label}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{o.qty}</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>total pcs</div>
+                  </div>
+                </div>
+                {(() => {
+                  const its = (o.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
+                  if (its.length === 0) return null;
+                  const isMulti = its.length > 1;
+                  return (
+                    <div className="mt-2">
+                      {isMulti && (
+                        <div className="text-xs font-bold mb-1" style={{ color: "#7c3aed" }}>
+                           {its.length} model
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {its.map((it, i) => (
+                          <span key={i} className="rounded-xl px-3 py-1 text-xs font-semibold"
+                            style={{ background: "#ede9fe", color: "#5b21b6", border: "1px solid #c4b5fd" }}>
+                            {it.name}: <strong>{it.qty} pcs</strong>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+                {prod && (
+                  <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#ede9fe" }}>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-bold" style={{ color: "#5b21b6" }}> Status produksi</span>
+                      <StatusBadge status={prod.status} />
+                    </div>
+                    {(prod.workers || []).length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {(prod.workers || []).slice(-3).map((w, idx) => (
+                          <div key={idx} className="text-xs" style={{ color: "#7c3aed" }}>
+                             {displayWorkerName(w.employeeName)}  {w.process}  {w.qty} pcs
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {needCheckInfo && (
+                  <div className="mt-3 rounded-2xl px-3 py-2" style={{ background: "#fff1f2", border: "1px solid #fecdd3" }}>
+                    <div className="text-xs font-black" style={{ color: "#be123c" }}> Perlu Dicek</div>
+                    <div className="text-xs mt-1" style={{ color: "#9f1239" }}>{needCheckInfo.alasan}</div>
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <Button
+                        type="button"
+                        onClick={() => openPengirimanForOrder(o)}
+                        className="text-xs"
+                        style={{ background: "linear-gradient(135deg,#0ea5e9,#2563eb)" }}
+                      >
+                         Edit Pengiriman
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => setNeedCheckContextId((id) => (id === o.id ? "" : o.id))}
+                        className="text-xs"
+                        style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+                      >
+                        {needCheckContextId === o.id ? "Tutup Detail" : "Detail Masalah"}
+                      </Button>
+                    </div>
+                    {needCheckContextId === o.id && (() => {
+                      const ordered = dashboardTotalOrderedQty(o);
+                      let shipped = dashboardTotalShippedQty(o);
+                      if (!hasDeliveryDetail(o) && isLegacyDoneOrSentOrder(o) && ordered > 0 && shipped <= 0) shipped = ordered;
+                      const sisa = Math.max(0, ordered - shipped);
+                      const lebih = Math.max(0, shipped - ordered);
+                      const rawStatus = o.status || o.deliveryStatus || o.shippingStatus || "-";
+                      return (
+                        <div className="mt-2 rounded-2xl bg-white px-3 py-3 text-[11px] space-y-2" style={{ border: "1px solid #fecdd3" }}>
+                          <div
+                            className="font-black"
+                            style={{ color: "#be123c" }}
+                          >
+                            Detail masalah pengiriman
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#f8fafc" }}>
+                              <div style={{ color: "#64748b" }}>Pesanan</div>
+                              <div className="font-black" style={{ color: "#1e1b4b" }}>{fmtQty(ordered)} pcs</div>
+                            </div>
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#ecfdf5" }}>
+                              <div style={{ color: "#64748b" }}>Terkirim</div>
+                              <div className="font-black" style={{ color: "#16a34a" }}>{fmtQty(shipped)} pcs</div>
+                            </div>
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#fff7ed" }}>
+                              <div style={{ color: "#64748b" }}>Sisa aktif</div>
+                              <div className="font-black" style={{ color: "#ea580c" }}>{fmtQty(sisa)} pcs</div>
+                            </div>
+                            <div className="rounded-xl px-2 py-2" style={{ background: "#fff1f2" }}>
+                              <div style={{ color: "#64748b" }}>Lebih kirim</div>
+                              <div className="font-black" style={{ color: "#e11d48" }}>{fmtQty(lebih)} pcs</div>
+                            </div>
+                          </div>
+                          <div><b>Invoice:</b> {o.invoice || "-"}</div>
+                          <div><b>Status:</b> {rawStatus}</div>
+                          <div><b>Alasan dicek:</b> {needCheckInfo.alasan}</div>
+                          {isShortShipmentClosed(o) && (
+                            <div><b>Alasan kurang kirim final:</b> {o.shortShipmentReason || "-"}</div>
+                          )}
+                          <div className="rounded-xl px-3 py-2" style={{ background: "#fef2f2", color: "#9f1239" }}>
+                            Gunakan <b>Edit Pengiriman</b> jika qty/status belum benar. Jika sisa tidak akan dikirim lagi, pilih <b>Kurang kirim final</b> dan isi alasannya.
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+                {canStart && (
+                  <Button
+                    onClick={() => {
+                      setProdForm({ orderId: o.id, tanggalMulai: todayStr(), catatan: "" });
+                      setModal("produksi");
+                    }}
+                    className="mt-3 w-full"
+                    style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                  >
+                     Mulai Produksi
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {tab === "produksi" && (
+        <div className="space-y-3 p-4">
+          <Button onClick={() => setModal("produksi")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
+             + Tambah ke Produksi
+          </Button>
+          {produksiOnlyBelumSelesai && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#ede9fe", border: "1.5px solid #c4b5fd" }}>
+              <span className="text-xl"></span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#5b21b6" }}>Hanya menampilkan produksi belum selesai</div>
+                <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Update status produksi di bawah ini.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProduksiOnlyBelumSelesai(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+          {(() => {
+            const displayedProduksi = produksiOnlyBelumSelesai
+              ? filteredProduksi.filter((p) => p.status !== "Selesai")
+              : filteredProduksi;
+            return (
+              <>
+                {displayedProduksi.length === 0 && <Empty text={produksiOnlyBelumSelesai ? "Semua produksi sudah selesai" : "Tidak ada data produksi"} />}
+                {displayedProduksi.map((p) => {
+            const qtyPesanan = Number(p.qty || 0);
+            const rekapProses = [
+              { label: " Potong", qty: processQtyForOrder(p.orderId, "Potong") },
+              { label: " Jahit", qty: processQtyForOrder(p.orderId, "Jahit") },
+              { label: " Pengemasan QC", qty: processQtyForOrder(p.orderId, "Pengemasan QC") },
+            ].filter((r) => r.qty > 0);
+            return (
+            <div key={p.id} className="rounded-2xl bg-white shadow-sm overflow-hidden" style={{ border: "1px solid #fce7f3" }}>
+              <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-sm truncate" style={{ color: "#2d1b69" }}>{p.customer}</div>
+                  <div className="text-xs truncate" style={{ color: "#94a3b8" }}>{p.invoice}</div>
+                </div>
+                <div className="flex items-center gap-2 ml-2">
+                  <div className="text-right">
+                    <div className="text-lg font-bold" style={{ color: "#ec4899" }}>{p.qty}</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs</div>
+                  </div>
+                  <StatusBadge status={p.status} />
+                </div>
+              </div>
+              {(() => {
+                const order = orders.find(o => o.id === p.orderId);
+                const orderItems = (order?.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
+                const prodItems = (p.items || []).filter(it => it.name && it.name !== "-" && Number(it.qty) > 0);
+                const isStaleData = prodItems.length === 1 && orderItems.length > 1 &&
+                  Number(prodItems[0]?.qty) === Number(p.qty);
+                const displayItems = (isStaleData || prodItems.length === 0) ? orderItems : prodItems;
+                if (displayItems.length === 0) return null;
+                return (
+                  <div className="px-4 pb-2">
+                    <div className="text-xs font-bold mb-1.5" style={{ color: "#7c3aed" }}>
+                       Rincian Model ({displayItems.length} model  {p.qty} pcs total):
+                    </div>
+                    <div className="space-y-1.5">
+                      {displayItems.map((it, i) => {
+                        const modelName = it.name || it.item || "-";
+                        const modelQty = Number(it.qty || 0);
+                        const potongQty = productionEntries
+                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Potong") && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
+                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const jahitQty = productionEntries
+                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Jahit") && normalizeModelKey(e.model || "") === normalizeModelKey(modelName))
+                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const qcQty = productionEntries
+                          .filter(e => e.orderId === p.orderId && sameProcess(e.process, "Pengemasan QC"))
+                          .reduce((s, e) => s + Number(e.qty || 0), 0);
+                        const jahitDone = jahitQty >= modelQty;
+                        return (
+                          <div key={i} className="rounded-xl p-2.5" style={{ background: jahitDone ? "#dcfce7" : "#ede9fe", border: `1px solid ${jahitDone ? "#bbf7d0" : "#c4b5fd"}` }}>
+                            <div className="flex justify-between items-center mb-1">
+                              <div className="font-bold text-xs" style={{ color: jahitDone ? "#16a34a" : "#5b21b6" }}>
+                                {modelName} {jahitDone ? "" : ""}
+                              </div>
+                              <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>{modelQty} pcs</div>
+                            </div>
+                            <div className="flex gap-2 text-xs">
+                              {potongQty > 0 && (
+                                <span className="rounded-full px-2 py-0.5" style={{ background: "#dbeafe", color: "#1e40af" }}>
+                                   {potongQty}/{modelQty}
+                                </span>
+                              )}
+                              <span className="rounded-full px-2 py-0.5" style={{ background: jahitDone ? "#bbf7d0" : "#fce7f3", color: jahitDone ? "#16a34a" : "#be185d" }}>
+                                 {jahitQty}/{modelQty}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+              <ProgressBar status={p.status} />
+              {rekapProses.length > 0 && (
+                <div className="px-4 py-2 grid grid-cols-3 gap-1">
+                  {rekapProses.map((r) => {
+                    const sesuai = r.qty >= qtyPesanan;
+                    return (
+                      <div key={r.label} className="rounded-xl p-2 text-center" style={{ background: sesuai ? "#dcfce7" : "#fef3c7" }}>
+                        <div className="text-xs font-bold" style={{ color: sesuai ? "#16a34a" : "#b45309" }}>{r.qty}</div>
+                        <div className="text-xs font-bold" style={{ color: "#64748b" }}>{r.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="px-4 pb-3">
+                <div className="flex gap-1 flex-wrap">
+                  {PROD_STATUS.map((s) => (
+                    <button key={s} onClick={() => updateProduksiStatus(p.id, s)}
+                      className="rounded-full px-2 py-1 text-xs font-semibold"
+                      style={{
+                        background: p.status === s ? "linear-gradient(135deg,#ec4899,#a855f7)" : "#fdf2f8",
+                        color: p.status === s ? "white" : "#a855f7",
+                        border: "1px solid #f9a8d4",
+                      }}>
+                      {PROD_COLORS[s]?.icon} {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            );
+          })}
+              </>
+            );
+          })()}
+        </div>
+      )}
+      {tab === "borongan" && (
+        <div className="space-y-3 p-4">
+          <Button onClick={() => setModal("borongan")} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
+             + Input Hasil Borongan
+          </Button>
+          {boronganOnlyBelumSetor && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fefce8", border: "1.5px solid #fbbf24" }}>
+              <span className="text-xl"></span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#92400e" }}>Hanya menampilkan yang belum setor</div>
+                <div className="text-xs mt-1" style={{ color: "#b45309" }}>Setor hasil kerjaan di bawah ini agar masuk rekap gaji.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBoronganOnlyBelumSetor(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+          {boronganOnlyOverSetor && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#fff1f2", border: "1.5px solid #fecaca" }}>
+              <span className="text-xl"></span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#be123c" }}>Hanya menampilkan yang setor melebihi diberi</div>
+                <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Data ini perlu dicek  total setor + reject melebihi qty yang diberikan.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBoronganOnlyOverSetor(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+          <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #fce7f3" }}>
+            <div className="text-xs font-bold" style={{ color: "#a855f7" }}>Total hasil borongan</div>
+            <div className="text-2xl font-bold" style={{ color: "#ec4899" }}>{stats.boronganPcs} pcs</div>
+            <div className="text-xs font-bold" style={{ color: "#64748b" }}>Upah tersimpan untuk pengeluaran Gallery Kerudung</div>
+          </div>
+          {(boronganOnlyBelumSetor
+            ? filteredEntries.filter((e) => getEntrySetorTotals(e).statusSetor !== "sudah_setor")
+            : boronganOnlyOverSetor
+              ? filteredEntries.filter((e) => {
+                  const totals = getEntrySetorTotals(e);
+                  return (Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0)) > Number(e.qty || 0);
+                })
+              : filteredEntries
+          ).map((e) => {
+            const totals = getEntrySetorTotals(e);
+            const sudahSetor = totals.statusSetor === "sudah_setor";
+            const setorSebagian = totals.statusSetor === "setor_sebagian";
+            const qtyReject = Number(totals.qtyReject || 0);
+            const qtySetor = Number(totals.qtySetor || 0);
+            const selisih = Number(totals.sisaSetor || 0);
+            const statusSetorPanel = (sudahSetor || setorSebagian) ? (
+              <div className="mt-3 rounded-2xl p-3 space-y-2" style={{ background: sudahSetor ? "#f0fdf4" : "#fff7ed", border: `1px solid ${sudahSetor ? "#bbf7d0" : "#fed7aa"}` }}>
+                <div className="text-xs font-bold" style={{ color: sudahSetor ? "#16a34a" : "#b45309" }}>
+                  {sudahSetor ? " Sudah Setor" : " Setor Sebagian"}  terakhir {totals.tanggalSetor || "-"}
+                </div>
+                <div className="flex flex-wrap gap-3 text-sm">
+                  <span> Setor: <strong>{qtySetor} pcs</strong></span>
+                  {qtyReject > 0 && <span> Reject: <strong style={{ color: "#ef4444" }}>{qtyReject} pcs</strong></span>}
+                  {selisih > 0 && <span> Sisa: <strong style={{ color: "#f59e0b" }}>{selisih} pcs</strong></span>}
+                </div>
+                {totals.totalWageSetor > 0 && (
+                  <div className="text-sm font-bold" style={{ color: "#a855f7" }}> Total gaji setor: {money(totals.totalWageSetor)}</div>
+                )}
+                {totals.history.length > 0 && (
+                  <div className="space-y-1">
+                    {totals.history.slice(-3).map((h, idx) => (
+                      <div key={h.id || idx} className="rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,.75)", color: "#64748b", border: "1px solid #f3e8ff" }}>
+                         {h.tanggalSetor}  Setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `  Reject ${Number(h.qtyReject || 0)} pcs` : ""}  {money(h.totalWageSetor || 0)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {selisih > 0 && (
+                  <button
+                    onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(selisih), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                    className="mt-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
+                    style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                  >
+                    Setor Lanjutan
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
+                <span className="text-xs font-bold" style={{ color: "#b45309" }}> Belum Setor</span>
+                <button
+                  onClick={() => { const t = getEntrySetorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                  className="rounded-xl px-3 py-1 text-xs font-bold text-white"
+                  style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
+                >
+                  Setor Hasil
+                </button>
+              </div>
+            );
+            return (
+              <div key={e.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: `1.5px solid ${sudahSetor ? "#bbf7d0" : setorSebagian ? "#fed7aa" : "#fde68a"}` }}>
+              <div className="flex justify-between">
+                <div>
+                  <div className="font-bold" style={{ color: "#2d1b69" }}> {displayWorkerName(e.employeeName)}</div>
+                  <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType}  {e.process}{e.model ? `  ${e.model}` : ""}</div>
+                  {e.invoice && <div className="text-xs font-bold" style={{ color: "#64748b" }}> {e.invoice}</div>}
+                  {!e.orderId && (
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      <span className="rounded-full px-2 py-0.5 text-[11px] font-black" style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}> Tanpa Pesanan</span>
+                    </div>
+                  )}
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}> {e.tanggal}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold" style={{ color: "#10b981" }}>{e.qty}</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs diberikan</div>
+                </div>
+              </div>
+              {statusSetorPanel}
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => openEditEntry(e)}
+                  className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                  style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
+                >
+                   Edit
+                </button>
+                {!e.orderId && (
+                  <button
+                    onClick={() => openEditEntry(e)}
+                    className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                    style={{ background: "#fff7ed", color: "#c2410c", border: "1px solid #fed7aa" }}
+                  >
+                     Kaitkan ke Pesanan
+                  </button>
+                )}
+                <button
+                  onClick={() => requestDeleteEntry(e)}
+                  className="flex-1 rounded-2xl py-2 text-xs font-bold"
+                  style={{ background: "#fff1f2", color: "#e11d48", border: "1px solid #fecaca" }}
+                >
+                   Hapus
+                </button>
+              </div>
+            </div>
+            );
+          })}
+        </div>
+      )}
+      {tab === "rekap" && (() => {
+        const rekapPeriodReady = Boolean(rekapDari && rekapSampai);
+        const inRange = (tanggal) => rekapPeriodReady && dateInRange(tanggal, rekapDari, rekapSampai);
+        const filtered = productionEntries.filter((e) => {
+          const hasInputInRange = inRange(e.tanggal);
+          const hasSetorInRange = setorHistoryInRange(e, rekapDari, rekapSampai).length > 0;
+          return hasInputInRange || hasSetorInRange;
+        });
+        const byProses = {};
+        filtered.forEach((e) => {
+          const p = e.process || "Lainnya";
+          const allTotals = getEntrySetorTotals(e);
+          const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
+          const inputInRange = inRange(e.tanggal);
+          const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+          const qtyBasisPeriode = inputInRange
+            ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
+            : aktivitasSetorPeriode;
+          if (!byProses[p]) byProses[p] = { qty: 0, qtySetor: 0, qtyReject: 0, gaji: 0 };
+          byProses[p].qty += Math.max(0, qtyBasisPeriode);
+          byProses[p].qtySetor += Number(rangeTotals.qtySetor || 0);
+          byProses[p].qtyReject += Number(rangeTotals.qtyReject || 0);
+          byProses[p].gaji += Number(rangeTotals.totalWageSetor || 0);
+          if (inputInRange && rangeTotals.qtySetor === 0 && rangeTotals.qtyReject === 0 && allTotals.statusSetor !== "belum_setor") {
+          }
+        });
+        const totalQty = filtered.reduce((s, e) => {
+          const inputInRange = inRange(e.tanggal);
+          const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
+          const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+          const qtyBasisPeriode = inputInRange
+            ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
+            : aktivitasSetorPeriode;
+          return s + Math.max(0, qtyBasisPeriode);
+        }, 0);
+        const totalSetor = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtySetor || 0), 0);
+        const totalReject = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).qtyReject || 0), 0);
+        const totalGaji = filtered.reduce((s, e) => s + Number(setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai)).totalWageSetor || 0), 0);
+        const prosesOrder = ["Potong", "Jahit", "Pengemasan QC"];
+        const prosesKeys = [...prosesOrder.filter((p) => byProses[p]), ...Object.keys(byProses).filter((p) => !prosesOrder.includes(p))];
+        Object.keys(byProses).forEach((p) => {
+          const aktivitasSetorPeriode = Number(byProses[p].qtySetor || 0) + Number(byProses[p].qtyReject || 0);
+          byProses[p].qtyDiberikan = Math.max(Number(byProses[p].qty || 0), aktivitasSetorPeriode);
+        });
+        const rekapMap = {};
+        filtered.forEach((e) => {
+          const namaKey = normalizeWorkerNameKey(e.employeeName);
+          const nama = canonicalByExisting(e.employeeName, workerNameOptions, "worker");
+          const inputInRange = inRange(e.tanggal);
+          const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
+          const rangeTotals = setorTotalsFromHistory(rangeHistory);
+          const allTotals = getEntrySetorTotals(e);
+          if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
+          const aktivitasSetorPeriode = Number(rangeTotals.qtySetor || 0) + Number(rangeTotals.qtyReject || 0);
+          const qtyBasisPeriode = inputInRange
+            ? Math.max(Number(e.qty || 0), aktivitasSetorPeriode)
+            : aktivitasSetorPeriode;
+          rekapMap[nama].pcsAwal += Math.max(0, qtyBasisPeriode);
+          rekapMap[nama].pcsSetor += Number(rangeTotals.qtySetor || 0);
+          rekapMap[nama].pcsReject += Number(rangeTotals.qtyReject || 0);
+          rekapMap[nama].gaji += Number(rangeTotals.totalWageSetor || 0);
+          if (inputInRange) rekapMap[nama].belumSetor += Number(allTotals.sisaSetor || 0);
+          const entryOrder = orders.find(o => o.id === e.orderId);
+          rekapMap[nama].detail.push({
+            customer: e.customer || entryOrder?.customer || "-",
+            invoice: e.invoice || entryOrder?.invoice || "",
+            model: displayModelName(e.model || "-"),
+            process: e.process || "",
+            qty: Math.max(0, qtyBasisPeriode),
+            qtyAsli: Number(e.qty || 0),
+            qtySetor: Number(rangeTotals.qtySetor || 0),
+            qtyReject: Number(rangeTotals.qtyReject || 0),
+            totalSetorSemua: Number(allTotals.qtySetor || 0),
+            sisaSetor: Number(allTotals.sisaSetor || 0),
+            rate: Number(e.rate || 0),
+            sudahSetor: Number(rangeTotals.qtySetor || 0) > 0 || Number(rangeTotals.qtyReject || 0) > 0,
+            setorSebagian: allTotals.statusSetor === "setor_sebagian",
+            gaji: Number(rangeTotals.totalWageSetor || 0),
+            tanggal: e.tanggal || "",
+            tanggalSetor: rangeHistory.length > 0 ? rangeHistory[rangeHistory.length - 1].tanggalSetor : (allTotals.tanggalSetor || ""),
+            setorHistory: rangeHistory,
+          });
+        });
+        const rekapPerkerja = Object.entries(rekapMap)
+          .filter(([, r]) => Number(r.pcsSetor || 0) > 0 || Number(r.pcsReject || 0) > 0 || Number(r.gaji || 0) > 0)
+          .sort((a, b) => b[1].gaji - a[1].gaji);
+        const rekapGajianKeseluruhan = rekapPerkerja.reduce((acc, [nama, r]) => {
+          const sudah = sudahGajian(nama, rekapDari, rekapSampai);
+          const nominal = Number(r?.gaji || 0);
+          acc.totalPekerja += 1;
+          acc.totalGaji += nominal;
+          acc.totalPcsSetor += Number(r?.pcsSetor || 0);
+          acc.totalPcsReject += Number(r?.pcsReject || 0);
+          acc.totalBelumSetor += Number(r?.belumSetor || 0);
+          if (sudah) {
+            acc.sudahGajian += 1;
+            acc.totalSudahDibayar += nominal;
+          } else {
+            acc.belumGajian += 1;
+            acc.totalBelumDibayar += nominal;
+          }
+          return acc;
+        }, {
+          totalPekerja: 0,
+          sudahGajian: 0,
+          belumGajian: 0,
+          totalGaji: 0,
+          totalSudahDibayar: 0,
+          totalBelumDibayar: 0,
+          totalPcsSetor: 0,
+          totalPcsReject: 0,
+          totalBelumSetor: 0,
+        });
+        const allTimePayrollRows = payrollExpenses
+          .filter(isOfficialGajiPayroll)
+          .sort((a, b) => String(dateKey(b.tanggal || b.tanggalSetor || b.createdAt || "")).localeCompare(String(dateKey(a.tanggal || a.tanggalSetor || a.createdAt || ""))));
+        const allTimePayrollMap = {};
+        allTimePayrollRows.forEach((p) => {
+          const nama = canonicalByExisting(p.employeeName, workerNameOptions, "worker");
+          const key = normalizeWorkerNameKey(nama);
+          if (!key) return;
+          if (!allTimePayrollMap[nama]) {
+            allTimePayrollMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, transaksi: 0, firstDate: "", lastDate: "", detail: [] };
+          }
+          const tanggal = dateKey(p.tanggal || p.tanggalSetor || p.createdAt || "");
+          const pcs = Number(p.totalPcs || p.qtySetor || p.qty || 0);
+          const reject = Number(p.totalReject || p.qtyReject || 0);
+          const gaji = Number(p.totalAmount || 0);
+          allTimePayrollMap[nama].pcsSetor += pcs;
+          allTimePayrollMap[nama].pcsReject += reject;
+          allTimePayrollMap[nama].pcsAwal += Math.max(0, pcs + reject);
+          allTimePayrollMap[nama].gaji += gaji;
+          allTimePayrollMap[nama].transaksi += 1;
+          if (tanggal) {
+            if (!allTimePayrollMap[nama].firstDate || tanggal < allTimePayrollMap[nama].firstDate) allTimePayrollMap[nama].firstDate = tanggal;
+            if (!allTimePayrollMap[nama].lastDate || tanggal > allTimePayrollMap[nama].lastDate) allTimePayrollMap[nama].lastDate = tanggal;
+          }
+          allTimePayrollMap[nama].detail.push({
+            tanggalSetor: tanggal || "-",
+            process: p.process || "-",
+            model: canonicalByExisting(p.model || p.productType || "-", modelNameOptions, "model"),
+            invoice: p.invoice || "",
+            customer: p.customer || "-",
+            qtySetor: pcs,
+            qtyReject: reject,
+            wage: gaji,
+            source: p.source || "payroll_expenses",
+          });
+        });
+        const rekapGajiAllTimeRows = Object.entries(allTimePayrollMap)
+          .filter(([, r]) => Number(r.gaji || 0) > 0 || Number(r.pcsSetor || 0) > 0)
+          .sort((a, b) => Number(b[1].gaji || 0) - Number(a[1].gaji || 0));
+        const rekapGajiAllTimeSummary = rekapGajiAllTimeRows.reduce((acc, [, r]) => {
+          acc.totalPekerja += 1;
+          acc.totalGaji += Number(r.gaji || 0);
+          acc.totalPcsSetor += Number(r.pcsSetor || 0);
+          acc.totalPcsReject += Number(r.pcsReject || 0);
+          acc.totalTransaksi += Number(r.transaksi || 0);
+          return acc;
+        }, { totalPekerja: 0, totalGaji: 0, totalPcsSetor: 0, totalPcsReject: 0, totalTransaksi: 0 });
+        const boronganBelumMasukRekap = !rekapPeriodReady ? [] : productionEntries
+          .map((e) => {
+            const totals = getEntrySetorTotals(e);
+            const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
+            const rangeTotals = setorTotalsFromHistory(rangeHistory);
+            const inputInRange = inRange(e.tanggal);
+            const entryOrder = orders.find(o => o.id === e.orderId);
+            const totalProgress = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
+            const sisaSetor = Number(totals.sisaSetor || 0);
+            let alasan = "";
+            if (sisaSetor > 0 && inputInRange && rangeHistory.length === 0) alasan = "Diberikan periode ini, belum setor";
+            else if (sisaSetor > 0 && inputInRange && rangeHistory.length > 0) alasan = "Setor sebagian, masih ada sisa";
+            else if (sisaSetor > 0 && dateBefore(e.tanggal, rekapDari)) alasan = "Tanggungan dari periode sebelumnya";
+            return {
+              ...e,
+              customer: e.customer || entryOrder?.customer || "-",
+              invoice: e.invoice || entryOrder?.invoice || "",
+              totalSetorSemua: Number(totals.qtySetor || 0),
+              totalRejectSemua: Number(totals.qtyReject || 0),
+              totalWageSemua: Number(totals.totalWageSetor || 0),
+              sisaSetor,
+              statusSetorHitung: totals.statusSetor,
+              tanggalSetorTerakhir: totals.tanggalSetor || "",
+              qtySetorPeriode: Number(rangeTotals.qtySetor || 0),
+              qtyRejectPeriode: Number(rangeTotals.qtyReject || 0),
+              gajiPeriode: Number(rangeTotals.totalWageSetor || 0),
+              alasan,
+            };
+          })
+          .filter((e) => e.alasan && Number(e.sisaSetor || 0) > 0)
+          .sort((a, b) => {
+            if (a.tanggal !== b.tanggal) return String(a.tanggal || "").localeCompare(String(b.tanggal || ""));
+            return displayWorkerName(a.employeeName).localeCompare(displayWorkerName(b.employeeName));
+          });
+        const totalBoronganBelumMasukPcs = boronganBelumMasukRekap.reduce((s, e) => s + Number(e.sisaSetor || 0), 0);
+        const totalBoronganBelumMasukGajiPotensi = boronganBelumMasukRekap.reduce((s, e) => s + (Number(e.sisaSetor || 0) * Number(e.rate || 0)), 0);
+        return (
+          <div className="space-y-3 p-4">
+            <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #e9d5ff" }}>
+              <div className="text-xs font-bold mb-3" style={{ color: "#7c3aed" }}> Filter Periode</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Dari</div>
+                  <UiInput type="date" value={rekapDari} onChange={(e) => handleRekapDariChange(e.target.value)}
+                    className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
+                </div>
+                <div>
+                  <div className="text-xs mb-1" style={{ color: "#94a3b8" }}>Sampai</div>
+                  <UiInput type="date" value={rekapSampai} onChange={(e) => handleRekapSampaiChange(e.target.value)}
+                    className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#e9d5ff" }} />
+                </div>
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-2 text-xs" style={{ color: "#94a3b8" }}>
+                <span>Periode otomatis: Minggu s/d Sabtu</span>
+                <button
+                  type="button"
+                  onClick={resetRekapToCurrentWeek}
+                  className="rounded-full px-3 py-1 font-bold"
+                  style={{ background: "#f5f3ff", color: "#7c3aed" }}
+                >
+                  Minggu ini
+                </button>
+              </div>
+            </div>
+            {!rekapPeriodReady && (
+              <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-semibold" style={{ border: "1px solid #fde68a", color: "#92400e" }}>
+                 Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
+              </div>
+            )}
+            <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
+              <button
+                type="button"
+                onClick={() => setShowFormGajianLama((v) => !v)}
+                className="w-full flex items-center justify-between"
+              >
+                <div className="text-xs font-bold" style={{ color: "#065f46" }}> Input Riwayat Gajian Lama</div>
+                <span className="text-xs font-bold" style={{ color: "#64748b" }}>{showFormGajianLama ? " Tutup" : " Buka"}</span>
+              </button>
+              {showFormGajianLama && (
+                <div className="space-y-2 pt-1">
+                  <div>
+                    <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Nama Pekerja</div>
+                    <UiSelect
+                      value={formGajianLama.employeeName}
+                      onChange={(e) => setFormGajianLama((f) => ({ ...f, employeeName: e.target.value }))}
+                      className="w-full rounded-xl border px-3 py-2 text-sm"
+                      style={{ borderColor: "#a7f3d0" }}
+                    >
+                      <option value="">-- Pilih Pekerja --</option>
+                      {workerNameOptions.map((w) => (
+                        <option key={w} value={w}>{displayWorkerName(w)}</option>
+                      ))}
+                    </UiSelect>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Tanggal Digaji</div>
+                      <UiInput type="date" value={formGajianLama.tanggalGaji}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, tanggalGaji: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Jumlah Dibayar</div>
+                      <UiInput type="number" placeholder="0" value={formGajianLama.jumlah}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, jumlah: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Dari</div>
+                      <UiInput type="date" value={formGajianLama.periodeGajiDari}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiDari: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                    <div>
+                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Sampai</div>
+                      <UiInput type="date" value={formGajianLama.periodeGajiSampai}
+                        onChange={(e) => setFormGajianLama((f) => ({ ...f, periodeGajiSampai: e.target.value }))}
+                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => simpanGajianLama(formGajianLama)}
+                    className="w-full rounded-xl py-2.5 text-sm font-bold text-white"
+                    style={{ background: "linear-gradient(135deg,#065f46,#16a34a)" }}
+                  >
+                    {isSaving ? "Menyimpan..." : " Simpan Riwayat Gajian"}
+                  </button>
+                </div>
+              )}
+            </div>
+            {gajianHistory.length > 0 && (
+              <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #a7f3d0" }}>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-black" style={{ color: "#065f46" }}> Semua Riwayat Gajian ({gajianHistory.length})</div>
+                    <div className="text-xs" style={{ color: "#64748b" }}>Daftar bisa discroll agar halaman tidak terlalu panjang.</div>
+                  </div>
+                </div>
+                <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1 overscroll-contain">
+                  {[...gajianHistory]
+                    .sort((a, b) => String(b.tanggalGaji || "").localeCompare(String(a.tanggalGaji || "")))
+                    .map((g) => (
+                      <div key={g.id} className="flex items-center justify-between gap-2 rounded-xl px-3 py-2" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-black truncate" style={{ color: "#065f46" }}>{displayWorkerName(g.employeeName)}</div>
+                          <div className="text-xs leading-snug" style={{ color: "#64748b" }}>
+                            Digaji: {g.tanggalGaji}  Periode: {g.periodeGajiDari} s/d {g.periodeGajiSampai}
+                          </div>
+                          {g.source === "input_manual_lama" && (
+                            <div className="text-xs font-bold" style={{ color: "#a855f7" }}>input manual lama</div>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                          <div className="text-sm font-black" style={{ color: "#16a34a" }}>{money(g.jumlah)}</div>
+                          {g.source === "input_manual_lama" && (
+                            <button type="button" onClick={() => hapusGajianHistory(g.id)}
+                              className="text-xs font-bold" style={{ color: "#ef4444" }}>Hapus</button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fce7f3" }}>
+                <div className="text-xl font-bold" style={{ color: "#ec4899" }}>{totalQty.toLocaleString()}</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs diberikan</div>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #bbf7d0" }}>
+                <div className="text-xl font-bold" style={{ color: "#16a34a" }}>{totalSetor.toLocaleString()}</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs disetor</div>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #fde68a" }}>
+                <div className="text-xl font-bold" style={{ color: "#d97706" }}>{totalReject.toLocaleString()}</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>pcs reject</div>
+              </div>
+              <div className="rounded-2xl bg-white p-3 text-center" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="text-base font-bold" style={{ color: "#7c3aed" }}>{money(totalGaji)}</div>
+                <div className="text-xs font-bold" style={{ color: "#64748b" }}>total gaji</div>
+              </div>
+            </div>
+            {rekapPerkerja.length > 0 && (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}> Rekap Gajian Keseluruhan</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setRekapDetailModal("sudah")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                    <div className="text-xs font-bold" style={{ color: "#16a34a" }}>Sudah Gajian</div>
+                    <div className="text-lg font-black" style={{ color: "#16a34a" }}>{money(rekapGajianKeseluruhan.totalSudahDibayar)}</div>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.sudahGajian} pekerja</span><span>Rincian </span></div>
+                  </button>
+                  <button type="button" onClick={() => setRekapDetailModal("belum")} className="rounded-xl p-3 text-left active:scale-[0.99] transition-transform" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
+                    <div className="text-xs font-bold" style={{ color: "#b45309" }}>Belum Gajian</div>
+                    <div className="text-lg font-black" style={{ color: "#b45309" }}>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</div>
+                    <div className="text-xs flex items-center justify-between" style={{ color: "#64748b" }}><span>{rekapGajianKeseluruhan.belumGajian} pekerja</span><span>Rincian </span></div>
+                  </button>
+                </div>
+                <div onClick={() => setRekapDetailModal("total")} className="w-full rounded-xl p-3 text-left active:scale-[0.99] transition-transform cursor-pointer" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", border: "1px solid #e9d5ff" }}>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold" style={{ color: "#7c3aed" }}>Total Gaji Periode Ini</span>
+                    <span className="text-xl font-black" style={{ color: "#7c3aed" }}>{money(rekapGajianKeseluruhan.totalGaji)}</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setRekapDetailModal("pekerja"); }} className="rounded-lg py-2 active:scale-[0.98]" style={{ background: "rgba(255,255,255,0.7)" }}>
+                      <div className="font-bold" style={{ color: "#2d1b69" }}>{rekapGajianKeseluruhan.totalPekerja}</div>
+                      <div style={{ color: "#94a3b8" }}>pekerja</div>
+                    </button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setRekapDetailModal("setor"); }} className="rounded-lg py-2 active:scale-[0.98]" style={{ background: "rgba(255,255,255,0.7)" }}>
+                      <div className="font-bold" style={{ color: "#16a34a" }}>{rekapGajianKeseluruhan.totalPcsSetor.toLocaleString()}</div>
+                      <div style={{ color: "#94a3b8" }}>pcs setor</div>
+                    </button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setRekapDetailModal("belumSetor"); }} className="rounded-lg py-2 active:scale-[0.98]" style={{ background: "rgba(255,255,255,0.7)" }}>
+                      <div className="font-bold" style={{ color: rekapGajianKeseluruhan.totalBelumSetor > 0 ? "#b45309" : "#94a3b8" }}>{rekapGajianKeseluruhan.totalBelumSetor.toLocaleString()}</div>
+                      <div style={{ color: "#94a3b8" }}>blm setor</div>
+                    </button>
+                  </div>
+                  <div className="mt-2 text-center text-[10px] font-semibold" style={{ color: "#a855f7" }}>Ketuk kotak untuk melihat rincian</div>
+                  {rekapGajianKeseluruhan.totalBelumDibayar > 0 && (
+                    <div className="mt-2 rounded-lg px-3 py-2 text-xs font-semibold" style={{ background: "#fff7ed", color: "#92400e", border: "1px solid #fed7aa" }}>
+                      Sisa yang belum ditandai gajian: <strong>{money(rekapGajianKeseluruhan.totalBelumDibayar)}</strong>. Tandai dari modal slip tiap pekerja.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {rekapDetailModal && (() => {
+              const getCarryOver = (nama) => productionEntries.filter((e) =>
+                normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
+                getEntrySetorTotals(e).sisaSetor > 0 &&
+                dateBefore(e.tanggal, rekapDari)
+              );
+              const isAllTimeDetail = rekapDetailModal === "allTime";
+              const baseRows = isAllTimeDetail
+                ? rekapGajiAllTimeRows.map(([nama, r]) => ({ nama, r, sudah: false, carryOver: [] }))
+                : rekapPerkerja.map(([nama, r]) => ({
+                    nama,
+                    r,
+                    sudah: sudahGajian(nama, rekapDari, rekapSampai),
+                    carryOver: getCarryOver(nama),
+                  }));
+              const filteredRows = baseRows
+                .filter((row) => {
+                  if (isAllTimeDetail) return true;
+                  if (rekapDetailModal === "sudah") return row.sudah;
+                  if (rekapDetailModal === "belum") return !row.sudah;
+                  if (rekapDetailModal === "belumSetor") return Number(row.r?.belumSetor || 0) > 0;
+                  if (rekapDetailModal === "setor") return Number(row.r?.pcsSetor || 0) > 0;
+                  return true;
+                })
+                .sort((a, b) => {
+                  if (rekapDetailModal === "setor") return Number(b.r?.pcsSetor || 0) - Number(a.r?.pcsSetor || 0);
+                  if (rekapDetailModal === "belumSetor") return Number(b.r?.belumSetor || 0) - Number(a.r?.belumSetor || 0);
+                  return Number(b.r?.gaji || 0) - Number(a.r?.gaji || 0);
+                });
+              const titleMap = {
+                sudah: "Rincian Sudah Gajian",
+                belum: "Rincian Belum Gajian",
+                total: "Rincian Total Gaji Periode Ini",
+                pekerja: "Rincian Semua Pekerja",
+                setor: "Rincian PCS Setor",
+                belumSetor: "Rincian Belum Setor",
+                allTime: "Rincian Gaji Total Keseluruhan",
+              };
+              const modalTotalGaji = filteredRows.reduce((sum, row) => sum + Number(row.r?.gaji || 0), 0);
+              const modalTotalSetor = filteredRows.reduce((sum, row) => sum + Number(row.r?.pcsSetor || 0), 0);
+              const modalTotalBelum = filteredRows.reduce((sum, row) => sum + Number(row.r?.belumSetor || 0), 0);
+              return (
+                <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
+                  <div className="w-full max-h-[88vh] overflow-auto bg-white" style={{ borderRadius: "28px 28px 0 0", borderTop: "3px solid #a855f7" }}>
+                    <div className="sticky top-0 z-10 px-4 py-4 bg-white" style={{ borderBottom: "1px solid #f3e8ff" }}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-base font-black" style={{ color: "#2d1b69" }}>{titleMap[rekapDetailModal] || "Rincian Rekap"}</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{isAllTimeDetail ? "Semua waktu" : (rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih")}  {filteredRows.length} pekerja</div>
+                        </div>
+                        <button type="button" onClick={() => setRekapDetailModal(null)} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#f1f5f9", color: "#64748b" }}>Tutup</button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs">
+                        <div className="rounded-xl py-2" style={{ background: "#f5f3ff" }}>
+                          <div className="font-black" style={{ color: "#7c3aed" }}>{money(modalTotalGaji)}</div>
+                          <div style={{ color: "#94a3b8" }}>gaji</div>
+                        </div>
+                        <div className="rounded-xl py-2" style={{ background: "#f0fdf4" }}>
+                          <div className="font-black" style={{ color: "#16a34a" }}>{modalTotalSetor.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>pcs setor</div>
+                        </div>
+                        <div className="rounded-xl py-2" style={{ background: "#fff7ed" }}>
+                          <div className="font-black" style={{ color: modalTotalBelum > 0 ? "#b45309" : "#94a3b8" }}>{modalTotalBelum.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>blm setor</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="p-4 space-y-2">
+                      {filteredRows.length === 0 ? (
+                        <div className="rounded-2xl p-6 text-center text-sm" style={{ background: "#f8fafc", color: "#94a3b8" }}>Tidak ada data untuk kategori ini.</div>
+                      ) : filteredRows.map(({ nama, r, sudah, carryOver }) => (
+                        <div key={nama} className="rounded-2xl p-3" style={{ border: "1px solid #e9d5ff", background: sudah ? "#f0fdf4" : "#fff7ed" }}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {nama}</div>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {isAllTimeDetail ? (
+                                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#ecfdf5", color: "#047857" }}>
+                                     Semua waktu  {Number(r.transaksi || 0).toLocaleString()} transaksi
+                                  </span>
+                                ) : (
+                                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: sudah ? "#dcfce7" : "#fef3c7", color: sudah ? "#16a34a" : "#b45309" }}>
+                                    {sudah ? " Sudah gajian" : " Belum gajian"}
+                                  </span>
+                                )}
+                                {Number(r.belumSetor || 0) > 0 && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: "#fffbeb", color: "#b45309" }}> {r.belumSetor} blm setor</span>}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-sm font-black" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
+                              <div className="text-[10px]" style={{ color: "#94a3b8" }}>{r.pcsSetor} pcs setor</div>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1 mt-3 text-center text-xs">
+                            <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong>{r.pcsAwal}</strong><div style={{ color: "#94a3b8" }}>diberi</div></div>
+                            <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong><div style={{ color: "#94a3b8" }}>setor</div></div>
+                            <div className="rounded-lg py-1.5" style={{ background: "rgba(255,255,255,0.7)" }}><strong style={{ color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" }}>{r.pcsReject}</strong><div style={{ color: "#94a3b8" }}>reject</div></div>
+                          </div>
+                          {!isAllTimeDetail && (
+                            <button
+                              type="button"
+                              onClick={() => { setRekapDetailModal(null); setSlipPreview({ nama, r, dari: rekapDari, sampai: rekapSampai, carryOver }); }}
+                              className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
+                              style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                            >
+                               Lihat Slip
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            {boronganBelumMasukRekap.length > 0 && (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #fed7aa", background: "#fff7ed" }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold" style={{ color: "#c2410c" }}> Borongan Belum Masuk Rekap Gaji</div>
+                    <div className="text-[11px] mt-1" style={{ color: "#9a3412" }}>
+                      Data ini ada di Borongan, tapi belum menghasilkan gaji pada periode {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}.
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-sm font-black" style={{ color: "#c2410c" }}>{totalBoronganBelumMasukPcs.toLocaleString()} pcs</div>
+                    <div className="text-[10px]" style={{ color: "#9a3412" }}>potensi {money(totalBoronganBelumMasukGajiPotensi)}</div>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                  {boronganBelumMasukRekap.map((e) => (
+                    <div key={e.id} className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid #fed7aa" }}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {e.employeeName || "Tidak diketahui"}</div>
+                          <div className="text-xs mt-0.5" style={{ color: "#64748b" }}>
+                            {e.process || "-"}  {e.model || "-"}  {e.customer || "-"}{e.invoice ? `  ${e.invoice}` : ""}
+                          </div>
+                          <div className="text-[11px] mt-1 font-semibold" style={{ color: "#c2410c" }}>{e.alasan}</div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-black" style={{ color: "#c2410c" }}>{Number(e.sisaSetor || 0).toLocaleString()} pcs</div>
+                          <div className="text-[10px]" style={{ color: "#94a3b8" }}>sisa setor</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1 mt-3 text-center text-[11px]">
+                        <div className="rounded-lg py-1.5" style={{ background: "#f8fafc" }}>
+                          <strong>{Number(e.qty || 0).toLocaleString()}</strong>
+                          <div style={{ color: "#94a3b8" }}>diberi</div>
+                        </div>
+                        <div className="rounded-lg py-1.5" style={{ background: "#ecfdf5" }}>
+                          <strong style={{ color: "#16a34a" }}>{Number(e.totalSetorSemua || 0).toLocaleString()}</strong>
+                          <div style={{ color: "#94a3b8" }}>setor</div>
+                        </div>
+                        <div className="rounded-lg py-1.5" style={{ background: Number(e.totalRejectSemua || 0) > 0 ? "#fee2e2" : "#f8fafc" }}>
+                          <strong style={{ color: Number(e.totalRejectSemua || 0) > 0 ? "#ef4444" : "#94a3b8" }}>{Number(e.totalRejectSemua || 0).toLocaleString()}</strong>
+                          <div style={{ color: "#94a3b8" }}>reject</div>
+                        </div>
+                        <div className="rounded-lg py-1.5" style={{ background: "#fff7ed" }}>
+                          <strong style={{ color: "#c2410c" }}>{money(Number(e.sisaSetor || 0) * Number(e.rate || 0))}</strong>
+                          <div style={{ color: "#94a3b8" }}>potensi</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-2 text-[11px]" style={{ color: "#94a3b8" }}>
+                        <span> Diberikan: {e.tanggal || "-"}</span>
+                        <span>{e.tanggalSetorTerakhir ? `Setor terakhir: ${e.tanggalSetorTerakhir}` : "Belum ada setor"}</span>
+                      </div>
+                      {Number(e.sisaSetor || 0) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const rawEntry = productionEntries.find((pe) => pe.id === e.id) || e;
+                            const t = setorTotals(rawEntry);
+                            setSetorModal(rawEntry);
+                            setSetorForm({ qtySetor: String(t.sisaSetor || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
+                          }}
+                          className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
+                          style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}
+                        >
+                           Setor Hasil / Masukkan ke Rekap
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {prosesKeys.length > 0 ? (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="text-xs font-bold" style={{ color: "#7c3aed" }}> Per Proses</div>
+                {prosesKeys.map((p) => {
+                  const r = byProses[p];
+                  const icon = p === "Potong" ? "" : p === "Jahit" ? "" : sameProcess(p, "Pengemasan QC") ? "" : "";
+                  const reject = r.qtyReject;
+                  return (
+                    <div key={p} className="rounded-xl p-3" style={{ background: "#fdf4ff", border: "1px solid #f3e8ff" }}>
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="font-bold text-sm" style={{ color: "#2d1b69" }}>{icon} {p}</span>
+                        <span className="text-xs font-bold" style={{ color: "#7c3aed" }}>{money(r.gaji)}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 text-center text-xs">
+                        <div className="rounded-lg py-1" style={{ background: "#ede9fe" }}>
+                          <div className="font-bold" style={{ color: "#5b21b6" }}>{(r.qtyDiberikan ?? r.qty).toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>diberikan</div>
+                        </div>
+                        <div className="rounded-lg py-1" style={{ background: "#dcfce7" }}>
+                          <div className="font-bold" style={{ color: "#16a34a" }}>{r.qtySetor.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>disetor</div>
+                        </div>
+                        <div className="rounded-lg py-1" style={{ background: reject > 0 ? "#fee2e2" : "#f1f5f9" }}>
+                          <div className="font-bold" style={{ color: reject > 0 ? "#ef4444" : "#94a3b8" }}>{reject.toLocaleString()}</div>
+                          <div style={{ color: "#94a3b8" }}>reject</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <Empty text="Tidak ada data borongan di periode ini" />
+            )}
+            {rekapPerkerja.length > 0 && (
+              <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #e9d5ff" }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold" style={{ color: "#7c3aed" }}> Rekap Gaji per Pekerja</div>
+                  <div className="text-xs font-bold" style={{ color: "#64748b" }}>{rekapPerkerja.length} pekerja</div>
+                </div>
+                {rekapPerkerja.map(([nama, r]) => {
+                  const sudahGajianPerkerja = sudahGajian(nama, rekapDari, rekapSampai);
+                  const carryOver = productionEntries.filter((e) =>
+                    normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
+                    Number(getEntrySetorTotals(e).sisaSetor || 0) > 0 &&
+                    dateBefore(e.tanggal, rekapDari)
+                  );
+                  const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number(getEntrySetorTotals(e).sisaSetor || 0), 0);
+                  return (
+                  <div key={nama} className="rounded-xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
+                    <div className="px-3 py-2" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)" }}>
+                      <div className="flex justify-between items-start">
+                        <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {nama}</div>
+                        <div className="text-sm font-bold" style={{ color: "#16a34a" }}>{money(r.gaji)}</div>
+                      </div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {sudahGajianPerkerja
+                          ? <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#dcfce7", color: "#16a34a" }}> Sudah gajian</span>
+                          : <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}> Belum gajian</span>}
+                        {totalCarryOverPcs > 0 && (
+                          <span className="rounded-full px-2 py-0.5 text-xs font-bold" style={{ background: "#fff1f2", color: "#e11d48" }}>
+                             {totalCarryOverPcs} pcs tanggungan minggu lalu
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-3 px-3 py-1.5 text-xs border-b" style={{ color: "#64748b", borderColor: "#f3e8ff" }}>
+                      <span> Diberi: <strong>{r.pcsAwal}</strong></span>
+                      <span> Setor: <strong style={{ color: "#16a34a" }}>{r.pcsSetor}</strong></span>
+                      {r.pcsReject > 0 && <span> Reject: <strong style={{ color: "#ef4444" }}>{r.pcsReject}</strong></span>}
+                      {r.belumSetor > 0 && <span style={{ color: "#b45309" }}> <strong>{r.belumSetor}</strong> blm setor</span>}
+                    </div>
+                    <div className="px-3 py-2 space-y-1.5">
+                      {r.detail.map((d, i) => (
+                        <div key={i} className="flex justify-between items-start text-xs rounded-lg px-2 py-1.5"
+                          style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
+                          <div>
+                            <div className="font-semibold" style={{ color: "#2d1b69" }}>
+                               {d.model}  {d.process}
+                            </div>
+                            <div style={{ color: "#94a3b8" }}>
+                              {d.customer}{d.invoice ? `  ${d.invoice}` : ""}
+                            </div>
+                          </div>
+                          <div className="text-right ml-2">
+                            <div className="font-bold" style={{ color: d.sudahSetor ? "#16a34a" : "#b45309" }}>
+                              {d.sudahSetor ? d.qtySetor : d.qty} pcs
+                            </div>
+                            {d.sudahSetor && d.gaji > 0 && (
+                              <div style={{ color: "#a855f7" }}>{money(d.gaji)}</div>
+                            )}
+                            {!d.sudahSetor && <div style={{ color: "#b45309" }}> blm setor</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="px-3 pb-3">
+                      <button
+                        onClick={() => setSlipPreview({ nama, r, dari: rekapDari, sampai: rekapSampai, carryOver })}
+                        className="w-full rounded-xl py-2.5 text-xs font-bold text-white flex items-center justify-center gap-2"
+                        style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                      >
+                         Lihat Slip Gaji  {rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih"}
+                      </button>
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+      {tab === "kain" && (
+        <div className="space-y-3 p-4">
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+            <button
+              type="button"
+              onClick={() => setTab("kain")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+               Kain
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("tarif")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+               Tarif
+            </button>
+          </div>
+          <InfoBox title="Data kain dari Gallery Kerudung" subtitle="Sumber data: collection materials. Gallery Produksi hanya melihat stok kain." icon="" />
+          {filteredMaterials.length === 0 && <Empty text="Tidak ada data kain/materials" />}
+          {filteredMaterials.map((k) => (
+            <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+              <div className="font-bold text-lg" style={{ color: "#2d1b69" }}> {k.namaKain}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}>Satuan: {k.satuan || "-"}</div>
+              <div className="mt-3 space-y-2">
+                {(k.warnas || []).map((w, idx) => (
+                  <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
+                    <div className="font-bold text-sm" style={{ color: "#2d1b69" }}>{w.warna || "-"}</div>
+                    <div className="grid grid-cols-3 gap-2 mt-2 text-center">
+                      <MiniStat label="Stok" value={fmtQty(w.stok)} bg="#ede9fe" color="#5b21b6" />
+                      <MiniStat label="Dipotong" value={fmtQty(w.dipotong)} bg="#fce7f3" color="#be185d" />
+                      <MiniStat label="Sisa" value={fmtQty(w.sisa)} bg="#d1fae5" color="#059669" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {tab === "kirim" && (
+        <div className="space-y-3 p-4">
+          <Button onClick={() => setModal("kirim")} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
+             + Catat Pengiriman
+          </Button>
+          {kirimOnlyBelumLengkap && (
+            <div className="rounded-2xl px-4 py-3 flex items-start gap-3" style={{ background: "#dbeafe", border: "1.5px solid #93c5fd" }}>
+              <span className="text-xl"></span>
+              <div className="flex-1">
+                <div className="text-sm font-black" style={{ color: "#1d4ed8" }}>Hanya menampilkan pengiriman belum lengkap</div>
+                <div className="text-xs mt-1" style={{ color: "#2563eb" }}>Catat sisa pengiriman untuk pesanan di bawah ini.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setKirimOnlyBelumLengkap(false)}
+                className="text-xs font-bold px-3 py-2 rounded-full text-white shrink-0"
+                style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
+              >
+                Tampilkan Semua
+              </button>
+            </div>
+          )}
+          {(() => {
+            const kirimBelumLengkapIds = new Set(
+              dashboardInsights.tugas.kirimBelumLengkap.map(({ order }) => order.id)
+            );
+            const displayed = kirimOnlyBelumLengkap
+              ? filteredShipments.filter((k) => kirimBelumLengkapIds.has(k.orderId) || kirimBelumLengkapIds.has(k.pesananId))
+              : filteredShipments;
+            if (displayed.length === 0) return <Empty text={kirimOnlyBelumLengkap ? "Semua pengiriman sudah lengkap" : "Tidak ada data pengiriman"} />;
+            return displayed.map((k) => (
+            <div key={k.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+              <div className="font-bold" style={{ color: "#2d1b69" }}>{k.customer || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.customer || "-"}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}> {k.produk || orders.find((o) => sameText(o.id, k.pesananId) || sameText(o.invoice, k.invoice))?.item || "-"}</div>
+              <div className="text-xs font-bold" style={{ color: "#64748b" }}> {k.tanggalKirim || "-"}  {k.ekspedisi || "-"}</div>
+              <div className="mt-3 rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
+                {(k.items || []).map((item, i) => (
+                  <div key={i} className="flex justify-between text-xs py-1">
+                    <span>{item.nama || "-"}</span>
+                    <span className="font-bold">{item.qtyPesan || 0} / {item.qtyKirim || 0} pcs</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ));
+          })()}
+        </div>
+      )}
+      {tab === "tarif" && (
+        <div className="space-y-3 p-4">
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+            <button
+              type="button"
+              onClick={() => setTab("kain")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "kain" ? "#fdf2f8" : "#f8fafc", color: tab === "kain" ? "#ec4899" : "#64748b", border: tab === "kain" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+               Kain
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("tarif")}
+              className="rounded-xl px-3 py-2 text-sm font-black transition-transform active:scale-[0.99]"
+              style={{ background: tab === "tarif" ? "#fdf2f8" : "#f8fafc", color: tab === "tarif" ? "#ec4899" : "#64748b", border: tab === "tarif" ? "1.5px solid #f9a8d4" : "1px solid #e2e8f0" }}
+            >
+               Tarif
+            </button>
+          </div>
+          <Button onClick={() => setModal("tarif")} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
+             + Tambah Tarif Borongan
+          </Button>
+          {workRates.map((r) => (
+            <div key={r.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
+              <div className="flex justify-between items-start gap-3">
+                <div>
+                  <div className="font-bold" style={{ color: "#2d1b69" }}>{r.productType}{r.model ? `  ${r.model}` : ""}</div>
+                  <div className="text-xs" style={{ color: "#a855f7" }}>{r.process}</div>
+                </div>
+                <div className="text-right">
+                  <div className="font-bold" style={{ color: "#ec4899" }}>{money(r.rate)} / pcs</div>
+                  <button onClick={() => deleteRate(r.id)} className="mt-1 text-xs font-bold text-rose-500">Hapus</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {modal === "produksi" && (
+        <UiModal title=" Tambah ke Produksi" onClose={() => setModal(null)}>
+          <div className="space-y-3">
+            <UiSelect label="Pilih Pesanan" value={prodForm.orderId} onChange={(v) => setProdForm((f) => ({ ...f, orderId: v }))}>
+              <option value="">-- Pilih Pesanan --</option>
+              {ordersBelumProduksi.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.item}  {o.qty} pcs</option>)}
+            </UiSelect>
+            <UiInput label="Tanggal Mulai" type="date" value={prodForm.tanggalMulai} onChange={(v) => setProdForm((f) => ({ ...f, tanggalMulai: v }))} />
+            <UiInput label="Catatan" value={prodForm.catatan} onChange={(v) => setProdForm((f) => ({ ...f, catatan: v }))} placeholder="Catatan produksi" />
+            <Button onClick={addProduksi} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
+              Simpan Produksi
+            </Button>
+          </div>
+        </UiModal>
+      )}
+      {modal === "borongan" && (
+        <UiModal title=" Input Hasil Borongan" onClose={() => setModal(null)}>
+          <div className="space-y-3">
+            <div>
+              <UiInput
+                label="Nama Pekerja"
+                value={entryForm.employeeName}
+                onChange={(v) => setEntryForm((f) => ({ ...f, employeeName: v }))}
+                placeholder="Contoh: Teh Emy"
+              />
+              {workerNameOptions.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {workerNameOptions.slice(0, 8).map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setEntryForm((f) => ({ ...f, employeeName: name }))}
+                      className="rounded-full px-3 py-1 text-xs font-bold"
+                      style={{ background: "#fdf2f8", color: "#a855f7", border: "1px solid #f9a8d4" }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="mt-2 rounded-xl px-3 py-2 text-[11px] font-semibold" style={{ background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0" }}>
+                Master data otomatis dari nama yang sudah pernah dipakai. Nama mirip akan dirapikan dan digabung saat disimpan.
+              </div>
+            </div>
+            <UiSelect
+              label="Pesanan terkait"
+              value={entryForm.orderId}
+              onChange={(v) => {
+                const o = orders.find((x) => x.id === v);
+                setEntryForm((f) => ({ ...f, orderId: v, model: "", qty: "" }));
+              }}
+            >
+              <option value="">Tidak dikaitkan ke pesanan</option>
+              {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.invoice || o.item}  {o.qty} pcs</option>)}
+            </UiSelect>
+            <UiSelect label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
+              {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
+            </UiSelect>
+            <UiSelect label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "" }))}>
+              {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
+            </UiSelect>
+            {(() => {
+              const selectedOrder = orders.find((o) => o.id === entryForm.orderId);
+              const rateModels = getRateModelOptions(entryForm.productType, entryForm.process, selectedOrder);
+              const selectedPreview = getRatePreview(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName);
+              const { limit, label } = selectedOrder && entryForm.model
+                ? getOrderProcessLimit(selectedOrder, entryForm.process, entryForm.model)
+                : { limit: 0, label: "pesanan" };
+              const alreadyQty = selectedOrder && entryForm.model
+                ? processQtyForOrderModel(selectedOrder.id, entryForm.process, entryForm.model)
+                : 0;
+              const sisaQty = limit > 0 ? Math.max(0, limit - alreadyQty) : 0;
+              return (
+                <div className="space-y-2">
+                  <UiSelect
+                    label="Model / Acuan Tarif"
+                    value={entryForm.model}
+                    onChange={(v) => setEntryForm((f) => ({ ...f, model: v, qty: sisaQty > 0 ? String(sisaQty) : f.qty }))}
+                  >
+                    <option value="">{isModelSpecificProcess(entryForm.process) ? "-- Pilih model dari pesanan terkait --" : "-- Pilih acuan tarif dari Master Tarif --"}</option>
+                    {rateModels.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </UiSelect>
+                  {entryProcessRequiresOrder(entryForm.process) && !selectedOrder && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+                       Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
+                    </div>
+                  )}
+                  {entryProcessWarnsWithoutOrder(entryForm.process) && !selectedOrder && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
+                       {entryForm.process} boleh tanpa pesanan, tapi nanti tidak ikut progress di Tab Produksi sampai dikaitkan lewat tombol  Kaitkan ke Pesanan.
+                    </div>
+                  )}
+                  {rateModels.length === 0 && (!isModelSpecificProcess(entryForm.process) || selectedOrder) && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+                       {isModelSpecificProcess(entryForm.process)
+                        ? `Pesanan terkait belum memiliki item/model untuk proses ${entryForm.process}.`
+                        : `Tarif belum ada di Master Tarif untuk ${entryForm.productType}  ${entryForm.process}. Silakan buat tarif baru di menu Master Tarif.`}
+                    </div>
+                  )}
+                  {selectedPreview.status === "found" && (
+                    <div className="rounded-2xl border p-3 text-xs" style={{ background: "#ecfdf5", borderColor: "#86efac", color: "#166534" }}>
+                      <div className="font-black"> Tarif yang dipakai</div>
+                      <div className="mt-1 font-bold">{entryForm.productType}  {entryForm.process}  {entryForm.model}</div>
+                      <div className="mt-1 text-base font-black">{money(selectedPreview.effectiveRate)} / pcs</div>
+                      {normalizeWorkerNameKey(entryForm.employeeName).includes("konveksi") && (
+                        <div className="mt-1 text-[11px] font-semibold">Tarif Master {money(selectedPreview.baseRate)} / pcs  Tarif Konveksi {money(selectedPreview.effectiveRate)} / pcs</div>
+                      )}
+                    </div>
+                  )}
+                  {selectedPreview.status === "missing" && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
+                       Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.
+                    </div>
+                  )}
+                  {selectedPreview.status === "invalid" && (
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff1f2", borderColor: "#fecdd3", color: "#be123c" }}>
+                       Tarif Konveksi tidak valid. Silakan perbaiki tarif di Master Tarif.
+                    </div>
+                  )}
+                  {selectedOrder && entryForm.model && limit > 0 && (
+                    <div className="rounded-2xl px-3 py-2 text-xs font-semibold" style={{ background: "#f8fafc", color: "#475569", border: "1px solid #e2e8f0" }}>
+                      Batas {label}: {limit} pcs  sudah input {alreadyQty} pcs  sisa {sisaQty} pcs.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            <UiInput label="Jumlah pcs" type="number" value={entryForm.qty} onChange={(v) => setEntryForm((f) => ({ ...f, qty: v }))} placeholder="Contoh: 500" />
+            <UiInput label="Tanggal" type="date" value={entryForm.tanggal} onChange={(v) => setEntryForm((f) => ({ ...f, tanggal: v }))} />
+            <UiInput label="Catatan" value={entryForm.catatan} onChange={(v) => setEntryForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
+            <Button onClick={addProductionEntry} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
+              Simpan Hasil Borongan
+            </Button>
+          </div>
+        </UiModal>
+      )}
+      {setorModal && (() => {
+        const modalTotals = setorTotals(setorModal);
+        const sisa = Number(modalTotals.sisaSetor || 0);
+        const inputSetor = Number(setorForm.qtySetor || 0);
+        const inputReject = Number(setorForm.qtyReject || 0);
+        const sisaSetelahInput = Math.max(0, sisa - inputSetor - inputReject);
+        return (
+        <UiModal title=" Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
+          <div className="space-y-3">
+            <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {displayWorkerName(setorModal.employeeName)}</div>
+              <div className="text-xs" style={{ color: "#a855f7" }}>{setorModal.productType}  {setorModal.process}{setorModal.model ? `  ${setorModal.model}` : ""}</div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="rounded-xl py-2" style={{ background: "#ede9fe", color: "#5b21b6" }}><strong>{setorModal.qty}</strong><br/>diberi</div>
+                <div className="rounded-xl py-2" style={{ background: "#dcfce7", color: "#16a34a" }}><strong>{modalTotals.qtySetor}</strong><br/>sudah setor</div>
+                <div className="rounded-xl py-2" style={{ background: sisa > 0 ? "#fef3c7" : "#f1f5f9", color: sisa > 0 ? "#b45309" : "#64748b" }}><strong>{sisa}</strong><br/>sisa</div>
+              </div>
+            </div>
+            {modalTotals.history.length > 0 && (
+              <div className="rounded-2xl p-3 text-xs space-y-1" style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#92400e" }}>
+                <div className="font-bold">Riwayat setor sebelumnya</div>
+                {modalTotals.history.map((h, idx) => (
+                  <div key={h.id || idx}> {h.tanggalSetor}: setor {Number(h.qtySetor || 0)} pcs{Number(h.qtyReject || 0) > 0 ? `, reject ${Number(h.qtyReject || 0)} pcs` : ""}  {money(h.totalWageSetor || 0)}</div>
+                ))}
+              </div>
+            )}
+            <UiInput
+              label="Qty Disetor (pcs)"
+              type="number"
+              value={setorForm.qtySetor}
+              onChange={(v) => setSetorForm((f) => ({ ...f, qtySetor: v }))}
+              placeholder={`Maks ${sisa} pcs`}
+            />
+            <UiInput
+              label="Qty Reject (pcs)  opsional"
+              type="number"
+              value={setorForm.qtyReject}
+              onChange={(v) => setSetorForm((f) => ({ ...f, qtyReject: v }))}
+              placeholder="0 jika tidak ada reject"
+            />
+            {inputSetor + inputReject > sisa && (
+              <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fee2e2", color: "#b91c1c" }}>
+                 Total input melebihi sisa {sisa} pcs.
+              </div>
+            )}
+            {inputSetor + inputReject > 0 && inputSetor + inputReject <= sisa && sisaSetelahInput > 0 && (
+              <div className="rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#fef3c7", color: "#b45309" }}>
+                 Setelah setor ini masih tersisa {sisaSetelahInput} pcs.
+              </div>
+            )}
+            {inputSetor > 0 && Number(setorModal.rate) > 0 && (
+              <div className="rounded-xl px-3 py-2 text-sm font-bold" style={{ background: "#f3e8ff", color: "#7c3aed" }}>
+                 Gaji transaksi ini: {money(inputSetor * Number(setorModal.rate))}
+                <span className="font-normal text-xs ml-1">({setorForm.qtySetor} pcs  {money(setorModal.rate)})</span>
+              </div>
+            )}
+            <UiInput
+              label="Tanggal Setor"
+              type="date"
+              value={setorForm.tanggalSetor}
+              onChange={(v) => setSetorForm((f) => ({ ...f, tanggalSetor: v }))}
+            />
+            <UiInput
+              label="Catatan"
+              value={setorForm.catatan}
+              onChange={(v) => setSetorForm((f) => ({ ...f, catatan: v }))}
+              placeholder="Opsional"
+            />
+            <Button onClick={simpanSetor} disabled={isSaving || sisa <= 0 || inputSetor + inputReject > sisa} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
+              {sisaSetelahInput > 0 ? "Simpan Setor Sebagian" : "Simpan Setor Selesai"}
+            </Button>
+          </div>
+        </UiModal>
+        );
+      })()}
+      {modal === "tarif" && (
+        <UiModal title=" Tambah Tarif Borongan" onClose={() => setModal(null)}>
+          <div className="space-y-3">
+            <UiSelect label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
+              {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
+            </UiSelect>
+            <UiSelect label="Proses" value={rateForm.process} onChange={(v) => setRateForm((f) => ({ ...f, process: v }))}>
+              {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
+            </UiSelect>
+            <div>
+              <UiInput label="Model / Acuan Tarif" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Kerudung / Alya L / Gamis" />
+              <div className="mt-1 text-[11px] font-semibold" style={{ color: "#64748b" }}>
+                Isi sesuai Master Tarif. Untuk Potong/Pengemasan-QC boleh memakai acuan umum seperti Kerudung.
+              </div>
+              {modelNameOptions.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {modelNameOptions.slice(0, 10).map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setRateForm((f) => ({ ...f, model: name }))}
+                      className="rounded-full px-3 py-1 text-xs font-bold"
+                      style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <UiInput label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
+            <Button onClick={addWorkRate} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
+              Simpan Tarif
+            </Button>
+          </div>
+        </UiModal>
+      )}
+      {modal === "kirim" && (
+        <UiModal title=" Catat Pengiriman" onClose={() => setModal(null)}>
+          <div className="space-y-3">
+            <UiSelect
+              label="Pilih Customer"
+              value={kirimForm.customerKey || ""}
+              onChange={(v) => {
+                const customerOrders = ordersForShipment.filter((o) => normalizeKey(o.customer || "") === v);
+                const orderIds = customerOrders.map((o) => o.id);
+                const nextItems = customerOrders.flatMap((p) => {
+                  const existingDeliveries = getDeliveryArray(p);
+                  return orderBaseItems(p).map((it, idx) => {
+                    const qtyPesan = Number(it.orderedQty || it.qty || 0);
+                    const sudahKirim = existingDeliveries.reduce((sum, delivery) => {
+                      const found = (delivery.items || []).find((di) =>
+                        di.itemIndex !== undefined ? Number(di.itemIndex) === idx
+                          : normalizeModelKey(di.name || "") === normalizeModelKey(it.name || "")
+                      );
+                      return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
+                    }, 0);
+                    const sisa = Math.max(0, qtyPesan - sudahKirim);
+                    return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                  }).filter((it) => Number(it.qtyKirim || 0) > 0);
+                });
+                const first = customerOrders[0];
+                setKirimForm((f) => ({
+                  ...f,
+                  customerKey: v,
+                  pesananId: orderIds[0] || "",
+                  orderIds,
+                  penerima: first?.customer || "",
+                  items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
+                  shortShipmentMode: "temporary",
+                  shortShipmentReason: "Stok kain habis",
+                  shortShipmentNote: "",
+                }));
+              }}
+            >
+              <option value="">-- Pilih Customer --</option>
+              {shipmentCustomerOptions.map((c) => <option key={c.key} value={c.key}>{c.name}  {c.count} pesanan siap/sisa kirim</option>)}
+            </UiSelect>
+            {kirimForm.customerKey && (
+              <div className="rounded-2xl border p-3 text-xs space-y-2" style={{ background: "#f8fafc", borderColor: "#e2e8f0", color: "#475569" }}>
+                <div className="font-black" style={{ color: "#0f172a" }}>Pesanan dalam nota ini</div>
+                {ordersForShipment.filter((o) => normalizeKey(o.customer || "") === kirimForm.customerKey).map((o) => {
+                  const checked = (kirimForm.orderIds || []).includes(o.id);
+                  return (
+                    <label key={o.id} className="flex items-center gap-2 rounded-xl bg-white p-2">
+                      <UiInput
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const nextIds = e.target.checked
+                            ? Array.from(new Set([...(kirimForm.orderIds || []), o.id]))
+                            : (kirimForm.orderIds || []).filter((id) => id !== o.id);
+                          const selectedOrders = ordersForShipment.filter((x) => nextIds.includes(x.id));
+                          const nextItems = selectedOrders.flatMap((p) => {
+                            const existingDeliveries = getDeliveryArray(p);
+                            return orderBaseItems(p).map((it, idx) => {
+                              const qtyPesan = Number(it.orderedQty || it.qty || 0);
+                              const sudahKirim = existingDeliveries.reduce((sum, delivery) => {
+                                const found = (delivery.items || []).find((di) =>
+                                  di.itemIndex !== undefined ? Number(di.itemIndex) === idx
+                                    : normalizeModelKey(di.name || "") === normalizeModelKey(it.name || "")
+                                );
+                                return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
+                              }, 0);
+                              const sisa = Math.max(0, qtyPesan - sudahKirim);
+                              return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                            }).filter((it) => Number(it.qtyKirim || 0) > 0);
+                          });
+                          setKirimForm((f) => ({ ...f, orderIds: nextIds, pesananId: nextIds[0] || "", items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }] }));
+                        }}
+                      />
+                      <span className="flex-1"><b>{o.invoice || o.item}</b>  {o.item}  {o.qty} pcs</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <UiInput label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
+            <UiInput label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
+            <UiInput label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
+            {kirimForm.items.map((item, idx) => (
+              <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
+                {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"}  {item.customer || kirimForm.penerima}</div>}
+                <UiInput
+                  label="Item"
+                  value={item.nama}
+                  onChange={(v) => {
+                    const items = [...kirimForm.items];
+                    items[idx] = { ...items[idx], nama: v };
+                    setKirimForm((f) => ({ ...f, items }));
+                  }}
+                />
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <UiInput label="Qty Pesan" value={item.qtyPesan} readOnly />
+                  <UiInput
+                    label="Qty Kirim"
+                    type="number"
+                    value={item.qtyKirim}
+                    onChange={(v) => {
+                      const items = [...kirimForm.items];
+                      items[idx] = { ...items[idx], qtyKirim: v };
+                      setKirimForm((f) => ({ ...f, items }));
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+            {(() => {
+              const totalPesan = (kirimForm.items || []).reduce((s, it) => s + Number(it.qtyPesan || 0), 0);
+              const totalKirim = (kirimForm.items || []).reduce((s, it) => s + Number(it.qtyKirim || 0), 0);
+              const sisa = Math.max(0, totalPesan - totalKirim);
+              const lebih = Math.max(0, totalKirim - totalPesan);
+              if (!kirimForm.pesananId || totalKirim <= 0 || (sisa <= 0 && lebih <= 0)) return null;
+              if (lebih > 0) {
+                return (
+                  <div className="rounded-2xl border p-3 text-xs" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+                    <div className="font-bold mb-1"> Kelebihan kirim {formatNumber(lebih)} pcs</div>
+                    <div>Qty kirim lebih besar dari pesanan. Kelebihan ini akan ikut menambah tagihan customer di Gallery Kerudung karena invoice mengikuti qty terkirim.</div>
+                  </div>
+                );
+              }
+              return (
+                <div className="rounded-2xl border p-3 text-xs space-y-3" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
+                  <div>
+                    <div className="font-bold mb-1"> Pengiriman kurang dari pesanan</div>
+                    <div>Pesanan {formatNumber(totalPesan)} pcs  dikirim {formatNumber(totalKirim)} pcs  sisa {formatNumber(sisa)} pcs.</div>
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
+                      <UiInput type="radio" checked={(kirimForm.shortShipmentMode || "temporary") === "temporary"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "temporary" }))} />
+                      <span><b>Kurang kirim sementara</b><br/>Pilih ini jika sisa barang masih akan diproduksi/dikirim lagi nanti. Status menjadi Dikirim Sebagian dan sisa tetap tampil di Dashboard.</span>
+                    </label>
+                    <label className="flex items-start gap-2 rounded-xl bg-white/70 p-2">
+                      <UiInput type="radio" checked={kirimForm.shortShipmentMode === "final"} onChange={() => setKirimForm((f) => ({ ...f, shortShipmentMode: "final" }))} />
+                      <span><b>Kurang kirim final</b><br/>Pilih ini jika sisa tidak akan dikirim lagi. Order ditutup sebagai Kurang Kirim Final, sisa tidak jadi tanggungan aktif, dan tagihan tetap hanya dari qty terkirim.</span>
+                    </label>
+                  </div>
+                  {kirimForm.shortShipmentMode === "final" && (
+                    <div className="grid gap-2">
+                      <UiSelect label="Alasan kurang kirim final" value={kirimForm.shortShipmentReason || "Stok kain habis"} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentReason: v }))}>
+                        <option value="Stok kain habis">Stok kain habis</option>
+                        <option value="Produksi hanya jadi segitu">Produksi hanya jadi segitu</option>
+                        <option value="Customer setuju dikurangi">Customer setuju dikurangi</option>
+                        <option value="Lainnya">Lainnya</option>
+                      </UiSelect>
+                      <UiInput label="Catatan penutupan" value={kirimForm.shortShipmentNote || ""} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentNote: v }))} placeholder="Opsional" />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+            {(() => {
+              const unlinkedCount = (productionEntries || []).filter((e) => !e.orderId && Number(getEntrySetorTotals(e).qtySetor || 0) > 0).length;
+              if (unlinkedCount <= 0) return null;
+              return (
+                <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fffbeb", borderColor: "#fde68a", color: "#92400e" }}>
+                   Ada {unlinkedCount} entry borongan sudah setor tapi masih Tanpa Pesanan. Cek Tab Borongan dan kaitkan dulu kalau entry itu milik pesanan yang akan dikirim.
+                </div>
+              );
+            })()}
+            <UiInput label="Catatan" value={kirimForm.catatan} onChange={(v) => setKirimForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
+            <Button onClick={addPengiriman} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
+              Simpan Pengiriman
+            </Button>
+          </div>
+        </UiModal>
+      )}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            {confirmDelete.step === 1 ? (
+              <>
+                <div className="text-center mb-4">
+                  <div className="text-4xl mb-2"></div>
+                  <div className="text-lg font-bold" style={{ color: "#1e293b" }}>Hapus Data?</div>
+                  <div className="text-sm mt-1" style={{ color: "#64748b" }}>
+                    {confirmDelete.entry
+                      ? `Entry borongan ${displayWorkerName(confirmDelete.entry.employeeName)}  ${confirmDelete.entry.model || confirmDelete.entry.process}  ${confirmDelete.entry.qty} pcs`
+                      : "Data ini akan dihapus."
+                    }
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setConfirmDelete(null)}
+                    className="flex-1 rounded-2xl border py-3 font-semibold"
+                    style={{ borderColor: "#e2e8f0", color: "#64748b" }}>
+                    Batal
+                  </button>
+                  <button onClick={confirmDeleteAction}
+                    className="flex-1 rounded-2xl py-3 font-semibold text-white"
+                    style={{ background: "#f97316" }}>
+                    Ya, Lanjut
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-center mb-4">
+                  <div className="text-4xl mb-2"></div>
+                  <div className="text-lg font-bold" style={{ color: "#e11d48" }}>Yakin Hapus Permanen?</div>
+                  <div className="text-sm mt-2 rounded-xl px-3 py-2" style={{ background: "#fff1f2", color: "#b91c1c" }}>
+                    Data yang dihapus <strong>tidak bisa dikembalikan</strong>. Termasuk data payroll terkait.
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setConfirmDelete(null)}
+                    className="flex-1 rounded-2xl border py-3 font-semibold"
+                    style={{ borderColor: "#e2e8f0", color: "#64748b" }}>
+                    Batal
+                  </button>
+                  <button onClick={confirmDeleteAction}
+                    className="flex-1 rounded-2xl py-3 font-semibold text-white"
+                    style={{ background: "#e11d48" }}>
+                     Hapus Sekarang
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {editEntryModal && (
+        <UiModal title=" Edit Entry Borongan" onClose={() => setEditEntryModal(null)}>
+          <div className="space-y-3">
+            <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
+              <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {displayWorkerName(editEntryModal.employeeName)}</div>
+              <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
+                {editEntryModal.productType}  {editEntryModal.process}
+                {editEntryModal.customer ? `  ${editEntryModal.customer}` : ""}
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
+                 Nama pekerja & proses tidak bisa diubah di sini
+              </div>
+            </div>
+            {!editEntryModal.orderId && (
+              <UiSelect
+                label="Kaitkan ke Pesanan"
+                value={editEntryForm.orderId}
+                onChange={(v) => setEditEntryForm(f => ({ ...f, orderId: v, model: v ? "" : f.model }))}
+              >
+                <option value="">Belum dikaitkan</option>
+                {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.invoice || o.item}  {o.qty} pcs</option>)}
+              </UiSelect>
+            )}
+            {!isGeneralRateProcess(editEntryModal.process) && (
+              <UiInput
+                label="Model"
+                value={editEntryForm.model}
+                onChange={(v) => setEditEntryForm(f => ({ ...f, model: v }))}
+                placeholder="Contoh: Alya L"
+              />
+            )}
+            <UiInput
+              label="Jumlah pcs diberikan"
+              type="number"
+              value={editEntryForm.qty}
+              onChange={(v) => setEditEntryForm(f => ({ ...f, qty: v }))}
+              placeholder="Contoh: 62"
+            />
+            <UiInput
+              label="Tanggal"
+              type="date"
+              value={editEntryForm.tanggal}
+              onChange={(v) => setEditEntryForm(f => ({ ...f, tanggal: v }))}
+            />
+            <UiInput
+              label="Catatan"
+              value={editEntryForm.catatan}
+              onChange={(v) => setEditEntryForm(f => ({ ...f, catatan: v }))}
+              placeholder="Opsional"
+            />
+            {setorTotals(editEntryModal).statusSetor !== "belum_setor" && (
+              <div className="rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#fef3c7", color: "#b45309" }}>
+                 Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
+              </div>
+            )}
+            <Button onClick={saveEditEntry} disabled={isSaving} className="w-full"
+              style={{ background: "linear-gradient(135deg,#2563eb,#7c3aed)" }}>
+               Simpan Perubahan
+            </Button>
+          </div>
+        </UiModal>
+      )}
+      {slipPreview && (() => {
+        const { nama, r, dari, sampai, carryOver = [] } = slipPreview;
+        const fmt = (v) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(v || 0));
+        const slipSudahGajian = sudahGajian(nama, dari, sampai);
+        return (
+          <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
+            <div className="w-full max-h-[92vh] overflow-auto bg-white" style={{ borderRadius: "32px 32px 0 0", borderTop: "3px solid #a855f7" }}>
+              <div className="px-5 pt-5 pb-3" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-3">
+                    <img src="/logo-gk.png" alt="Gallery Kerudung" className="h-12 w-12 rounded-2xl bg-white object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                    <div className="text-white font-extrabold text-lg"> Slip Pendapatan Borongan</div>
+                  </div>
+                  <button onClick={() => setSlipPreview(null)}
+                    className="rounded-full px-4 py-1.5 text-sm font-bold"
+                    style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
+                     Tutup
+                  </button>
+                </div>
+                <div className="text-white text-sm opacity-90">Gallery Kerudung</div>
+              </div>
+              <div ref={slipRef} className="p-5 space-y-4">
+                <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fdf4ff", border: "1px solid #e9d5ff" }}>
+                  <div className="flex justify-between text-sm">
+                    <span style={{ color: "#94a3b8" }}>Nama Pekerja</span>
+                    <strong style={{ color: "#2d1b69" }}> {nama}</strong>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span style={{ color: "#94a3b8" }}>Periode</span>
+                    <strong style={{ color: "#2d1b69" }}> {dari} s/d {sampai}</strong>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span style={{ color: "#94a3b8" }}>Tanggal Cetak</span>
+                    <strong style={{ color: "#2d1b69" }}>{new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })}</strong>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-xl p-2" style={{ background: "#ede9fe" }}>
+                    <div className="font-bold text-base" style={{ color: "#5b21b6" }}>{r.pcsAwal}</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Diberikan</div>
+                  </div>
+                  <div className="rounded-xl p-2" style={{ background: "#dcfce7" }}>
+                    <div className="font-bold text-base" style={{ color: "#16a34a" }}>{r.pcsSetor}</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Disetor</div>
+                  </div>
+                  <div className="rounded-xl p-2" style={{ background: r.pcsReject > 0 ? "#fee2e2" : "#f1f5f9" }}>
+                    <div className="font-bold text-base" style={{ color: r.pcsReject > 0 ? "#ef4444" : "#94a3b8" }}>{r.pcsReject}</div>
+                    <div className="text-xs font-bold" style={{ color: "#64748b" }}>Reject</div>
+                  </div>
+                </div>
+                <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
+                  <div className="px-3 py-2 text-xs font-bold" style={{ background: "linear-gradient(135deg,#ede9fe,#fce7f3)", color: "#7c3aed" }}>
+                    Detail Pekerjaan
+                  </div>
+                  <div className="divide-y" style={{ borderColor: "#f3e8ff" }}>
+                    {[...r.detail].sort((a,b) => (a.tanggalSetor||a.tanggal||"").localeCompare(b.tanggalSetor||b.tanggal||"")).map((d, i) => (
+                      <div key={i} className="px-3 py-2.5 flex justify-between items-start"
+                        style={{ background: d.sudahSetor ? "#f0fdf4" : "#fefce8" }}>
+                        <div className="flex-1 mr-2">
+                          <div className="text-xs font-bold" style={{ color: "#2d1b69" }}>
+                            {d.process}{d.model && d.model !== "-" ? "  " + d.model : ""}
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
+                            {d.customer}{d.invoice ? " / " + d.invoice : ""}
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>
+                             {d.tanggalSetor || d.tanggal || "-"}
+                          </div>
+                          {d.rate > 0 && (
+                            <div className="text-xs mt-0.5" style={{ color: "#a855f7" }}>
+                              {fmt(d.rate)}/pcs  {d.sudahSetor ? d.qtySetor : d.qty} pcs
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          {d.sudahSetor ? (
+                            <>
+                              <div className="text-xs font-bold" style={{ color: "#16a34a" }}>{d.qtySetor} pcs</div>
+                              {d.qtyReject > 0 && <div className="text-xs" style={{ color: "#ef4444" }}> {d.qtyReject} reject</div>}
+                              <div className="text-sm font-bold mt-0.5" style={{ color: "#7c3aed" }}>{fmt(d.gaji)}</div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="text-xs font-bold" style={{ color: "#b45309" }}>{d.qty} pcs</div>
+                              <div className="text-xs mt-0.5" style={{ color: "#b45309" }}> Blm setor</div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {r.belumSetor > 0 && (
+                  <div className="rounded-xl px-4 py-3 text-xs font-semibold" style={{ background: "#fefce8", border: "1px solid #fde68a", color: "#b45309" }}>
+                     Masih ada <strong>{r.belumSetor} pcs</strong> belum disetor, belum termasuk total di bawah.
+                  </div>
+                )}
+                <div className="rounded-2xl p-4" style={{ background: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "1.5px solid #bbf7d0" }}>
+                  <div className="text-xs mb-1" style={{ color: "#64748b" }}>Total Pendapatan Bersih</div>
+                  <div className="text-3xl font-black" style={{ color: "#16a34a" }}>{fmt(r.gaji)}</div>
+                </div>
+                {(() => {
+                  const kasbonAktif = kasbonAktifUntukPekerja(nama);
+                  if (kasbonAktif.length === 0) return null;
+                  const totalKasbon = kasbonAktif.reduce((s, k) => s + Number(k.sisaKasbon || 0), 0);
+                  const potongan = Math.min(totalKasbon, Number(r.gaji || 0));
+                  const diterima = Number(r.gaji || 0) - potongan;
+                  return (
+                    <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}>
+                      <div className="text-xs font-black" style={{ color: "#92400e" }}> Kasbon Aktif  akan dipotong saat gajian</div>
+                      {kasbonAktif.map((k) => (
+                        <div key={k.id} className="flex justify-between text-xs" style={{ color: "#78716c" }}>
+                          <span> {k.tanggal}{k.keterangan ? `  ${k.keterangan}` : ""}</span>
+                          <span className="font-bold text-amber-700">{money(k.sisaKasbon)} sisa</span>
+                        </div>
+                      ))}
+                      <div className="border-t border-amber-200 pt-2 space-y-1">
+                        <div className="flex justify-between text-xs font-bold">
+                          <span style={{ color: "#92400e" }}>Total potongan kasbon</span>
+                          <span style={{ color: "#dc2626" }}>- {money(potongan)}</span>
+                        </div>
+                        <div className="flex justify-between text-sm font-black">
+                          <span style={{ color: "#16a34a" }}>Gaji diterima</span>
+                          <span style={{ color: "#16a34a" }}>{money(diterima)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+                <div className="rounded-2xl p-4 space-y-3" style={{ background: slipSudahGajian ? "#f0fdf4" : "#fff7ed", border: `1.5px solid ${slipSudahGajian ? "#bbf7d0" : "#fed7aa"}` }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-bold" style={{ color: slipSudahGajian ? "#16a34a" : "#b45309" }}>
+                        {slipSudahGajian ? " Sudah gajian" : " Belum gajian"}
+                      </div>
+                      <div className="mt-1 text-xs" style={{ color: "#64748b" }}>
+                        Status ini hanya untuk periode {dari} s/d {sampai}.
+                      </div>
+                    </div>
+                    {slipSudahGajian ? (
+                      <button
+                        type="button"
+                        onClick={() => batalkanSudahGajian(nama, dari, sampai)}
+                        className="rounded-xl px-3 py-2 text-xs font-bold"
+                        style={{ background: "#fee2e2", color: "#e11d48", border: "1px solid #fecaca" }}
+                      >
+                        Batalkan
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => tandaiSudahGajianDanSimpanHistory(nama, r, dari, sampai)}
+                        className="rounded-xl px-3 py-2 text-xs font-bold text-white"
+                        style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)" }}
+                      >
+                        Tandai Sudah Gajian
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {carryOver.length > 0 && (
+                  <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fff7ed", border: "1.5px solid #fed7aa" }}>
+                    <div className="text-xs font-bold" style={{ color: "#b45309" }}>
+                       Tanggungan Minggu Lalu (Belum Disetor)
+                    </div>
+                    <div className="text-xs" style={{ color: "#92400e" }}>
+                      Pekerjaan berikut belum disetor dan <strong>akan masuk gaji minggu depan</strong> setelah disetor:
+                    </div>
+                    {carryOver.map((e, i) => {
+                      const entryOrder = orders.find(o => o.id === e.orderId);
+                      const namaModel = e.model && e.model !== "-" ? e.model : "-";
+                      const periodeAsli = e.tanggal ? getMingguPeriod(e.tanggal) : null;
+                      return (
+                        <div key={i} className="rounded-xl px-3 py-2 text-xs" style={{ background: "#fef3c7", border: "1px solid #fde68a" }}>
+                          <div className="font-semibold" style={{ color: "#2d1b69" }}>
+                             {e.process}{namaModel !== "-" ? `  ${namaModel}` : ""}
+                          </div>
+                          {(e.customer || entryOrder?.customer) && (
+                            <div style={{ color: "#94a3b8" }}>{e.customer || entryOrder?.customer}{e.invoice ? `  ${e.invoice}` : ""}</div>
+                          )}
+                          <div className="flex justify-between mt-1">
+                            <span style={{ color: "#b45309" }}>
+                               {periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : e.tanggal}
+                            </span>
+                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(getEntrySetorTotals(e).sisaSetor || 0)} pcs  belum disetor</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="text-xs font-semibold text-center" style={{ color: "#b45309" }}>
+                      Total tanggungan: {carryOver.reduce((s, e) => s + Number(getEntrySetorTotals(e).sisaSetor || 0), 0)} pcs
+                    </div>
+                  </div>
+                )}
+                <button
+                  onClick={() => downloadSlipGaji(nama, r, dari, sampai, carryOver)}
+                  className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                  style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                >
+                   Download / Cetak Slip PDF
+                </button>
+                <button
+                  onClick={() => shareSlipGajiAsImage(nama, r, dari, sampai, carryOver)}
+                  className="w-full rounded-2xl py-3.5 font-bold text-white flex items-center justify-center gap-2 text-sm"
+                  style={{ background: "linear-gradient(135deg,#25d366,#128c7e)" }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.523 5.847L.057 23.882l6.19-1.438A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.173-1.4l-.371-.22-3.674.853.884-3.561-.242-.381A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
+                  Share Gambar ke WA
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {tugasDetailModal && (
         <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }}>
           <motion.div
             initial={{ y: 80 }}
@@ -4600,25 +6630,6 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
