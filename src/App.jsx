@@ -2,7 +2,7 @@
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
-import { Badge, Button as UiButton, Input as UiInput } from "./components/ui";
+import { Badge, Button as UiButton, Input as UiInput, Select as UiSelect } from "./components/ui";
 import { safeDocId, safeFileName } from "./utils/idUtils";
 import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey, normalizeMasterKey } from "./utils/normalizers";
 import {
@@ -839,27 +839,6 @@ function Button({ children, onClick, className = "", style = {}, disabled }) {
     >
       {children}
     </button>
-  );
-}
-function Select({ label, value, onChange, children }) {
-  return (
-    <div className="space-y-1">
-      <label className="text-sm font-black" style={{ color: "#7e22ce" }}>{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-4 py-3.5 outline-none text-base font-semibold"
-        style={{
-          borderRadius: 16,
-          border: "1.7px solid #f0abfc",
-          background: "#fff7fb",
-          color: "#1e1b4b",
-          minHeight: 50,
-        }}
-      >
-        {children}
-      </select>
-    </div>
   );
 }
 function Modal({ title, children, onClose }) {
@@ -5081,7 +5060,7 @@ function rateDocId(productType, model, process) {
                 <div className="space-y-2 pt-1">
                   <div>
                     <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Nama Pekerja</div>
-                    <select
+                    <UiSelect
                       value={formGajianLama.employeeName}
                       onChange={(e) => setFormGajianLama((f) => ({ ...f, employeeName: e.target.value }))}
                       className="w-full rounded-xl border px-3 py-2 text-sm"
@@ -5091,7 +5070,7 @@ function rateDocId(productType, model, process) {
                       {workerNameOptions.map((w) => (
                         <option key={w} value={w}>{displayWorkerName(w)}</option>
                       ))}
-                    </select>
+                    </UiSelect>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
@@ -5663,10 +5642,10 @@ function rateDocId(productType, model, process) {
       {modal === "produksi" && (
         <Modal title=" Tambah ke Produksi" onClose={() => setModal(null)}>
           <div className="space-y-3">
-            <Select label="Pilih Pesanan" value={prodForm.orderId} onChange={(v) => setProdForm((f) => ({ ...f, orderId: v }))}>
+            <UiSelect label="Pilih Pesanan" value={prodForm.orderId} onChange={(v) => setProdForm((f) => ({ ...f, orderId: v }))}>
               <option value="">-- Pilih Pesanan --</option>
               {ordersBelumProduksi.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.item}  {o.qty} pcs</option>)}
-            </Select>
+            </UiSelect>
             <UiInput label="Tanggal Mulai" type="date" value={prodForm.tanggalMulai} onChange={(v) => setProdForm((f) => ({ ...f, tanggalMulai: v }))} />
             <UiInput label="Catatan" value={prodForm.catatan} onChange={(v) => setProdForm((f) => ({ ...f, catatan: v }))} placeholder="Catatan produksi" />
             <Button onClick={addProduksi} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}>
@@ -5704,7 +5683,7 @@ function rateDocId(productType, model, process) {
                 Master data otomatis dari nama yang sudah pernah dipakai. Nama mirip akan dirapikan dan digabung saat disimpan.
               </div>
             </div>
-            <Select
+            <UiSelect
               label="Pesanan terkait"
               value={entryForm.orderId}
               onChange={(v) => {
@@ -5714,13 +5693,13 @@ function rateDocId(productType, model, process) {
             >
               <option value="">Tidak dikaitkan ke pesanan</option>
               {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.invoice || o.item}  {o.qty} pcs</option>)}
-            </Select>
-            <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
+            </UiSelect>
+            <UiSelect label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
-            </Select>
-            <Select label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "" }))}>
+            </UiSelect>
+            <UiSelect label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "" }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
-            </Select>
+            </UiSelect>
             {(() => {
               const selectedOrder = orders.find((o) => o.id === entryForm.orderId);
               const rateModels = getRateModelOptions(entryForm.productType, entryForm.process, selectedOrder);
@@ -5734,14 +5713,14 @@ function rateDocId(productType, model, process) {
               const sisaQty = limit > 0 ? Math.max(0, limit - alreadyQty) : 0;
               return (
                 <div className="space-y-2">
-                  <Select
+                  <UiSelect
                     label="Model / Acuan Tarif"
                     value={entryForm.model}
                     onChange={(v) => setEntryForm((f) => ({ ...f, model: v, qty: sisaQty > 0 ? String(sisaQty) : f.qty }))}
                   >
                     <option value="">{isModelSpecificProcess(entryForm.process) ? "-- Pilih model dari pesanan terkait --" : "-- Pilih acuan tarif dari Master Tarif --"}</option>
                     {rateModels.map((name) => <option key={name} value={name}>{name}</option>)}
-                  </Select>
+                  </UiSelect>
                   {entryProcessRequiresOrder(entryForm.process) && !selectedOrder && (
                     <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
                        Proses {entryForm.process} wajib dikaitkan ke pesanan agar model pesanan bisa dipilih.
@@ -5874,12 +5853,12 @@ function rateDocId(productType, model, process) {
       {modal === "tarif" && (
         <Modal title=" Tambah Tarif Borongan" onClose={() => setModal(null)}>
           <div className="space-y-3">
-            <Select label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
+            <UiSelect label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
-            </Select>
-            <Select label="Proses" value={rateForm.process} onChange={(v) => setRateForm((f) => ({ ...f, process: v }))}>
+            </UiSelect>
+            <UiSelect label="Proses" value={rateForm.process} onChange={(v) => setRateForm((f) => ({ ...f, process: v }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
-            </Select>
+            </UiSelect>
             <div>
               <UiInput label="Model / Acuan Tarif" value={rateForm.model} onChange={(v) => setRateForm((f) => ({ ...f, model: v }))} placeholder="Contoh: Kerudung / Alya L / Gamis" />
               <div className="mt-1 text-[11px] font-semibold" style={{ color: "#64748b" }}>
@@ -5911,7 +5890,7 @@ function rateDocId(productType, model, process) {
       {modal === "kirim" && (
         <Modal title=" Catat Pengiriman" onClose={() => setModal(null)}>
           <div className="space-y-3">
-            <Select
+            <UiSelect
               label="Pilih Customer"
               value={kirimForm.customerKey || ""}
               onChange={(v) => {
@@ -5948,7 +5927,7 @@ function rateDocId(productType, model, process) {
             >
               <option value="">-- Pilih Customer --</option>
               {shipmentCustomerOptions.map((c) => <option key={c.key} value={c.key}>{c.name}  {c.count} pesanan siap/sisa kirim</option>)}
-            </Select>
+            </UiSelect>
             {kirimForm.customerKey && (
               <div className="rounded-2xl border p-3 text-xs space-y-2" style={{ background: "#f8fafc", borderColor: "#e2e8f0", color: "#475569" }}>
                 <div className="font-black" style={{ color: "#0f172a" }}>Pesanan dalam nota ini</div>
@@ -6050,12 +6029,12 @@ function rateDocId(productType, model, process) {
                   </div>
                   {kirimForm.shortShipmentMode === "final" && (
                     <div className="grid gap-2">
-                      <Select label="Alasan kurang kirim final" value={kirimForm.shortShipmentReason || "Stok kain habis"} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentReason: v }))}>
+                      <UiSelect label="Alasan kurang kirim final" value={kirimForm.shortShipmentReason || "Stok kain habis"} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentReason: v }))}>
                         <option value="Stok kain habis">Stok kain habis</option>
                         <option value="Produksi hanya jadi segitu">Produksi hanya jadi segitu</option>
                         <option value="Customer setuju dikurangi">Customer setuju dikurangi</option>
                         <option value="Lainnya">Lainnya</option>
-                      </Select>
+                      </UiSelect>
                       <UiInput label="Catatan penutupan" value={kirimForm.shortShipmentNote || ""} onChange={(v) => setKirimForm((f) => ({ ...f, shortShipmentNote: v }))} placeholder="Opsional" />
                     </div>
                   )}
@@ -6146,14 +6125,14 @@ function rateDocId(productType, model, process) {
               </div>
             </div>
             {!editEntryModal.orderId && (
-              <Select
+              <UiSelect
                 label="Kaitkan ke Pesanan"
                 value={editEntryForm.orderId}
                 onChange={(v) => setEditEntryForm(f => ({ ...f, orderId: v, model: v ? "" : f.model }))}
               >
                 <option value="">Belum dikaitkan</option>
                 {ordersForBoronganLink.map((o) => <option key={o.id} value={o.id}>{o.customer}  {o.invoice || o.item}  {o.qty} pcs</option>)}
-              </Select>
+              </UiSelect>
             )}
             {!isGeneralRateProcess(editEntryModal.process) && (
               <UiInput
@@ -6675,6 +6654,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
