@@ -2,7 +2,7 @@
 import { motion } from "framer-motion";
 import { db, auth } from "./firebase";
 import { formatNumber } from "./utils/formatters";
-import { Badge, Button as UiButton, Input as UiInput, Select as UiSelect } from "./components/ui";
+import { Badge, Button as UiButton, Input as UiInput, Select as UiSelect, Modal as UiModal } from "./components/ui";
 import { safeDocId, safeFileName } from "./utils/idUtils";
 import { normalizeInvoice, normalizeKey, normalizeCompactKey, normalizeProcessKey, normalizeWorkerNameKey, normalizeModelKey, normalizeProductTypeKey, normalizeMasterKey } from "./utils/normalizers";
 import {
@@ -839,30 +839,6 @@ function Button({ children, onClick, className = "", style = {}, disabled }) {
     >
       {children}
     </button>
-  );
-}
-function Modal({ title, children, onClose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.25)" }}>
-      <motion.div
-        initial={{ y: 80 }}
-        animate={{ y: 0 }}
-        className="max-h-[92vh] w-full overflow-auto p-5 sm:p-6"
-        style={{ background: "white", borderRadius: "32px 32px 0 0", borderTop: "4px solid #f472b6" }}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-2xl font-black leading-tight" style={{ color: "#db2777" }}>{title}</h2>
-          <button
-            onClick={onClose}
-            className="rounded-2xl px-5 py-3 text-base font-black"
-            style={{ background: "#fdf2f8", color: "#db2777", minHeight: 44 }}
-          >
-            Tutup
-          </button>
-        </div>
-        {children}
-      </motion.div>
-    </div>
   );
 }
 function Card({ children, className = "", style = {}, onClick }) {
@@ -5640,7 +5616,7 @@ function rateDocId(productType, model, process) {
         </div>
       )}
       {modal === "produksi" && (
-        <Modal title=" Tambah ke Produksi" onClose={() => setModal(null)}>
+        <UiModal title=" Tambah ke Produksi" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <UiSelect label="Pilih Pesanan" value={prodForm.orderId} onChange={(v) => setProdForm((f) => ({ ...f, orderId: v }))}>
               <option value="">-- Pilih Pesanan --</option>
@@ -5652,10 +5628,10 @@ function rateDocId(productType, model, process) {
               Simpan Produksi
             </Button>
           </div>
-        </Modal>
+        </UiModal>
       )}
       {modal === "borongan" && (
-        <Modal title=" Input Hasil Borongan" onClose={() => setModal(null)}>
+        <UiModal title=" Input Hasil Borongan" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <div>
               <UiInput
@@ -5773,7 +5749,7 @@ function rateDocId(productType, model, process) {
               Simpan Hasil Borongan
             </Button>
           </div>
-        </Modal>
+        </UiModal>
       )}
       {setorModal && (() => {
         const modalTotals = setorTotals(setorModal);
@@ -5782,7 +5758,7 @@ function rateDocId(productType, model, process) {
         const inputReject = Number(setorForm.qtyReject || 0);
         const sisaSetelahInput = Math.max(0, sisa - inputSetor - inputReject);
         return (
-        <Modal title=" Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
+        <UiModal title=" Setor Hasil Borongan" onClose={() => setSetorModal(null)}>
           <div className="space-y-3">
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
               <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {displayWorkerName(setorModal.employeeName)}</div>
@@ -5847,11 +5823,11 @@ function rateDocId(productType, model, process) {
               {sisaSetelahInput > 0 ? "Simpan Setor Sebagian" : "Simpan Setor Selesai"}
             </Button>
           </div>
-        </Modal>
+        </UiModal>
         );
       })()}
       {modal === "tarif" && (
-        <Modal title=" Tambah Tarif Borongan" onClose={() => setModal(null)}>
+        <UiModal title=" Tambah Tarif Borongan" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <UiSelect label="Jenis Produk" value={rateForm.productType} onChange={(v) => setRateForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
@@ -5885,10 +5861,10 @@ function rateDocId(productType, model, process) {
               Simpan Tarif
             </Button>
           </div>
-        </Modal>
+        </UiModal>
       )}
       {modal === "kirim" && (
-        <Modal title=" Catat Pengiriman" onClose={() => setModal(null)}>
+        <UiModal title=" Catat Pengiriman" onClose={() => setModal(null)}>
           <div className="space-y-3">
             <UiSelect
               label="Pilih Customer"
@@ -6055,7 +6031,7 @@ function rateDocId(productType, model, process) {
               Simpan Pengiriman
             </Button>
           </div>
-        </Modal>
+        </UiModal>
       )}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
@@ -6112,7 +6088,7 @@ function rateDocId(productType, model, process) {
         </div>
       )}
       {editEntryModal && (
-        <Modal title=" Edit Entry Borongan" onClose={() => setEditEntryModal(null)}>
+        <UiModal title=" Edit Entry Borongan" onClose={() => setEditEntryModal(null)}>
           <div className="space-y-3">
             <div className="rounded-2xl p-3" style={{ background: "#fdf2f8", border: "1px solid #fce7f3" }}>
               <div className="font-bold text-sm" style={{ color: "#2d1b69" }}> {displayWorkerName(editEntryModal.employeeName)}</div>
@@ -6171,7 +6147,7 @@ function rateDocId(productType, model, process) {
                Simpan Perubahan
             </Button>
           </div>
-        </Modal>
+        </UiModal>
       )}
       {slipPreview && (() => {
         const { nama, r, dari, sampai, carryOver = [] } = slipPreview;
@@ -6654,6 +6630,7 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
 
 
 
