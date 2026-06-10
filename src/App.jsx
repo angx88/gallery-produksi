@@ -1,4 +1,4 @@
-// App.jsx Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
+// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
 // Audit final: fokus produksi, borongan/upah, kasbon pegawai, stok siap kirim, dan pengiriman real ke App Kerudung.
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
@@ -8,7 +8,7 @@
 // (3) ORDERS, PRODUKSI, dan PRODUCTION_ENTRIES tidak lagi realtime onSnapshot;
 //     dimuat manual dan di-refresh setelah simpan agar hemat reads.
 // (4) debounce search 250ms, (5) dashboardInsights dipecah useMemo terpisah.
-// (6) backfill legacy hanya jalan sekali per sesi (flag backfillDoneRef dll).
+// (6) backfill legacy dihapus (ENABLE_AUTO_BACKFILL dimatikan — jalankan migrasi manual jika perlu).
 // (7) Audit bersih: hapus CardHeader/Title/Desc/Content/Footer, dateAfter, PROCESSES_NO_MODEL,
 //     deleteStep. rateDocId dipindah ke luar App(). Toast cleanup via toastTimerRef.
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -60,10 +60,6 @@ const C = {
   KASBON: "kasbon_pegawai",
 };
 
-// HEMAT KUOTA FIRESTORE:
-// Background backfill/migrasi otomatis dimatikan agar app tidak menulis/membaca data lama
-// setiap kali dibuka. Jalankan perbaikan data lama secara manual saja bila memang diperlukan.
-const ENABLE_AUTO_BACKFILL = false;
 const KONVEKSI_RATE_DEDUCTION = 500;
 
 const FIRESTORE_CACHE_VERSION = "v1";
@@ -164,11 +160,13 @@ function safeDocId(value, fallback = "doc") {
   const raw = String(value || "").trim().toLowerCase();
   const clean = raw
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9_-]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 120);
-  return clean || fallback;
+  // Tambah timestamp jika hasil bersih kosong agar tidak semua dokumen tanpa nilai
+  // yang valid mendapat ID "doc" yang sama dan konflik di Firestore.
+  return clean || `${fallback}_${Date.now()}`;
 }
 
 function getDeliveryArray(orderLike) {
@@ -1332,11 +1330,15 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshingData, setIsRefreshingData] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  // confirmModal: pengganti window.confirm() yang memblokir thread.
+  // { message, onOk, okLabel, okStyle, icon }
+  const [confirmModal, setConfirmModal] = useState(null);
   const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
   const [editEntryModal, setEditEntryModal] = useState(null); // entry yang sedang diedit
   const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
+  const [cicilanKasbonInput, setCicilanKasbonInput] = useState(""); // nominal cicilan kasbon yang diinput user di slip sebelum gajian
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
   const [boronganOnlyBelumSetor, setBoronganOnlyBelumSetor] = useState(false);
   const [kasbonList, setKasbonList] = useState([]); // daftar semua kasbon pegawai dari Firestore (kasbon_pegawai)
@@ -1365,6 +1367,21 @@ export default function App() {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast(msg);
     toastTimerRef.current = setTimeout(() => setToast(""), duration);
+  }, []);
+
+  // showConfirm: tampilkan modal konfirmasi React sebagai pengganti window.confirm().
+  // Kembalikan Promise<boolean> sehingga handler async bisa await hasilnya.
+  const showConfirm = React.useCallback((message, { okLabel = "Ya, Lanjut", okStyle = "danger", icon = "⚠️" } = {}) => {
+    return new Promise((resolve) => {
+      setConfirmModal({
+        message,
+        icon,
+        okLabel,
+        okStyle,
+        onOk: () => { setConfirmModal(null); resolve(true); },
+        onCancel: () => { setConfirmModal(null); resolve(false); },
+      });
+    });
   }, []);
 
   const openFocusedPesanan = React.useCallback((orderId) => {
@@ -1467,9 +1484,7 @@ export default function App() {
   const productionBackfillSyncingRef = useRef(new Set());
   const loadedDataRef = useRef(new Map()); // key -> Promise data yang sudah/sedang dimuat per sesi/tab
   // HEMAT KUOTA: flag agar backfill hanya jalan sekali per sesi.
-  const legacySyncDoneRef = useRef(false);
-  const itemsMigrationDoneRef = useRef(false);
-  const backfillDoneRef = useRef(false);
+
 
   const [prodForm, setProdForm] = useState({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
   const [rateForm, setRateForm] = useState({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
@@ -1802,6 +1817,7 @@ export default function App() {
       tab,
       modal,
       confirmDelete,
+      confirmModal,
       setorModal,
       editEntryModal,
       slipPreview,
@@ -1824,10 +1840,11 @@ export default function App() {
 
     const closeTopLayer = () => {
       const ui = backUiRef.current || {};
+      if (ui.confirmModal) { ui.confirmModal.onCancel?.(); return true; }
       if (ui.confirmDelete) { setConfirmDelete(null); return true; }
       if (ui.setorModal) { closeSetorModal(); return true; }
       if (ui.editEntryModal) { closeEditEntryModal(); return true; }
-      if (ui.slipPreview) { setSlipPreview(null); return true; }
+      if (ui.slipPreview) { setSlipPreview(null); setCicilanKasbonInput(""); return true; }
       if (ui.rekapDetailModal) { setRekapDetailModal(null); return true; }
       if (ui.tugasDetailModal) { setTugasDetailModal(false); return true; }
       if (ui.alertDetailModal) { setAlertDetailModal(false); return true; }
@@ -1913,92 +1930,6 @@ export default function App() {
     }
   }, [user, tab, loadOnce, refreshMaterials, refreshWorkRates, refreshMasterPekerja, refreshShipments, refreshPayroll, refreshGajianHistory, refreshKasbon]);
 
-  // Auto sinkron data lama yang aman: hanya order lama yang benar-benar sudah dikirim/terkirim
-  // tetapi belum punya deliveries/shippedItems akan dianggap terkirim penuh.
-  // Ini mencegah pesanan lama muncul lagi sebagai belum dikirim / belum produksi.
-  useEffect(() => {
-    if (!ENABLE_AUTO_BACKFILL) return;
-    if (!user || orders.length === 0) return;
-    // HEMAT KUOTA: sudah selesai di sesi ini, skip.
-    if (legacySyncDoneRef.current) return;
-    const candidates = orders.filter((o) => shouldAutoSyncLegacyDelivery(o));
-    if (candidates.length === 0) { legacySyncDoneRef.current = true; return; }
-
-    // Proses secara sequential (bukan paralel forEach async) agar tidak membanjiri Firestore quota.
-    // Batasi 5 per run jika backfill manual dinyalakan lagi.
-    (async () => {
-      const batch = candidates.slice(0, 5);
-      for (const order of batch) {
-        if (legacyDeliverySyncingRef.current.has(order.id)) continue;
-        legacyDeliverySyncingRef.current.add(order.id);
-        try {
-          // Baca snapshot terbaru dari Firestore sebelum update, agar tidak
-          // double-fire jika useEffect dipanggil lagi sebelum Firestore selesai update.
-          await runTransaction(db, async (transaction) => {
-            const orderRef = doc(db, C.ORDERS, order.id);
-            const snap = await transaction.get(orderRef);
-            if (!snap.exists()) return;
-            const live = snap.data();
-            // Jika sudah ter-sync (oleh proses lain atau trigger sebelumnya), skip
-            if (live.legacyDeliverySynced === true) return;
-            if (Array.isArray(live.deliveries) && live.deliveries.length > 0) return;
-            transaction.update(orderRef, buildFullDeliveryPayload(order));
-          });
-        } catch (e) {
-          console.warn("Auto sinkron pengiriman data lama gagal:", order.invoice || order.id, e);
-        } finally {
-          legacyDeliverySyncingRef.current.delete(order.id);
-        }
-      }
-    })();
-  }, [user, orders]);
-
-  // Migrasi otomatis: isi field `items` per model untuk produksi lama yang hanya punya qty total.
-  // Matching tidak hanya lewat orderId, tapi juga invoice agar data manual lama tetap tersambung.
-  useEffect(() => {
-    if (!ENABLE_AUTO_BACKFILL) return;
-    if (produksi.length === 0 || orders.length === 0) return;
-    // HEMAT KUOTA: sudah selesai di sesi ini, skip.
-    if (itemsMigrationDoneRef.current) return;
-    const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
-    const orderByInvoice = new Map();
-    orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
-      if (inv) orderByInvoice.set(inv, o);
-    });
-
-    const needsMigration = produksi.filter((p) => {
-      const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
-      if (!order) return false;
-      if (!Array.isArray(p.items) || p.items.length === 0) return true;
-      if (p.items.length === 1 && Number(p.items[0].qty) === Number(p.qty)) {
-        if (order && Array.isArray(order.items) && order.items.length > 1) return true;
-      }
-      return false;
-    });
-    if (needsMigration.length === 0) { itemsMigrationDoneRef.current = true; return; }
-
-    (async () => {
-      for (const p of needsMigration.slice(0, 8)) {
-        const order = orderById.get(String(p.orderId || p.pesananId || "").trim()) || orderByInvoice.get(normalizedInvoice(p.invoice));
-        if (!order) continue;
-        const key = `items-${p.id}`;
-        if (productionBackfillSyncingRef.current.has(key)) continue;
-        productionBackfillSyncingRef.current.add(key);
-        try {
-          await updateDoc(doc(db, C.PRODUKSI, p.id), {
-            items: buildProductionItemsFromOrder(order, p),
-            orderId: p.orderId || order.id,
-            invoice: p.invoice || order.invoice || "",
-            updatedAt: todayStr(),
-          });
-        } catch (_) {
-        } finally {
-          productionBackfillSyncingRef.current.delete(key);
-        }
-      }
-    })();
-  }, [produksi, orders]);
 
   // PERFORMA: debounce search 250ms agar tidak filter ulang semua data
   // setiap ketukan keyboard — terasa nyata di HP dengan data banyak.
@@ -2008,6 +1939,15 @@ export default function App() {
     return () => clearTimeout(t);
   }, [search]);
   const q = debouncedSearch.toLowerCase();
+
+  // PERFORMA: hitung setorTotals sekali untuk semua entry — tidak berulang di setiap useMemo.
+  const entryTotalsMap = useMemo(() => {
+    const map = new Map();
+    (productionEntries || []).forEach((entry) => {
+      map.set(entry.id, setorTotals(entry));
+    });
+    return map;
+  }, [productionEntries]);
 
   const produksiByOrderId = useMemo(() => {
     // Matching produksi harus tahan data lama: orderId, pesananId, dan invoice.
@@ -2089,157 +2029,6 @@ export default function App() {
     return map;
   }, [shipments, orders]);
 
-  // Backfill dan normalisasi produksi lama.
-  // Tujuan: data lama/manual tidak perlu diklik ulang satu-satu.
-  // - Produksi lama tanpa orderId dilink lewat invoice.
-  // - Pesanan lama tanpa dokumen produksi dibuatkan otomatis.
-  // - Status produksi dihitung dari kondisi nyata: pengiriman, potong, jahit, QC/setor.
-  useEffect(() => {
-    if (!ENABLE_AUTO_BACKFILL) return;
-    if (!user || orders.length === 0) return;
-    // HEMAT KUOTA: backfill besar hanya jalan sekali per sesi.
-    // Tanpa ini, backfill lama bisa memicu baca/tulis besar dan boros kuota.
-    if (backfillDoneRef.current) return;
-
-    const orderById = new Map(orders.map((o) => [String(o.id || "").trim(), o]));
-    const orderByInvoice = new Map();
-    orders.forEach((o) => {
-      const inv = normalizedInvoice(o.invoice || o.raw?.invoice);
-      if (inv) orderByInvoice.set(inv, o);
-    });
-
-    const tasks = [];
-
-    produksi.forEach((prod) => {
-      const directOrder = orderById.get(String(prod.orderId || prod.pesananId || "").trim());
-      const invoiceOrder = orderByInvoice.get(normalizedInvoice(prod.invoice || prod.orderInvoice || prod.kode || prod.code));
-      const order = directOrder || invoiceOrder;
-      if (!order) return;
-
-      const inferredStatus = inferProductionStatusFromReality(prod, order, productionEntries, shipmentByOrderId);
-      const shouldLink = !prod.orderId || prod.orderId !== order.id || !prod.invoice;
-      const shouldUpgradeStatus = productionStatusRank(inferredStatus) > productionStatusRank(prod.status);
-      const shouldFixItems = !Array.isArray(prod.items) || prod.items.length === 0;
-
-      if (shouldLink || shouldUpgradeStatus || shouldFixItems) {
-        tasks.push({ type: "update", prod, order, inferredStatus, shouldLink, shouldUpgradeStatus, shouldFixItems });
-      }
-    });
-
-    orders.forEach((order) => {
-      if (lower(order.status).includes("batal") || lower(order.status).includes("cancel")) return;
-      const existing = produksiByOrderId.get(order.id);
-      if (existing) return;
-      const inferredStatus = orderHasCompletedProduction(order, produksiByOrderId, shipmentByOrderId) ? "Selesai" : "Antri";
-      tasks.push({ type: "create", order, inferredStatus });
-    });
-
-    if (tasks.length === 0) { backfillDoneRef.current = true; return; }
-
-    // Sequential processing agar tidak memicu burst write ke Firestore.
-    // Batasi 8 per run — sisanya diproses di run berikutnya.
-    (async () => {
-      for (const task of tasks.slice(0, 8)) {
-        const key = task.type === "create"
-          ? `create-${task.order.id}`
-          : `update-${task.prod.id}-${task.inferredStatus}`;
-        if (productionBackfillSyncingRef.current.has(key)) continue;
-        productionBackfillSyncingRef.current.add(key);
-
-      try {
-        if (task.type === "create") {
-          const order = task.order;
-          const prodId = `prod_${safeDocId(order.id, "order")}`;
-          const prodRef = doc(db, C.PRODUKSI, prodId);
-          const orderRef = doc(db, C.ORDERS, order.id);
-          const orderItems = buildProductionItemsFromOrder(order);
-          await runTransaction(db, async (transaction) => {
-            const prodSnap = await transaction.get(prodRef);
-            const orderSnap = await transaction.get(orderRef);
-            if (!orderSnap.exists()) return;
-            if (!prodSnap.exists()) {
-              transaction.set(prodRef, {
-                orderId: order.id,
-                invoice: order.invoice || "",
-                customer: order.customer || "-",
-                item: order.item || orderItems[0]?.name || "Pesanan",
-                qty: dashboardTotalOrderedQty(order),
-                items: orderItems,
-                warna: order.warna || "",
-                ukuran: order.ukuran || "",
-                status: task.inferredStatus,
-                workers: [],
-                tanggalMulai: order.createdAt || todayStr(),
-                catatan: task.inferredStatus === "Selesai" ? "Backfill otomatis: pesanan lama sudah selesai/dikirim." : "Backfill otomatis: pesanan lama masuk antrian produksi.",
-                source: "gallery-produksi-auto-backfill",
-                createdAt: todayStr(),
-                updatedAt: todayStr(),
-                history: [{ tanggal: todayStr(), status: task.inferredStatus, catatan: "Backfill otomatis dari data pesanan lama" }],
-              });
-            }
-            const liveOrder = orderSnap.data();
-            transaction.update(orderRef, {
-              statusProduksi: task.inferredStatus,
-              produksiStatus: task.inferredStatus,
-              produksiSource: "gallery-produksi-auto-backfill",
-              produksiUpdatedAt: todayStr(),
-              ...(isSentStatus(liveOrder?.status) || lower(liveOrder?.status) === "lunas" || lower(liveOrder?.status).includes("batal") || lower(liveOrder?.status).includes("ditutup")
-                ? {}
-                : { status: task.inferredStatus === "Selesai" ? "Selesai Produksi" : "Proses" }),
-              updatedAt: todayStr(),
-            });
-          });
-        } else {
-          const { prod, order, inferredStatus, shouldLink, shouldUpgradeStatus, shouldFixItems } = task;
-          const prodRef = doc(db, C.PRODUKSI, prod.id);
-          const orderRef = doc(db, C.ORDERS, order.id);
-          await runTransaction(db, async (transaction) => {
-            const prodSnap = await transaction.get(prodRef);
-            const orderSnap = await transaction.get(orderRef);
-            if (!prodSnap.exists() || !orderSnap.exists()) return;
-            const liveProd = prodSnap.data();
-            const liveOrder = orderSnap.data();
-            const nextStatus = productionStatusRank(inferredStatus) > productionStatusRank(liveProd.status) ? inferredStatus : liveProd.status || "Antri";
-            const prodPatch = { updatedAt: todayStr() };
-            if (shouldLink) {
-              prodPatch.orderId = order.id;
-              prodPatch.invoice = liveProd.invoice || order.invoice || "";
-              prodPatch.customer = liveProd.customer || order.customer || "-";
-            }
-            if (shouldFixItems) prodPatch.items = buildProductionItemsFromOrder(order, liveProd);
-            if (shouldUpgradeStatus && nextStatus !== liveProd.status) {
-              prodPatch.status = nextStatus;
-              prodPatch.history = [
-                ...(Array.isArray(liveProd.history) ? liveProd.history : []),
-                { tanggal: todayStr(), status: nextStatus, catatan: "Status otomatis dihitung ulang dari data lama/pengiriman/setor" },
-              ];
-            }
-            transaction.update(prodRef, prodPatch);
-            transaction.update(orderRef, {
-              statusProduksi: nextStatus,
-              produksiStatus: nextStatus,
-              produksiSource: "gallery-produksi-auto-backfill",
-              produksiUpdatedAt: todayStr(),
-              ...(isSentStatus(liveOrder?.status) || lower(liveOrder?.status) === "lunas" || lower(liveOrder?.status).includes("batal") || lower(liveOrder?.status).includes("ditutup")
-                ? {}
-                : nextStatus === "Selesai" ? { status: "Selesai Produksi" } : { status: "Proses" }),
-              updatedAt: todayStr(),
-            });
-          });
-        }
-        } catch (e) {
-          console.warn("Backfill/normalisasi produksi gagal:", task.order?.invoice || task.prod?.invoice || task.prod?.id, e);
-        } finally {
-          productionBackfillSyncingRef.current.delete(key);
-        }
-      }
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, orders, produksi, productionEntries]);
-  // SENGAJA: produksiByOrderId dan shipmentByOrderId tidak masuk dependency.
-  // Keduanya adalah useMemo derivasi dari produksi/orders yang sudah ada di atas.
-  // Jika dimasukkan, setiap kali Map dibuat ulang (setiap render) effect akan re-run
-  // → memicu write Firestore → state berubah → loop tak berujung.
 
   function orderSmallStatus(order) {
     const kirim = shipmentByOrderId.get(order.id);
@@ -2781,8 +2570,8 @@ export default function App() {
       .map((it) => ({ ...it, qtyKirim: it.sisa }));
     if (items.length === 0) {
       const lebihTotal = progress.reduce((sum, it) => sum + Number(it.lebih || 0), 0);
-      if (lebihTotal > 0) return alert("Pesanan ini sudah lebih kirim. Tidak ada sisa yang perlu dikirim.");
-      return alert("Pesanan ini sudah tidak memiliki sisa kirim.");
+      if (lebihTotal > 0) return showToast("⚠️ Pesanan ini sudah lebih kirim. Tidak ada sisa yang perlu dikirim.", 4000);
+      return showToast("⚠️ Pesanan ini sudah tidak memiliki sisa kirim.", 3000);
     }
     setKirimForm({
       pesananId: order?.id || "",
@@ -2805,8 +2594,8 @@ export default function App() {
     const ordered = dashboardTotalOrderedQty(order);
     const shipped = dashboardTotalShippedQty(order);
     const lebih = Math.max(0, shipped - ordered);
-    if (lebih <= 0) return alert("Pesanan ini tidak terdeteksi lebih kirim.");
-    const ok = window.confirm(`Tandai lebih kirim ${fmtQty(lebih)} pcs sebagai sudah dicek dan selesai?`);
+    if (lebih <= 0) return showToast("⚠️ Pesanan ini tidak terdeteksi lebih kirim.", 3000);
+    const ok = await showConfirm(`Tandai lebih kirim ${fmtQty(lebih)} pcs sebagai sudah dicek dan selesai?`, { okLabel: "Ya, Tandai", icon: "✅" });
     if (!ok) return;
     setIsSaving(true);
     try {
@@ -2823,7 +2612,7 @@ export default function App() {
       await Promise.all([refreshOrders(), refreshProduksi(), refreshShipments()]);
       showToast("✅ Lebih kirim sudah ditandai dicek.", 3000);
     } catch (e) {
-      alert(friendlyErrorMessage("Tandai lebih kirim", e));
+      showToast(friendlyErrorMessage("Tandai lebih kirim", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -2859,7 +2648,7 @@ export default function App() {
   }, [orders, productionEntries, payrollExpenses, ordersPerluDicekIds, produksiByOrderId, shipmentByOrderId]);
 
   const dashboardSummary = useMemo(() => {
-    const entryTotals = (productionEntries || []).map((e) => setorTotals(e));
+    const entryTotals = (productionEntries || []).map((e) => entryTotalsMap.get(e.id) || setorTotals(e));
     const totalDiberi = (productionEntries || []).reduce((sum, e) => sum + Number(e.qty || 0), 0);
     const totalSetor = entryTotals.reduce((sum, t) => sum + Number(t.qtySetor || 0), 0);
     const totalReject = entryTotals.reduce((sum, t) => sum + Number(t.qtyReject || 0), 0);
@@ -2914,7 +2703,7 @@ export default function App() {
       kurangKirimFinal: orderQtySummary.kurangKirimFinal,
       bahanTotal, shipmentTotal,
     };
-  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId]);
+  }, [orders, produksi, productionEntries, payrollExpenses, materials, shipments, produksiByOrderId, shipmentByOrderId, entryTotalsMap]);
 
   // PERFORMA: dashboardInsights dipecah jadi 3 useMemo terpisah dengan
   // dependencies yang lebih sempit — sehingga tidak semua bagian
@@ -3002,9 +2791,9 @@ export default function App() {
       return showToast("Tidak ada duplikat yang aman dihapus otomatis.", 4500);
     }
 
-    const ok = window.confirm(
-      `Bersihkan ${deletableRows.length} data produksi duplikat yang belum punya borongan/setor?\n\n` +
-      `Data yang sudah dipakai borongan/setor tidak akan dihapus.`
+    const ok = await showConfirm(
+      `Bersihkan ${deletableRows.length} data produksi duplikat yang belum punya borongan/setor? Data yang sudah dipakai tidak akan dihapus.`,
+      { okLabel: "Ya, Bersihkan", icon: "🧹" }
     );
     if (!ok) return;
 
@@ -3018,16 +2807,16 @@ export default function App() {
       showToast(`✅ ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
     } catch (e) {
       console.error(e);
-      alert(friendlyErrorMessage("Membersihkan duplikat", e));
+      showToast(friendlyErrorMessage("Membersihkan duplikat", e), 4000);
     } finally {
       setIsSaving(false);
     }
-  }, [produksi, productionEntries, refreshProduksi, showToast]);
+  }, [produksi, productionEntries, refreshProduksi, showToast, showConfirm]);
 
   // (C) Tugas hari ini & alerts — butuh orders, produksi, productionEntries
   const dashboardInsights = useMemo(() => {
     const activeBorongan = (productionEntries || [])
-      .map((entry) => ({ entry, totals: setorTotals(entry) }))
+      .map((entry) => ({ entry, totals: entryTotalsMap.get(entry.id) || setorTotals(entry) }))
       .filter(({ totals }) => Number(totals.sisaSetor || 0) > 0)
       .sort((a, b) => Number(b.totals.sisaSetor || 0) - Number(a.totals.sisaSetor || 0));
 
@@ -3071,7 +2860,7 @@ export default function App() {
     });
 
     (productionEntries || []).forEach((entry) => {
-      const totals = setorTotals(entry);
+      const totals = entryTotalsMap.get(entry.id) || setorTotals(entry);
       const totalAktivitas = Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0);
       const diberi = Number(entry.qty || 0);
       if (diberi > 0 && totalAktivitas > diberi) {
@@ -3138,7 +2927,7 @@ export default function App() {
       maxWeeklyPcs: dashboardWeeklyRows.maxWeeklyPcs,
       monthLabel: dashboardTopPekerja.monthLabel,
     };
-  }, [orders, produksi, productionEntries, dashboardWeeklyRows, dashboardTopPekerja]);
+  }, [orders, produksi, productionEntries, dashboardWeeklyRows, dashboardTopPekerja, entryTotalsMap]);
 
   const workerNameOptions = useMemo(() => {
     const map = new Map();
@@ -3313,11 +3102,11 @@ function rateDocId(productType, model, process) {
   }
 
   async function addProduksi() {
-    if (!prodForm.orderId) return alert("Pilih pesanan dulu");
+    if (!prodForm.orderId) return showToast("⚠️ Pilih pesanan dulu", 3000);
 
     const order = orders.find((o) => o.id === prodForm.orderId);
-    if (!order) return alert("Pesanan tidak ditemukan");
-    if (produksiByOrderId.has(order.id)) return alert("Pesanan ini sudah masuk produksi");
+    if (!order) return showToast("⚠️ Pesanan tidak ditemukan", 3000);
+    if (produksiByOrderId.has(order.id)) return showToast("⚠️ Pesanan ini sudah masuk produksi", 3000);
 
     const orderItems = (order.items || []).length > 0
       ? order.items.map((it) => ({ name: it.name || it.item || "Pesanan", qty: Number(it.qty || 0), price: Number(it.price || 0) }))
@@ -3373,7 +3162,7 @@ function rateDocId(productType, model, process) {
       setProdForm({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
       setModal(null);
     } catch (e) {
-      alert(friendlyErrorMessage("Menyimpan produksi", e));
+      showToast(friendlyErrorMessage("Menyimpan produksi", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -3548,7 +3337,7 @@ function rateDocId(productType, model, process) {
       });
       showToast("✅ Status produksi diperbarui", 2500);
     } catch (e) {
-      alert(friendlyErrorMessage("Update status", e));
+      showToast(friendlyErrorMessage("Update status", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -3560,10 +3349,10 @@ function rateDocId(productType, model, process) {
     const cleanModel = canonicalByExisting(rateForm.model, modelNameOptions, "model");
     const cleanRate = nonNegativeMoney(rateForm.rate || 0);
 
-    if (!cleanProductType.trim()) return alert("Jenis produk wajib diisi");
-    if (!cleanModel.trim()) return alert("Model wajib diisi sesuai Master Tarif");
-    if (!Number.isFinite(cleanRate) || cleanRate <= 0) return alert("Tarif wajib diisi dan harus lebih dari 0");
-    if (cleanRate > 1000000) return alert("Tarif terlalu besar. Periksa kembali nominal tarif.");
+    if (!cleanProductType.trim()) return showToast("⚠️ Jenis produk wajib diisi", 3000);
+    if (!cleanModel.trim()) return showToast("⚠️ Model wajib diisi sesuai Master Tarif", 3000);
+    if (!Number.isFinite(cleanRate) || cleanRate <= 0) return showToast("⚠️ Tarif wajib diisi dan lebih dari 0", 3000);
+    if (cleanRate > 1000000) return showToast("⚠️ Tarif terlalu besar. Periksa kembali.", 3000);
 
     const rateRef = doc(db, C.WORK_RATES, rateDocId(cleanProductType, cleanModel, cleanProcess));
 
@@ -3586,30 +3375,30 @@ function rateDocId(productType, model, process) {
       setModal(null);
       showToast("✅ Tarif berhasil disimpan", 2500);
     } catch (e) {
-      alert(friendlyErrorMessage("Simpan tarif", e));
+      showToast(friendlyErrorMessage("Simpan tarif", e), 4000);
     } finally {
       setIsSaving(false);
     }
   }
 
   async function addProductionEntry() {
-    if (!entryForm.employeeName.trim()) return alert("Nama pekerja wajib diisi");
-    if (!entryForm.qty || nonNegativeQty(entryForm.qty) <= 0) return alert("Qty wajib diisi");
-    if (!entryForm.model.trim()) return alert("Model wajib diisi sesuai Master Tarif");
+    if (!entryForm.employeeName.trim()) return showToast("⚠️ Nama pekerja wajib diisi", 3000);
+    if (!entryForm.qty || nonNegativeQty(entryForm.qty) <= 0) return showToast("⚠️ Qty wajib diisi", 3000);
+    if (!entryForm.model.trim()) return showToast("⚠️ Model wajib diisi sesuai Master Tarif", 3000);
     if (!entryForm.orderId) {
-      return alert(`Pilih pesanan dulu. Semua produksi wajib dikaitkan ke pesanan karena produksi dibuat sesuai order.`);
+      return showToast("⚠️ Pilih pesanan dulu. Borongan wajib dikaitkan ke pesanan.", 3500);
     }
 
     const cleanEmployeeName = canonicalByExisting(entryForm.employeeName, workerNameOptions, "worker");
     const cleanProductType = displayProductTypeName(entryForm.productType);
     const cleanModel = canonicalByExisting(entryForm.model, modelNameOptions, "model");
     const rate = getRateForEmployee(cleanProductType, cleanModel, entryForm.process, cleanEmployeeName);
-    if (!rate) return alert("Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.");
+    if (!rate) return showToast("⚠️ Tarif belum ada di Master Tarif. Buat tarif dulu.", 3500);
 
     const order = orders.find((o) => o.id === entryForm.orderId);
     const prod = order ? produksiByOrderId.get(order.id) : null;
     const effectiveRate = nonNegativeMoney(rate.rate || 0);
-    if (!Number.isFinite(effectiveRate) || effectiveRate <= 0) return alert("Tarif efektif tidak valid. Periksa tarif dasar dan aturan potongan konveksi.");
+    if (!Number.isFinite(effectiveRate) || effectiveRate <= 0) return showToast("⚠️ Tarif efektif tidak valid. Periksa tarif dan potongan konveksi.", 3500);
     const entryQty = nonNegativeQty(entryForm.qty);
     const totalWage = entryQty * effectiveRate;
 
@@ -3622,7 +3411,7 @@ function rateDocId(productType, model, process) {
     };
 
     if (isDuplicateEntry(draftPayloadForCheck)) {
-      return alert("Data borongan ini sudah pernah diinput untuk pekerja, proses, tanggal, dan pesanan yang sama.");
+      return showToast("⚠️ Data borongan ini sudah pernah diinput untuk pekerja, proses, tanggal, dan pesanan yang sama.", 4000);
     }
 
     if (order) {
@@ -3632,12 +3421,7 @@ function rateDocId(productType, model, process) {
         : processQtyForOrderModel(order.id, entryForm.process, cleanModel);
       const nextQty = alreadyQty + entryQty;
       if (limit > 0 && nextQty > limit) {
-        return alert(
-          `Qty ${entryForm.process} melebihi qty ${label}.\n` +
-          `Batas: ${limit} pcs\n` +
-          `Sudah input: ${alreadyQty} pcs\n` +
-          `Input baru: ${entryForm.qty} pcs`
-        );
+        return showToast(`⚠️ Qty ${entryForm.process} melebihi batas. Batas: ${limit} pcs, sudah input: ${alreadyQty} pcs, input baru: ${entryForm.qty} pcs.`, 5000);
       }
     }
 
@@ -3731,7 +3515,7 @@ function rateDocId(productType, model, process) {
       });
       setModal(null);
     } catch (e) {
-      alert(friendlyErrorMessage("Simpan borongan", e));
+      showToast(friendlyErrorMessage("Simpan borongan", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -3742,8 +3526,8 @@ function rateDocId(productType, model, process) {
 
     const qtySetor = Number(setorForm.qtySetor || 0);
     const qtyReject = Number(setorForm.qtyReject || 0);
-    if (qtySetor < 0 || qtyReject < 0) return alert("Qty setor/reject tidak boleh minus.");
-    if (qtySetor + qtyReject <= 0) return alert("Isi qty setor atau qty reject terlebih dahulu.");
+    if (qtySetor < 0 || qtyReject < 0) return showToast("⚠️ Qty setor/reject tidak boleh minus.", 3000);
+    if (qtySetor + qtyReject <= 0) return showToast("⚠️ Isi qty setor atau qty reject terlebih dahulu.", 3000);
 
     const tanggalSetor = setorForm.tanggalSetor || todayStr();
     const setorBatchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3828,12 +3612,12 @@ function rateDocId(productType, model, process) {
       showToast(nextSisaForToast > 0 ? `✅ Setor sebagian tersimpan. Sisa ${nextSisaForToast} pcs.` : "✅ Setor selesai tersimpan.", 3500);
 
       await autoUpdateProduksiStatus(setorModal, nextHistoryForStatus);
-      await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi(), refreshOrders()]); // setor membuat dokumen payroll baru dan bisa mengubah status produksi
+      await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshKasbon(), refreshProduksi(), refreshOrders()]); // setor membuat dokumen payroll baru; refreshKasbon agar info kasbon di slip tidak stale
 
       setSetorModal(null);
       setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
     } catch (e) {
-      alert(friendlyErrorMessage("Simpan setor", e));
+      showToast(friendlyErrorMessage("Simpan setor", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -3843,15 +3627,15 @@ function rateDocId(productType, model, process) {
     const selectedIds = Array.isArray(kirimForm.orderIds) && kirimForm.orderIds.length > 0
       ? kirimForm.orderIds
       : (kirimForm.pesananId ? [kirimForm.pesananId] : []);
-    if (selectedIds.length === 0) return alert("Pilih minimal satu pesanan dulu");
-    if (!kirimForm.penerima.trim()) return alert("Penerima wajib diisi");
+    if (selectedIds.length === 0) return showToast("⚠️ Pilih minimal satu pesanan dulu", 3000);
+    if (!kirimForm.penerima.trim()) return showToast("⚠️ Penerima wajib diisi", 3000);
 
     const selectedOrders = selectedIds.map((id) => orders.find((o) => o.id === id)).filter(Boolean);
-    if (selectedOrders.length !== selectedIds.length) return alert("Ada pesanan yang tidak ditemukan");
+    if (selectedOrders.length !== selectedIds.length) return showToast("⚠️ Ada pesanan yang tidak ditemukan", 3000);
 
     const allItems = (kirimForm.items || []).map((it) => ({ ...it, orderId: it.orderId || kirimForm.pesananId || selectedIds[0] }));
-    if (allItems.some((i) => Number(i.qtyKirim || 0) < 0)) return alert("Qty kirim tidak boleh negatif.");
-    if (allItems.reduce((sum, item) => sum + Number(item.qtyKirim || 0), 0) <= 0) return alert("Minimal ada qty kirim lebih dari 0 pcs.");
+    if (allItems.some((i) => Number(i.qtyKirim || 0) < 0)) return showToast("⚠️ Qty kirim tidak boleh negatif.", 3000);
+    if (allItems.reduce((sum, item) => sum + Number(item.qtyKirim || 0), 0) <= 0) return showToast("⚠️ Minimal ada qty kirim lebih dari 0 pcs.", 3000);
 
     const groupId = `nota_${safeDocId(kirimForm.tanggalKirim || todayStr(), "tgl")}_${safeDocId(kirimForm.penerima, "customer")}_${Date.now()}`;
     const deliveryCreatedAt = new Date().toISOString();
@@ -3900,7 +3684,7 @@ function rateDocId(productType, model, process) {
 
     let overDeliveryConfirmed = false;
     if (localHasOverDelivery) {
-      overDeliveryConfirmed = window.confirm("Ada pesanan yang akan lebih kirim. Kelebihan ini akan menambah tagihan customer di Gallery Kerudung. Lanjut simpan?");
+      overDeliveryConfirmed = await showConfirm("Ada pesanan yang akan lebih kirim. Kelebihan ini akan menambah tagihan customer di Gallery Kerudung. Lanjut simpan?", { okLabel: "Ya, Lanjut Simpan", okStyle: "warning", icon: "⚠️" });
       if (!overDeliveryConfirmed) return;
     }
 
@@ -3910,7 +3694,7 @@ function rateDocId(productType, model, process) {
     const isShortFinal = localIsShortShipment && kirimForm.shortShipmentMode === "final";
     const shortShipmentReason = isShortFinal ? String(kirimForm.shortShipmentReason || "").trim() : "";
     const shortShipmentNote = isShortFinal ? String(kirimForm.shortShipmentNote || "").trim() : "";
-    if (isShortFinal && !shortShipmentReason) return alert("Pilih alasan kurang kirim final terlebih dahulu.");
+    if (isShortFinal && !shortShipmentReason) return showToast("⚠️ Pilih alasan kurang kirim final terlebih dahulu.", 3000);
 
     const orderRows = selectedOrders.map((order) => ({ order, orderRef: doc(db, C.ORDERS, order.id), prod: produksiByOrderId.get(order.id) }));
 
@@ -4161,7 +3945,7 @@ function rateDocId(productType, model, process) {
       setModal(null);
       await Promise.all([refreshShipments(), refreshOrders(), refreshProduksi()]); // sinkron data pengiriman tanpa onSnapshot
     } catch (e) {
-      alert(friendlyErrorMessage("Simpan pengiriman", e));
+      showToast(friendlyErrorMessage("Simpan pengiriman", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -4196,7 +3980,7 @@ function rateDocId(productType, model, process) {
       }
       showToast("🗑️ Data berhasil dihapus", 3000);
     } catch (e) {
-      alert(friendlyErrorMessage("Hapus data", e));
+      showToast(friendlyErrorMessage("Hapus data", e), 4000);
     }
   }
 
@@ -4213,7 +3997,7 @@ function rateDocId(productType, model, process) {
   async function saveEditEntry() {
     if (!editEntryModal) return;
     const nextQty = nonNegativeQty(editEntryForm.qty || 0);
-    if (!Number.isFinite(nextQty) || nextQty <= 0) return alert("Qty wajib diisi dan harus lebih dari 0.");
+    if (!Number.isFinite(nextQty) || nextQty <= 0) return showToast("⚠️ Qty wajib diisi dan harus lebih dari 0.", 3000);
 
     const nextModel = canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
 
@@ -4227,12 +4011,7 @@ function rateDocId(productType, model, process) {
         : processQtyForOrderModel(editOrder.id, editEntryModal.process, nextModel, editEntryModal.id);
       const combinedQty = alreadyQty + nextQty;
       if (limit > 0 && combinedQty > limit) {
-        return alert(
-          `Qty ${editEntryModal.process} melebihi qty ${label}.\n` +
-          `Batas: ${limit} pcs\n` +
-          `Sudah input lain: ${alreadyQty} pcs\n` +
-          `Qty baru: ${editEntryForm.qty} pcs`
-        );
+        return showToast(`⚠️ Qty ${editEntryModal.process} melebihi batas. Batas: ${limit} pcs, sudah input lain: ${alreadyQty} pcs, qty baru: ${editEntryForm.qty} pcs.`, 5000);
       }
     }
 
@@ -4322,7 +4101,7 @@ function rateDocId(productType, model, process) {
       setEditEntryModal(null);
       showToast("✅ Entry berhasil diupdate", 3000);
     } catch (e) {
-      alert(friendlyErrorMessage("Update data", e));
+      showToast(friendlyErrorMessage("Update data", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -4375,9 +4154,9 @@ function rateDocId(productType, model, process) {
 
   async function batalkanSudahGajian(nama, dari = rekapDari, sampai = rekapSampai) {
     const marker = payrollMarkerFor(nama, dari, sampai);
-    if (!marker?.id) return alert("Data status gajian tidak ditemukan.");
+    if (!marker?.id) return showToast("⚠️ Data status gajian tidak ditemukan.", 3000);
     if (marker.source !== "gallery-produksi-gaji-marker" && marker.type !== "status_gajian_periode") {
-      return alert("Status ini berasal dari data payroll lama, tidak bisa dibatalkan otomatis dari tombol ini.");
+      return showToast("⚠️ Status ini dari data payroll lama, tidak bisa dibatalkan otomatis.", 4000);
     }
 
     const employeeDisplay = displayWorkerName(nama);
@@ -4398,7 +4177,7 @@ function rateDocId(productType, model, process) {
     if (Number(marker.potonganKasbon || 0) > 0 || relatedKasbon.length > 0) {
       pesan += `\n\nPotongan kasbon periode ini juga akan dikembalikan dan riwayat gajian otomatis akan dihapus.`;
     }
-    const ok = window.confirm(pesan);
+    const ok = await showConfirm(pesan, { okLabel: "Ya, Batalkan", okStyle: "danger", icon: "↩️" });
     if (!ok) return;
 
     setIsSaving(true);
@@ -4447,7 +4226,7 @@ function rateDocId(productType, model, process) {
       refreshPayroll();
       refreshGajianHistory();
     } catch (e) {
-      alert(friendlyErrorMessage("Membatalkan status gajian", e));
+      showToast(friendlyErrorMessage("Membatalkan status gajian", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -4458,17 +4237,17 @@ function rateDocId(productType, model, process) {
 
   async function kaitkanEntryKePesanan() {
     if (!kaitkanModal) return;
-    if (!kaitkanOrderId) return alert("Pilih pesanan tujuan terlebih dahulu.");
+    if (!kaitkanOrderId) return showToast("⚠️ Pilih pesanan tujuan terlebih dahulu.", 3000);
 
     const targetOrder = orders.find((o) => o.id === kaitkanOrderId);
-    if (!targetOrder) return alert("Pesanan tidak ditemukan.");
+    if (!targetOrder) return showToast("⚠️ Pesanan tidak ditemukan.", 3000);
 
     const entry = kaitkanModal;
     const alreadyLinked = entry.orderId || entry.pesananId;
     if (alreadyLinked && alreadyLinked !== kaitkanOrderId) {
-      const okRelink = window.confirm(
-        `Entry ini sudah terkait pesanan lain.\n\n` +
-        `Lanjut pindahkan kaitan ke ${targetOrder.invoice || targetOrder.customer}?`
+      const okRelink = await showConfirm(
+        `Entry ini sudah terkait pesanan lain. Lanjut pindahkan kaitan ke ${targetOrder.invoice || targetOrder.customer}?`,
+        { okLabel: "Ya, Pindahkan", okStyle: "warning", icon: "🔗" }
       );
       if (!okRelink) return;
     }
@@ -4476,10 +4255,9 @@ function rateDocId(productType, model, process) {
     const totals = setorTotals(entry);
     const hasSetor = Number(totals.qtySetor || 0) > 0 || Number(totals.qtyReject || 0) > 0;
     if (hasSetor) {
-      const ok = window.confirm(
-        `Entry ini sudah punya data setor (${totals.qtySetor || 0} pcs).\n` +
-        `Mengubah pesanan tidak akan menghapus data setor/gaji yang sudah tersimpan.\n\n` +
-        `Lanjut kaitkan ke pesanan ${targetOrder.invoice || targetOrder.customer}?`
+      const ok = await showConfirm(
+        `Entry ini sudah punya data setor (${totals.qtySetor || 0} pcs). Mengubah pesanan tidak akan menghapus data setor/gaji. Lanjut kaitkan ke pesanan ${targetOrder.invoice || targetOrder.customer}?`,
+        { okLabel: "Ya, Kaitkan", okStyle: "warning", icon: "🔗" }
       );
       if (!ok) return;
     }
@@ -4554,7 +4332,7 @@ function rateDocId(productType, model, process) {
       setKaitkanOrderId("");
       await Promise.all([refreshProductionEntries(), refreshProduksi()]);
     } catch (e) {
-      alert(friendlyErrorMessage("Mengaitkan borongan ke pesanan", e));
+      showToast(friendlyErrorMessage("Mengaitkan borongan ke pesanan", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -4563,10 +4341,10 @@ function rateDocId(productType, model, process) {
 
   async function simpanGajianLama(form) {
     if (!form.employeeName || !form.tanggalGaji || !form.periodeGajiDari || !form.periodeGajiSampai || !form.jumlah) {
-      return alert("Lengkapi semua field: nama pekerja, tanggal gaji, periode, dan jumlah.");
+      return showToast("⚠️ Lengkapi semua field: nama pekerja, tanggal, periode, dan jumlah.", 3500);
     }
     const jumlah = nonNegativeMoney(form.jumlah);
-    if (jumlah <= 0) return alert("Jumlah gaji harus lebih dari 0.");
+    if (jumlah <= 0) return showToast("⚠️ Jumlah gaji harus lebih dari 0.", 3000);
     setIsSaving(true);
     try {
       await addDoc(collection(db, C.GAJIAN_HISTORY), {
@@ -4582,7 +4360,7 @@ function rateDocId(productType, model, process) {
       refreshGajianHistory();
       setFormGajianLama({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
     } catch (e) {
-      alert(friendlyErrorMessage("Menyimpan data", e));
+      showToast(friendlyErrorMessage("Menyimpan data", e), 4000);
     } finally {
       setIsSaving(false);
     }
@@ -4602,25 +4380,33 @@ function rateDocId(productType, model, process) {
     return kasbonAktifUntukPekerja(nama).reduce((s, k) => s + nonNegativeMoney(k.sisaKasbon || 0), 0);
   }
 
-  async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = []) {
+  async function tandaiSudahGajianDanSimpanHistory(nama, r, dari = rekapDari, sampai = rekapSampai, carryOver = [], cicilanOverride = null) {
     if (!nama) return;
     if (sudahGajian(nama, dari, sampai)) {
       showToast("✅ Status gajian sudah tercatat", 2500);
       return;
     }
     const jumlah = nonNegativeMoney(r?.gaji || 0);
-    if (jumlah <= 0) return alert("Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.");
+    if (jumlah <= 0) return showToast("⚠️ Total gaji masih Rp 0, tidak bisa ditandai sudah gajian.", 3500);
 
     const kasbonAktif = kasbonAktifUntukPekerja(nama);
     const totalKasbon = kasbonAktif.reduce((s, k) => s + nonNegativeMoney(k.sisaKasbon || 0), 0);
-    const potonganKasbonEstimasi = Math.min(totalKasbon, jumlah);
+
+    // Jika user menginput cicilan manual, gunakan itu (dibatasi min 0, max min(totalKasbon, jumlah)).
+    // Jika tidak ada input (null), fallback ke perilaku lama: potong semua kasbon sampai gaji habis.
+    const potonganKasbonEstimasi = cicilanOverride !== null
+      ? Math.min(Math.max(0, cicilanOverride), Math.min(totalKasbon, jumlah))
+      : Math.min(totalKasbon, jumlah);
     const gajiDiterimaEstimasi = jumlah - potonganKasbonEstimasi;
 
     let konfirmasiMsg = `Tandai ${nama} sudah gajian untuk periode ${dari} s/d ${sampai}?\nGaji kotor: ${money(jumlah)}`;
     if (totalKasbon > 0) {
-      konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan kasbon: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
+      konfirmasiMsg += `\n\n💰 Kasbon aktif: ${money(totalKasbon)}\nPotongan cicilan: ${money(potonganKasbonEstimasi)}\nGaji diterima: ${money(gajiDiterimaEstimasi)}`;
+      if (potonganKasbonEstimasi < totalKasbon) {
+        konfirmasiMsg += `\nSisa kasbon setelah cicilan: ${money(totalKasbon - potonganKasbonEstimasi)}`;
+      }
     }
-    const ok = window.confirm(konfirmasiMsg);
+    const ok = await showConfirm(konfirmasiMsg, { okLabel: "Ya, Tandai Gajian", okStyle: "primary", icon: "💰" });
     if (!ok) return;
 
     const employeeDisplay = displayWorkerName(nama);
@@ -4635,20 +4421,6 @@ function rateDocId(productType, model, process) {
 
     setIsSaving(true);
     try {
-      const existingSnap = await getDocs(
-        query(
-          collection(db, C.PAYROLL_EXPENSES),
-          where("source", "==", "gallery-produksi-gaji-marker"),
-          where("employeeName", "==", employeeDisplay),
-          where("periodeGajiDari", "==", dari),
-          where("periodeGajiSampai", "==", sampai)
-        )
-      );
-      if (!existingSnap.empty) {
-        showToast("✅ Status gajian sudah tercatat (cek server)", 2500);
-        return;
-      }
-
       await runTransaction(db, async (transaction) => {
         const markerSnap = await transaction.get(markerRef);
         if (markerSnap.exists()) throw new Error("Status gajian periode ini sudah tercatat.");
@@ -4664,7 +4436,7 @@ function rateDocId(productType, model, process) {
           }
         }
 
-        let sisaPotong = Math.min(jumlah, liveKasbon.reduce((s, k) => s + k.sisaLive, 0));
+        let sisaPotong = Math.min(potonganKasbonEstimasi, liveKasbon.reduce((s, k) => s + k.sisaLive, 0));
         actualPotonganKasbon = sisaPotong;
         actualGajiDiterima = jumlah - actualPotonganKasbon;
 
@@ -4736,20 +4508,20 @@ function rateDocId(productType, model, process) {
       refreshPayroll();
       refreshGajianHistory();
     } catch (e) {
-      alert(friendlyErrorMessage("Menandai sudah gajian", e));
+      showToast(friendlyErrorMessage("Menandai sudah gajian", e), 4000);
     } finally {
       setIsSaving(false);
     }
   }
 
   async function hapusGajianHistory(id) {
-    if (!window.confirm("Hapus riwayat gajian ini?")) return;
+    if (!(await showConfirm("Hapus riwayat gajian ini?", { okLabel: "Hapus", okStyle: "danger", icon: "🗑️" }))) return;
     try {
       await deleteDoc(doc(db, C.GAJIAN_HISTORY, id));
       await refreshGajianHistory();
       showToast("🗑️ Riwayat gajian dihapus", 2500);
     } catch (e) {
-      alert(friendlyErrorMessage("Menghapus data", e));
+      showToast(friendlyErrorMessage("Menghapus data", e), 4000);
     }
   }
 
@@ -4883,7 +4655,7 @@ function rateDocId(productType, model, process) {
       showToast("✅ Slip gaji berhasil dibuat. Buka file HTML lalu pilih Cetak / Simpan PDF.", 4500);
       return html;
     } catch (e) {
-      alert(friendlyErrorMessage("Membuat slip gaji", e));
+      showToast(friendlyErrorMessage("Membuat slip gaji", e), 4000);
       return "";
     }
   }
@@ -5164,7 +4936,7 @@ function rateDocId(productType, model, process) {
       const file = new File([blob], filename, { type: "image/png" });
       return { imgUrl, file, filename, nama, dari, sampai, total: fmt(r?.gaji) };
     } catch (e) {
-      alert(friendlyErrorMessage("Membuat gambar slip gaji", e));
+      showToast(friendlyErrorMessage("Membuat gambar slip gaji", e), 4000);
       return null;
     }
   }
@@ -5193,7 +4965,7 @@ function rateDocId(productType, model, process) {
       showToast("⚠️ Browser ini tidak mendukung share gambar langsung. Gambar slip diunduh sebagai PNG.", 6000);
     } catch (e) {
       if (e?.name === "AbortError") return;
-      alert(friendlyErrorMessage("Share slip gaji", e));
+      showToast(friendlyErrorMessage("Share slip gaji", e), 4000);
     }
   }
 
@@ -5313,17 +5085,38 @@ function rateDocId(productType, model, process) {
       acc.totalBelumDibayar += nominal;
     }
     return acc;
-  }, {
-    totalPekerja: 0,
-    sudahGajian: 0,
-    belumGajian: 0,
-    totalGaji: 0,
-    totalSudahDibayar: 0,
-    totalBelumDibayar: 0,
-    totalPcsSetor: 0,
-    totalPcsReject: 0,
-    totalBelumSetor: 0,
-  });
+  }, (() => {
+    // Poin 4 fix: riwayat gajian manual (source: "input_manual_lama") yang masuk periode
+    // ikut dihitung di totalSudahDibayar, meskipun pekerja tsb tidak punya setor di rekapPerkerja.
+    const rekapNamaKeys = new Set(rekapPerkerja.map(([nama]) => normalizeWorkerNameKey(nama)));
+    const manualExtra = rekapPeriodReady
+      ? gajianHistory.filter((g) => {
+          if (g.source !== "input_manual_lama") return false;
+          // Masuk periode jika tanggal gaji atau periode overlap dengan rekapDari–rekapSampai
+          const tglGaji = dateKey(g.tanggalGaji || "");
+          const periodeOk = dateRangesOverlap(
+            g.periodeGajiDari || tglGaji, g.periodeGajiSampai || tglGaji,
+            rekapDari, rekapSampai
+          );
+          if (!periodeOk) return false;
+          // Hanya masukkan kalau nama belum ada di rekapPerkerja (agar tidak double-count)
+          return !rekapNamaKeys.has(normalizeWorkerNameKey(g.employeeName || ""));
+        })
+      : [];
+    const extraTotal = manualExtra.reduce((s, g) => s + nonNegativeMoney(g.jumlah || 0), 0);
+    const extraPekerja = new Set(manualExtra.map((g) => normalizeWorkerNameKey(g.employeeName || ""))).size;
+    return {
+      totalPekerja: extraPekerja,
+      sudahGajian: extraPekerja, // manual history = sudah dibayar by definition
+      belumGajian: 0,
+      totalGaji: extraTotal,
+      totalSudahDibayar: extraTotal,
+      totalBelumDibayar: 0,
+      totalPcsSetor: 0,
+      totalPcsReject: 0,
+      totalBelumSetor: 0,
+    };
+  })());
 
   const allTimePayrollRows = payrollExpenses
     .filter(isOfficialGajiPayroll)
@@ -5440,7 +5233,7 @@ function rateDocId(productType, model, process) {
       totalBoronganBelumMasukPcs,
       totalBoronganBelumMasukGajiPotensi,
     };
-  }, [productionEntries, rekapDari, rekapSampai, workerNameOptions, modelNameOptions, payrollExpenses, orders, orderLookupForCards]);
+  }, [productionEntries, rekapDari, rekapSampai, workerNameOptions, modelNameOptions, payrollExpenses, orders, orderLookupForCards, gajianHistory]);
 
   if (authLoading) {
     return (
@@ -6732,6 +6525,11 @@ function rateDocId(productType, model, process) {
                         <div>
                           <div className="text-base font-black" style={{ color: "#2d1b69" }}>{titleMap[rekapDetailModal] || "Rincian Rekap"}</div>
                           <div className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>{isAllTimeDetail ? "Semua waktu" : (rekapPeriodReady ? `${rekapDari} s/d ${rekapSampai}` : "Periode belum dipilih")} · {filteredRows.length} pekerja</div>
+                      {isAllTimeDetail && (
+                        <div className="mt-1.5 rounded-xl px-3 py-1.5 text-xs" style={{ background: "#fefce8", border: "1px solid #fde68a", color: "#92400e" }}>
+                          ℹ️ Data All-Time bersumber dari <strong>payroll_expenses</strong> (transaksi setor). Angka gaji di sini bisa sedikit berbeda dari rekap periodik yang dihitung dari <strong>production_entries</strong> secara real-time.
+                        </div>
+                      )}
                         </div>
                         <button type="button" onClick={() => setRekapDetailModal(null)} className="rounded-full px-3 py-1.5 text-xs font-bold" style={{ background: "#f1f5f9", color: "#64748b" }}>Tutup</button>
                       </div>
@@ -7707,6 +7505,36 @@ function rateDocId(productType, model, process) {
         </Modal>
       )}
 
+      {/* Modal Konfirmasi Umum (pengganti window.confirm) */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="text-center mb-4">
+              <div className="text-4xl mb-2">{confirmModal.icon || "⚠️"}</div>
+              <div className="text-base font-semibold leading-relaxed" style={{ color: "#1e293b" }}>
+                {confirmModal.message}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={confirmModal.onCancel}
+                className="flex-1 rounded-2xl border py-3 font-semibold"
+                style={{ borderColor: "#e2e8f0", color: "#64748b" }}
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmModal.onOk}
+                className="flex-1 rounded-2xl py-3 font-semibold text-white"
+                style={{ background: confirmModal.okStyle === "danger" ? "#e11d48" : confirmModal.okStyle === "warning" ? "#f97316" : "#7c3aed" }}
+              >
+                {confirmModal.okLabel || "Ya, Lanjut"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Konfirmasi Hapus 2x */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
@@ -7838,7 +7666,7 @@ function rateDocId(productType, model, process) {
                     <img src="/logo-gk.png" alt="Gallery Kerudung" className="h-12 w-12 rounded-2xl bg-white object-cover" onError={(e) => { e.currentTarget.style.display = "none"; }} />
                     <div className="text-white font-extrabold text-lg">🧾 Slip Pendapatan Borongan</div>
                   </div>
-                  <button onClick={() => setSlipPreview(null)}
+                  <button onClick={() => { setSlipPreview(null); setCicilanKasbonInput(""); }}
                     className="rounded-full px-4 py-1.5 text-sm font-bold"
                     style={{ background: "rgba(255,255,255,0.25)", color: "white" }}>
                     ✕ Tutup
@@ -7937,31 +7765,98 @@ function rateDocId(productType, model, process) {
                   <div className="text-3xl font-black" style={{ color: "#16a34a" }}>{fmt(r.gaji)}</div>
                 </div>
 
-                {/* Info kasbon aktif — tampil sebelum tombol gajian */}
+                {/* Kasbon aktif + input cicilan — tampil sebelum tombol gajian */}
                 {(() => {
                   const kasbonAktif = kasbonAktifUntukPekerja(nama);
-                  if (kasbonAktif.length === 0) return null;
                   const totalKasbon = kasbonAktif.reduce((s, k) => s + nonNegativeMoney(k.sisaKasbon || 0), 0);
-                  const potongan = Math.min(totalKasbon, Number(r.gaji || 0));
-                  const diterima = Number(r.gaji || 0) - potongan;
+                  if (kasbonAktif.length === 0 || slipSudahGajian) return null;
+                  const inputNominal = nonNegativeMoney(cicilanKasbonInput);
+                  const cicilanValid = inputNominal > 0 && inputNominal <= Math.min(totalKasbon, Number(r.gaji || 0));
+                  const cicilanEfektif = cicilanValid ? inputNominal : 0;
+                  const gajiDiterima = Number(r.gaji || 0) - cicilanEfektif;
+                  const sisaKasbonSetelah = totalKasbon - cicilanEfektif;
                   return (
-                    <div className="rounded-2xl p-4 space-y-2" style={{ background: "#fefce8", border: "1.5px solid #fde68a" }}>
-                      <div className="text-xs font-black" style={{ color: "#92400e" }}>💰 Kasbon Aktif — akan dipotong saat gajian</div>
+                    <div className="rounded-2xl p-4 space-y-3" style={{ background: "#fefce8", border: "1.5px solid #fbbf24" }}>
+                      <div className="text-xs font-black" style={{ color: "#92400e" }}>💰 Kasbon Aktif</div>
                       {kasbonAktif.map((k) => (
-                        <div key={k.id} className="flex justify-between text-xs" style={{ color: "#78716c" }}>
-                          <span>📅 {k.tanggal}{k.keterangan ? ` · ${k.keterangan}` : ""}</span>
-                          <span className="font-bold text-amber-700">{money(k.sisaKasbon)} sisa</span>
+                        <div key={k.id} className="rounded-xl px-3 py-2 space-y-0.5" style={{ background: "#fffbeb", border: "1px solid #fde68a" }}>
+                          <div className="flex justify-between text-xs">
+                            <span style={{ color: "#78716c" }}>📅 {k.tanggal}{k.keterangan ? ` · ${k.keterangan}` : ""}</span>
+                            <span className="font-bold" style={{ color: "#b45309" }}>Sisa {money(k.sisaKasbon)}</span>
+                          </div>
+                          {k.jumlah && (
+                            <div className="text-xs" style={{ color: "#a8a29e" }}>
+                              Pokok {money(k.jumlah)} · sudah lunas {money(nonNegativeMoney(k.jumlah) - nonNegativeMoney(k.sisaKasbon))}
+                            </div>
+                          )}
                         </div>
                       ))}
-                      <div className="border-t border-amber-200 pt-2 space-y-1">
-                        <div className="flex justify-between text-xs font-bold">
-                          <span style={{ color: "#92400e" }}>Total potongan kasbon</span>
-                          <span style={{ color: "#dc2626" }}>- {money(potongan)}</span>
+
+                      <div className="border-t pt-3 space-y-2" style={{ borderColor: "#fde68a" }}>
+                        <div className="text-xs font-bold" style={{ color: "#92400e" }}>
+                          Cicil berapa dari gaji ini?
                         </div>
-                        <div className="flex justify-between text-sm font-black">
-                          <span style={{ color: "#16a34a" }}>Gaji diterima</span>
-                          <span style={{ color: "#16a34a" }}>{money(diterima)}</span>
+                        <div className="text-xs" style={{ color: "#78716c" }}>
+                          Maks. {money(Math.min(totalKasbon, Number(r.gaji || 0)))} (total kasbon {money(totalKasbon)})
                         </div>
+                        <div className="flex gap-2 items-center">
+                          <input
+                            type="number"
+                            min="0"
+                            max={Math.min(totalKasbon, Number(r.gaji || 0))}
+                            placeholder="0"
+                            value={cicilanKasbonInput}
+                            onChange={(e) => setCicilanKasbonInput(e.target.value)}
+                            className="flex-1 rounded-xl px-3 py-2 text-sm outline-none"
+                            style={{ border: "1.5px solid #fbbf24", background: "white", color: "#1e1b4b" }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setCicilanKasbonInput(String(Math.min(totalKasbon, Number(r.gaji || 0))))}
+                            className="rounded-xl px-3 py-2 text-xs font-bold"
+                            style={{ background: "#fef3c7", color: "#92400e", border: "1px solid #fbbf24", whiteSpace: "nowrap" }}
+                          >
+                            Maks
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCicilanKasbonInput("")}
+                            className="rounded-xl px-3 py-2 text-xs font-bold"
+                            style={{ background: "#f1f5f9", color: "#64748b", border: "1px solid #e2e8f0", whiteSpace: "nowrap" }}
+                          >
+                            Reset
+                          </button>
+                        </div>
+                        {cicilanKasbonInput !== "" && (
+                          <div className="rounded-xl px-3 py-2 space-y-1" style={{ background: cicilanValid ? "#f0fdf4" : "#fef2f2", border: `1px solid ${cicilanValid ? "#bbf7d0" : "#fecaca"}` }}>
+                            {!cicilanValid && inputNominal > 0 && (
+                              <div className="text-xs font-bold" style={{ color: "#dc2626" }}>
+                                ⚠️ Melebihi batas ({money(Math.min(totalKasbon, Number(r.gaji || 0)))})
+                              </div>
+                            )}
+                            {cicilanValid && (
+                              <>
+                                <div className="flex justify-between text-xs">
+                                  <span style={{ color: "#64748b" }}>Potongan cicilan kasbon</span>
+                                  <span className="font-bold" style={{ color: "#dc2626" }}>- {money(cicilanEfektif)}</span>
+                                </div>
+                                <div className="flex justify-between text-xs font-black">
+                                  <span style={{ color: "#16a34a" }}>Gaji diterima</span>
+                                  <span style={{ color: "#16a34a" }}>{money(gajiDiterima)}</span>
+                                </div>
+                                {sisaKasbonSetelah > 0 && (
+                                  <div className="flex justify-between text-xs">
+                                    <span style={{ color: "#94a3b8" }}>Sisa kasbon setelah cicilan</span>
+                                    <span style={{ color: "#b45309" }}>{money(sisaKasbonSetelah)}</span>
+                                  </div>
+                                )}
+                                {sisaKasbonSetelah <= 0 && (
+                                  <div className="text-xs font-bold text-center" style={{ color: "#16a34a" }}>🎉 Semua kasbon lunas!</div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -7987,16 +7882,47 @@ function rateDocId(productType, model, process) {
                       >
                         Batalkan
                       </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => tandaiSudahGajianDanSimpanHistory(nama, r, dari, sampai)}
-                        className="rounded-xl px-3 py-2 text-xs font-bold text-white"
-                        style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)" }}
-                      >
-                        Tandai Sudah Gajian
-                      </button>
-                    )}
+                    ) : (() => {
+                        const kasbonAktifBtn = kasbonAktifUntukPekerja(nama);
+                        const totalKasbonBtn = kasbonAktifBtn.reduce((s, k) => s + nonNegativeMoney(k.sisaKasbon || 0), 0);
+                        // Jika ada kasbon aktif, input cicilan WAJIB diisi dulu (boleh 0 = skip cicilan kali ini)
+                        const wajibIsiCicilan = totalKasbonBtn > 0 && cicilanKasbonInput === "";
+                        const cicilanInputValid = !wajibIsiCicilan || cicilanKasbonInput !== "";
+                        const inputNominalBtn = nonNegativeMoney(cicilanKasbonInput);
+                        const batasMax = Math.min(totalKasbonBtn, Number(r.gaji || 0));
+                        const inputMelebihi = cicilanKasbonInput !== "" && inputNominalBtn > batasMax;
+                        const bolehKlik = !wajibIsiCicilan && !inputMelebihi;
+                        return (
+                          <>
+                            {wajibIsiCicilan && (
+                              <div className="text-xs font-semibold text-center mb-1" style={{ color: "#b45309" }}>
+                                ⬆️ Isi cicilan dulu (boleh 0)
+                              </div>
+                            )}
+                            <button
+                              type="button"
+                              disabled={!bolehKlik || isSaving}
+                              onClick={() => {
+                                const cicilanOverride = totalKasbonBtn > 0
+                                  ? nonNegativeMoney(cicilanKasbonInput)
+                                  : null;
+                                tandaiSudahGajianDanSimpanHistory(nama, r, dari, sampai, carryOver, cicilanOverride).then(() => {
+                                  setCicilanKasbonInput("");
+                                });
+                              }}
+                              className="rounded-xl px-3 py-2 text-xs font-bold text-white"
+                              style={{
+                                background: bolehKlik ? "linear-gradient(135deg,#16a34a,#22c55e)" : "#d1d5db",
+                                color: bolehKlik ? "white" : "#9ca3af",
+                                cursor: bolehKlik ? "pointer" : "not-allowed",
+                                opacity: isSaving ? 0.6 : 1,
+                              }}
+                            >
+                              Tandai Sudah Gajian
+                            </button>
+                          </>
+                        );
+                      })()}
                   </div>
                 </div>
 
