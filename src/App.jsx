@@ -1,4 +1,4 @@
-// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
+﻿// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
 // Audit final: fokus produksi, borongan/upah, kasbon pegawai, stok siap kirim, dan pengiriman real ke App Kerudung.
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
@@ -2144,7 +2144,7 @@ export default function App() {
         if (b.score !== a.score) return b.score - a.score;
         return String(b.o.createdAt || "").localeCompare(String(a.o.createdAt || ""));
       })
-      .slice(0, 8)
+      .slice(0, 20)
       .map((row) => row.o);
   }, [ordersForBoronganLinkAll, entryOrderSearch, entryForm.model, entryForm.process, produksiByOrderId, productionQtyIndex]);
 
@@ -3984,6 +3984,20 @@ function rateDocId(productType, model, process) {
         const batch = writeBatch(db);
         batch.delete(doc(db, C.PRODUCTION_ENTRIES, id));
         payrollSnap.docs.forEach((d) => batch.delete(d.ref));
+
+        // Hapus dokumen PRODUKSI terkait jika tidak ada entry lain yang masih memakainya
+        const deletedEntry = confirmDelete?.entry;
+        const produksiId = deletedEntry?.produksiId;
+        if (produksiId) {
+          const siblingsSnap = await getDocs(
+            query(collection(db, C.PRODUCTION_ENTRIES), where("produksiId", "==", produksiId))
+          );
+          const remainingSiblings = siblingsSnap.docs.filter((d) => d.id !== id);
+          if (remainingSiblings.length === 0) {
+            batch.delete(doc(db, C.PRODUKSI, produksiId));
+          }
+        }
+
         await batch.commit();
         await Promise.all([refreshProductionEntries(), refreshPayroll(), refreshProduksi()]);
       }
