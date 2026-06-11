@@ -1,4 +1,4 @@
-// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
+﻿// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
 // Audit final: fokus produksi, borongan/upah, kasbon pegawai, stok siap kirim, dan pengiriman real ke App Kerudung.
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
@@ -8360,3 +8360,4 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
+
