@@ -1,4 +1,4 @@
-﻿// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
+// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
 // Audit final: fokus produksi, borongan/upah, kasbon pegawai, stok siap kirim, dan pengiriman real ke App Kerudung.
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
@@ -1506,6 +1506,7 @@ export default function App() {
     tanggalKirim: todayStr(),
     penerima: "",
     ekspedisi: "",
+    ongkir: 0,
     items: [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
     shortShipmentMode: "temporary",
     shortShipmentReason: "Stok kain habis",
@@ -3747,6 +3748,7 @@ function rateDocId(productType, model, process) {
             };
           });
 
+          const ongkirAmount = Number(kirimForm.ongkir || 0);
           const newDelivery = {
             date: kirimForm.tanggalKirim || todayStr(),
             createdAt: deliveryCreatedAt,
@@ -3757,12 +3759,14 @@ function rateDocId(productType, model, process) {
             penerima: kirimForm.penerima.trim(),
             courier: kirimForm.ekspedisi || "",
             ekspedisi: kirimForm.ekspedisi || "",
+            ongkir: ongkirAmount,
+            shippingCost: ongkirAmount,
             note: kirimForm.catatan || "",
             shortShipmentMode: kirimForm.shortShipmentMode || "temporary",
             shortShipmentReason: kirimForm.shortShipmentReason || "",
             shortShipmentNote: kirimForm.shortShipmentNote || "",
             items: cleanDeliveryItems,
-            total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0),
+            total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0) + ongkirAmount,
           };
 
           const finalDeliveries = [...currentDeliveries, newDelivery];
@@ -3839,6 +3843,8 @@ function rateDocId(productType, model, process) {
             receiver: kirimForm.penerima.trim(),
             ekspedisi: kirimForm.ekspedisi || "",
             courier: kirimForm.ekspedisi || "",
+            ongkir: ongkirAmount,
+            shippingCost: ongkirAmount,
             items: cleanDeliveryItems.map((it) => ({ ...it, qtyPesan: it.orderedQty, qtyKirim: it.shippedQty })),
             deliveryItems: cleanDeliveryItems,
             qty: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0), 0),
@@ -3915,6 +3921,8 @@ function rateDocId(productType, model, process) {
             ekspedisi: kirimForm.ekspedisi || "",
             note: kirimForm.catatan || "",
             catatan: kirimForm.catatan || "",
+            ongkir: ongkirAmount,
+            shippingCost: ongkirAmount,
             orderIds: batchOrderIds,
             pesananIds: batchOrderIds,
             invoices: batchInvoices,
@@ -3922,7 +3930,7 @@ function rateDocId(productType, model, process) {
             orders: batchOrderSummaries,
             items: batchItems,
             totalKirimBatch: batchItems.reduce((s, i) => s + Number(i.qtyKirim || i.shippedQty || i.qty || 0), 0),
-            totalTagihanBatch: batchItems.reduce((s, i) => s + Number(i.total || 0), 0),
+            totalTagihanBatch: batchItems.reduce((s, i) => s + Number(i.total || 0), 0) + ongkirAmount,
             totalHppBatch: batchItems.reduce((s, i) => s + Number(i.qtyKirim || i.shippedQty || i.qty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0),
             status: "Aktif",
           });
@@ -3936,6 +3944,7 @@ function rateDocId(productType, model, process) {
         tanggalKirim: todayStr(),
         penerima: "",
         ekspedisi: "",
+        ongkir: 0,
         items: [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
         shortShipmentMode: "temporary",
         shortShipmentReason: "Stok kain habis",
@@ -7426,6 +7435,13 @@ function rateDocId(productType, model, process) {
             <Input label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
             <Input label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
             <Input label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
+            <Input
+              label="Ongkos Kirim (Rp)"
+              type="number"
+              value={kirimForm.ongkir || ""}
+              onChange={(v) => setKirimForm((f) => ({ ...f, ongkir: Number(v) || 0 }))}
+              placeholder="0 jika gratis ongkir"
+            />
             {kirimForm.items.map((item, idx) => (
               <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
                 {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"} · {item.customer || kirimForm.penerima}</div>}
@@ -7498,6 +7514,30 @@ function rateDocId(productType, model, process) {
               );
             })()}
             <Input label="Catatan" value={kirimForm.catatan} onChange={(v) => setKirimForm((f) => ({ ...f, catatan: v }))} placeholder="Opsional" />
+            {(() => {
+              const subtotal = (kirimForm.items || []).reduce((s, it) => s + Number(it.qtyKirim || 0) * Number(it.price || 0), 0);
+              const ongkir = Number(kirimForm.ongkir || 0);
+              const total = subtotal + ongkir;
+              if (total <= 0) return null;
+              return (
+                <div className="rounded-2xl p-3 space-y-1 text-sm" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Subtotal barang</span>
+                    <span className="font-semibold">Rp {subtotal.toLocaleString("id-ID")}</span>
+                  </div>
+                  {ongkir > 0 && (
+                    <div className="flex justify-between text-slate-600">
+                      <span>🚚 Ongkos kirim</span>
+                      <span className="font-semibold">Rp {ongkir.toLocaleString("id-ID")}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-bold border-t pt-1" style={{ borderColor: "#bbf7d0", color: "#15803d" }}>
+                    <span>Total tagihan</span>
+                    <span>Rp {total.toLocaleString("id-ID")}</span>
+                  </div>
+                </div>
+              );
+            })()}
             <Button onClick={addPengiriman} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
               Simpan Kiriman
             </Button>
@@ -8360,4 +8400,3 @@ function MiniStat({ label, value, bg, color }) {
     </div>
   );
 }
-
