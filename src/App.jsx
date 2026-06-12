@@ -1,4 +1,4 @@
-﻿// GaleriProduksi.jsx - Gallery Produksi - BORONGAN SEARCH PINTAR FIX RUNTIME - 2026-06-08
+﻿// GaleriProduksi.jsx - Gallery Produksi - ONGKIR INPUT FIX + AUDIT HITUNG - 2026-06-12
 // Audit final: fokus produksi, borongan/upah, kasbon pegawai, stok siap kirim, dan pengiriman real ke App Kerudung.
 // Perbaikan: pengiriman atomic, gajian-kasbon atomic, produksi/borongan/setor anti data yatim,
 // legacy sync lebih aman, dropdown pengiriman baca deliveries dengan benar, UI lebih terbaca.
@@ -1163,7 +1163,7 @@ function Button({ children, onClick, className = "", style = {}, disabled }) {
   );
 }
 
-function Input({ label, value, onChange, placeholder, type = "text", readOnly = false }) {
+function Input({ label, value, onChange, placeholder, type = "text", readOnly = false, disabled = false }) {
   return (
     <div className="space-y-1">
       <label className="text-sm font-bold" style={{ color: "#9333ea" }}>{label}</label>
@@ -1171,14 +1171,16 @@ function Input({ label, value, onChange, placeholder, type = "text", readOnly = 
         value={value}
         type={type}
         readOnly={readOnly}
+        disabled={disabled}
         placeholder={placeholder}
         onChange={(e) => onChange?.(e.target.value)}
         className="w-full px-4 py-3 outline-none text-base"
         style={{
           borderRadius: 14,
           border: "1.5px solid #f9a8d4",
-          background: readOnly ? "#f1f5f9" : "#fdf2f8",
-          color: readOnly ? "#64748b" : "#2d1b69",
+          background: readOnly || disabled ? "#f1f5f9" : "#fdf2f8",
+          color: readOnly || disabled ? "#64748b" : "#2d1b69",
+          opacity: disabled ? 0.6 : 1,
         }}
       />
     </div>
@@ -3721,7 +3723,8 @@ function rateDocId(productType, model, process) {
           liveRows.push({ ...row, orderData: orderSnap.data(), prodRef, prodSnapData });
         }
 
-        for (const row of liveRows) {
+        for (let rowIndex = 0; rowIndex < liveRows.length; rowIndex++) {
+          const row = liveRows[rowIndex];
           const order = row.order;
           const currentData = row.orderData;
           const baseItems = orderBaseItems({ ...order, raw: { ...(order.raw || {}), ...currentData }, items: currentData.items || order.items });
@@ -3749,6 +3752,15 @@ function rateDocId(productType, model, process) {
           });
 
           const ongkirAmount = Number(kirimForm.ongkir || 0);
+          // Ongkir dibagi proporsional ke tiap order agar tidak dobel di Gallery Kerudung.
+          // Kalau hanya 1 order, seluruh ongkir masuk ke order itu.
+          // Kalau multi-order, ongkir dibagi rata (bisa disesuaikan ke proporsi nilai jika perlu).
+          const ongkirPerOrder = selectedOrders.length > 1
+            ? (rowIndex === liveRows.length - 1
+                // order terakhir mendapat sisa ongkir agar tidak ada pembulatan yang hilang
+                ? ongkirAmount - Math.floor(ongkirAmount / selectedOrders.length) * (selectedOrders.length - 1)
+                : Math.floor(ongkirAmount / selectedOrders.length))
+            : ongkirAmount;
           const newDelivery = {
             date: kirimForm.tanggalKirim || todayStr(),
             createdAt: deliveryCreatedAt,
@@ -3759,21 +3771,23 @@ function rateDocId(productType, model, process) {
             penerima: kirimForm.penerima.trim(),
             courier: kirimForm.ekspedisi || "",
             ekspedisi: kirimForm.ekspedisi || "",
-            ongkir: ongkirAmount,
-            shippingCost: ongkirAmount,
+            ongkir: ongkirPerOrder,
+            shippingCost: ongkirPerOrder,
             note: kirimForm.catatan || "",
             shortShipmentMode: kirimForm.shortShipmentMode || "temporary",
             shortShipmentReason: kirimForm.shortShipmentReason || "",
             shortShipmentNote: kirimForm.shortShipmentNote || "",
             items: cleanDeliveryItems,
-            total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0) + ongkirAmount,
+            total: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0) + ongkirPerOrder,
           };
 
           const finalDeliveries = [...currentDeliveries, newDelivery];
           const finalShippedItems = buildShippedItems(baseItems, finalDeliveries);
           const totalOrdered = finalShippedItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0);
           const totalShipped = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0);
-          const deliveredTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0);
+          // deliveredTotal = total nilai barang terkirim (akumulasi semua pengiriman) + total ongkir semua pengiriman
+          const totalOngkirAkumulasi = finalDeliveries.reduce((s, d) => s + Number(d.ongkir || d.shippingCost || 0), 0);
+          const deliveredTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0) + totalOngkirAkumulasi;
           const deliveredHppTotal = finalShippedItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0);
           const hasOverDelivery = finalShippedItems.some((i) => Number(i.shippedQty || 0) > Number(i.orderedQty || 0));
           if (hasOverDelivery && !overDeliveryConfirmed) throw new Error("Data terbaru menunjukkan pengiriman akan melebihi qty pesanan. Muat ulang data lalu konfirmasi ulang.");
@@ -3797,7 +3811,7 @@ function rateDocId(productType, model, process) {
             customer: order.customer || "",
             totalPesanBatch: cleanDeliveryItems.reduce((s, i) => s + Number(i.orderedQty || 0), 0),
             totalKirimBatch: cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || 0), 0),
-            totalTagihanBatch: cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0),
+            totalTagihanBatch: cleanDeliveryItems.reduce((s, i) => s + Number(i.shippedQty || 0) * Number(i.price || 0), 0) + ongkirPerOrder,
             totalPesanAkumulasi: totalOrdered,
             totalKirimAkumulasi: totalShipped,
             shortShipmentRemaining,
@@ -3843,9 +3857,8 @@ function rateDocId(productType, model, process) {
             receiver: kirimForm.penerima.trim(),
             ekspedisi: kirimForm.ekspedisi || "",
             courier: kirimForm.ekspedisi || "",
-            ongkir: ongkirAmount,
-            shippingCost: ongkirAmount,
-            items: cleanDeliveryItems.map((it) => ({ ...it, qtyPesan: it.orderedQty, qtyKirim: it.shippedQty })),
+            ongkir: ongkirPerOrder,
+            shippingCost: ongkirPerOrder,
             deliveryItems: cleanDeliveryItems,
             qty: cleanDeliveryItems.reduce((s, i) => s + Number(i.qty || 0), 0),
             totalPesan: totalOrdered,
@@ -7452,8 +7465,11 @@ function rateDocId(productType, model, process) {
             <Input
               label="Ongkos Kirim (Rp)"
               type="number"
-              value={kirimForm.ongkir || ""}
-              onChange={(v) => setKirimForm((f) => ({ ...f, ongkir: Number(v) || 0 }))}
+              value={kirimForm.ongkir === 0 ? "" : String(kirimForm.ongkir)}
+              onChange={(v) => {
+                const raw = v === "" ? "" : v;
+                setKirimForm((f) => ({ ...f, ongkir: raw === "" ? 0 : Math.max(0, Number(raw) || 0) }));
+              }}
               placeholder="0 jika gratis ongkir"
             />
             {kirimForm.items.map((item, idx) => (
