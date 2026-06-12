@@ -1546,6 +1546,7 @@ export default function App() {
       tanggalKirim: todayStr(),
       penerima: "",
       ekspedisi: "",
+      ongkir: 0,
       items: [{ nama: "", qtyPesan: 0, qtyKirim: 0 }],
       shortShipmentMode: "temporary",
       shortShipmentReason: "Stok kain habis",
@@ -2264,7 +2265,7 @@ export default function App() {
 
   const filteredEntries = useMemo(() => {
     const statusPriority = (e) => {
-      const s = setorTotals(e).statusSetor;
+      const s = (entryTotalsMap.get(e.id) || setorTotals(e)).statusSetor;
       if (s === "belum_setor") return 0;
       if (s === "setor_sebagian") return 1;
       return 2; // sudah_setor
@@ -2280,7 +2281,7 @@ export default function App() {
         const txt = `${e.employeeName} ${e.productType} ${e.model} ${e.process} ${e.invoice}`.toLowerCase();
         return q === "" || txt.includes(q);
       });
-  }, [productionEntries, q]);
+  }, [productionEntries, q, entryTotalsMap]);
 
 
   const materialUsageByName = useMemo(() => {
@@ -2557,6 +2558,7 @@ export default function App() {
       tanggalKirim: todayStr(),
       penerima: order?.customer || "",
       ekspedisi: "",
+      ongkir: 0,
       items,
       shortShipmentMode: "temporary",
       shortShipmentReason: "Stok kain habis",
@@ -2583,6 +2585,7 @@ export default function App() {
       tanggalKirim: todayStr(),
       penerima: order?.customer || "",
       ekspedisi: "",
+      ongkir: 0,
       items,
       shortShipmentMode: "temporary",
       shortShipmentReason: "Stok kain habis",
