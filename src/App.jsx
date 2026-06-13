@@ -3713,6 +3713,7 @@ function rateDocId(productType, model, process) {
         const batchOrderSummaries = [];
         const batchItems = [];
         const batchShipmentIds = [];
+        const ongkirAmount = Number(kirimForm.ongkir || 0); // di luar for loop agar tersedia saat buat shipment_batch
         for (const row of orderRows) {
           const orderSnap = await transaction.get(row.orderRef);
           if (!orderSnap.exists()) throw new Error(`Order ${row.order.invoice || row.order.id} tidak ditemukan`);
@@ -3754,7 +3755,6 @@ function rateDocId(productType, model, process) {
             };
           });
 
-          const ongkirAmount = Number(kirimForm.ongkir || 0);
           // Ongkir dibagi proporsional ke tiap order agar tidak dobel di Gallery Kerudung.
           // Kalau hanya 1 order, seluruh ongkir masuk ke order itu.
           // Kalau multi-order, ongkir dibagi rata (bisa disesuaikan ke proporsi nilai jika perlu).
@@ -7402,7 +7402,7 @@ function rateDocId(productType, model, process) {
                       return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
                     }, 0);
                     const sisa = Math.max(0, qtyPesan - sudahKirim);
-                    return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                    return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx, price: Number(it.price || 0) };
                   }).filter((it) => Number(it.qtyKirim || 0) > 0);
                 });
                 const first = customerOrders[0];
@@ -7450,7 +7450,7 @@ function rateDocId(productType, model, process) {
                                 return sum + Number(found?.qty ?? found?.shippedQty ?? found?.qtyKirim ?? 0);
                               }, 0);
                               const sisa = Math.max(0, qtyPesan - sudahKirim);
-                              return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx };
+                              return { orderId: p.id, invoice: p.invoice || "", customer: p.customer || "", nama: it.name || p.item || "", qtyPesan, qtyKirim: sisa, itemIndex: idx, price: Number(it.price || 0) };
                             }).filter((it) => Number(it.qtyKirim || 0) > 0);
                           });
                           setKirimForm((f) => ({ ...f, orderIds: nextIds, pesananId: nextIds[0] || "", items: nextItems.length > 0 ? nextItems : [{ nama: "", qtyPesan: 0, qtyKirim: 0 }] }));
@@ -7465,16 +7465,21 @@ function rateDocId(productType, model, process) {
             <Input label="Tanggal Kirim" type="date" value={kirimForm.tanggalKirim} onChange={(v) => setKirimForm((f) => ({ ...f, tanggalKirim: v }))} />
             <Input label="Penerima" value={kirimForm.penerima} onChange={(v) => setKirimForm((f) => ({ ...f, penerima: v }))} />
             <Input label="Ekspedisi" value={kirimForm.ekspedisi} onChange={(v) => setKirimForm((f) => ({ ...f, ekspedisi: v }))} placeholder="JNE, J&T, Gojek" />
-            <Input
-              label="Ongkos Kirim (Rp)"
-              type="number"
-              value={kirimForm.ongkir === 0 ? "" : String(kirimForm.ongkir)}
-              onChange={(v) => {
-                const raw = v === "" ? "" : v;
-                setKirimForm((f) => ({ ...f, ongkir: raw === "" ? 0 : Math.max(0, Number(raw) || 0) }));
-              }}
-              placeholder="0 jika gratis ongkir"
-            />
+            <div className="space-y-1">
+              <label className="text-sm font-bold" style={{ color: "#9333ea" }}>Ongkos Kirim (Rp)</label>
+              <input
+                inputMode="numeric"
+                type="text"
+                value={kirimForm.ongkir === 0 ? "" : String(kirimForm.ongkir)}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^0-9]/g, "");
+                  setKirimForm((f) => ({ ...f, ongkir: raw === "" ? 0 : Math.max(0, Number(raw)) }));
+                }}
+                placeholder="0 jika gratis ongkir"
+                className="w-full px-4 py-3 outline-none text-base"
+                style={{ borderRadius: 14, border: "1.5px solid #f9a8d4", background: "#fdf2f8", color: "#2d1b69" }}
+              />
+            </div>
             {kirimForm.items.map((item, idx) => (
               <div key={idx} className="rounded-2xl p-3" style={{ background: "#fdf2f8" }}>
                 {(item.invoice || item.customer) && <div className="mb-2 text-xs font-bold" style={{ color: "#7c3aed" }}>{item.invoice || "Pesanan"} · {item.customer || kirimForm.penerima}</div>}
