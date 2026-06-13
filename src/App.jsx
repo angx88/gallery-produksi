@@ -1001,29 +1001,51 @@ function inferProductionStatusFromReality(prod, order, entries, shipmentByOrderI
 }
 
 function orderBaseItems(order) {
+  const raw = order?.raw || {};
   const rawItems = Array.isArray(order?.raw?.items) && order.raw.items.length > 0
     ? order.raw.items
     : Array.isArray(order?.items) && order.items.length > 0
       ? order.items
-      : [{ name: order?.item || "Produk", qty: order?.qty || 0, price: order?.raw?.hargaPcs || order?.raw?.price || 0 }];
+      : [];
 
-  return rawItems.map((it, idx) => {
-    const name = it.name || it.nama || it.item || it.productName || it.model || order?.item || "Produk";
-    const qty = Number(it.qty ?? it.quantity ?? it.jumlah ?? order?.qty ?? 0);
-    const price = Number(it.price ?? it.harga ?? it.hargaPcs ?? order?.raw?.hargaPcs ?? 0);
-    return {
-      itemIndex: idx,
-      name,
-      orderedQty: qty,
-      qty,
-      price,
-      bahanCost: Number(it.bahanCost ?? it.materialCost ?? 0),
-      hppPerPcs: Number(it.hppPerPcs ?? 0),
-      mainMaterial: it.mainMaterial || it.materialName || it.kain || it.namaKain || "",
-      materialQtyPerPcs: Number(it.materialQtyPerPcs ?? it.kebutuhanKainPerPcs ?? it.kebutuhanKain ?? it.kainPerPcs ?? 0),
-      unit: it.unit || it.satuan || "yard",
-    };
-  });
+  if (rawItems.length > 0) {
+    return rawItems.map((it, idx) => {
+      const name = it.name || it.nama || it.item || it.productName || it.model || order?.item || raw.item || "Produk";
+      const qty = Number(it.qty ?? it.quantity ?? it.jumlah ?? order?.qty ?? raw.qty ?? 0);
+      // Baca harga dari semua kemungkinan field — termasuk fallback ke level order
+      const price = Number(
+        it.price ?? it.harga ?? it.hargaJual ?? it.sellingPrice ?? it.unitPrice ?? it.hargaSatuan ?? it.hargaPcs ??
+        raw.hargaPcs ?? raw.price ?? raw.hargaJual ?? raw.sellingPrice ?? raw.unitPrice ?? 0
+      );
+      return {
+        itemIndex: idx,
+        name,
+        orderedQty: qty,
+        qty,
+        price,
+        bahanCost: Number(it.bahanCost ?? it.materialCost ?? 0),
+        hppPerPcs: Number(it.hppPerPcs ?? 0),
+        mainMaterial: it.mainMaterial || it.materialName || it.kain || it.namaKain || "",
+        materialQtyPerPcs: Number(it.materialQtyPerPcs ?? it.kebutuhanKainPerPcs ?? it.kebutuhanKain ?? it.kainPerPcs ?? 0),
+        unit: it.unit || it.satuan || "yard",
+      };
+    });
+  }
+
+  // Fallback: order lama tanpa items array — pakai hargaPcs level order
+  const fallbackPrice = Number(raw.hargaPcs ?? raw.price ?? raw.hargaJual ?? raw.sellingPrice ?? raw.unitPrice ?? raw.hargaSatuan ?? 0);
+  return [{
+    itemIndex: 0,
+    name: order?.item || raw.item || raw.productName || "Produk",
+    orderedQty: Number(order?.qty ?? raw.qty ?? 0),
+    qty: Number(order?.qty ?? raw.qty ?? 0),
+    price: fallbackPrice,
+    bahanCost: 0,
+    hppPerPcs: 0,
+    mainMaterial: "",
+    materialQtyPerPcs: 0,
+    unit: "yard",
+  }];
 }
 
 function safeMaterial(d) {
