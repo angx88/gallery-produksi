@@ -6853,6 +6853,43 @@ function rateDocId(productType, model, process) {
 
             {/* ── REKAP PENGIRIMAN ── */}
             {(() => {
+              // Bangun lookup: groupId → { ongkir, total } dari order.deliveries
+              // Total dihitung dari qty terkirim × harga order.items (harga dari Gallery Kerudung)
+              const groupTotals = {};
+              orders.forEach((order) => {
+                const rawOrder = order.raw || order;
+                const deliveries = Array.isArray(rawOrder.deliveries) ? rawOrder.deliveries : [];
+                const orderItems = Array.isArray(rawOrder.items) && rawOrder.items.length > 0
+                  ? rawOrder.items
+                  : [];
+
+                deliveries.forEach((d) => {
+                  const gid = d.groupId || d.noteNumber || "";
+                  if (!gid) return;
+                  const ongkir = Number(d.ongkir || d.shippingCost || 0);
+
+                  // Hitung total dari qty terkirim × harga order.items
+                  let itemsTotal = 0;
+                  const dItems = Array.isArray(d.items) ? d.items : [];
+                  dItems.forEach((dItem) => {
+                    const shippedQty = Number(dItem.shippedQty || dItem.qty || 0);
+                    if (shippedQty <= 0) return;
+                    // Cari harga dari order.items berdasarkan nama atau itemIndex
+                    const matched = orderItems.find((oi, idx) =>
+                      (dItem.itemIndex !== undefined ? Number(dItem.itemIndex) === idx : false) ||
+                      (oi.name && dItem.name && oi.name.toLowerCase().trim() === dItem.name.toLowerCase().trim())
+                    );
+                    const price = Number(matched?.price || matched?.harga || dItem.price || dItem.harga || 0);
+                    itemsTotal += shippedQty * price;
+                  });
+
+                  const total = itemsTotal + ongkir;
+                  if (!groupTotals[gid]) groupTotals[gid] = { ongkir: 0, total: 0 };
+                  groupTotals[gid].ongkir += ongkir;
+                  groupTotals[gid].total += total;
+                });
+              });
+
               // Filter shipments sesuai periode rekap
               const rekapShipments = shipments
                 .filter((s) => {
@@ -6861,11 +6898,18 @@ function rateDocId(productType, model, process) {
                   if (rekapSampai && s.tanggalKirim > rekapSampai) return false;
                   return true;
                 })
+                .map((s) => {
+                  const gid = s.raw?.groupId || s.raw?.noteNumber || "";
+                  const gt = groupTotals[gid] || {};
+                  const ongkir = gt.ongkir || Number(s.raw?.ongkir || s.raw?.shippingCost || 0);
+                  const total = gt.total || Number(s.raw?.total || s.raw?.totalTagihan || s.raw?.totalTagihanBatch || 0);
+                  return { ...s, _ongkir: ongkir, _total: total };
+                })
                 .sort((a, b) => (a.tanggalKirim > b.tanggalKirim ? -1 : 1));
 
               const grandQty = rekapShipments.reduce((s, x) => s + Number(x.totalKirim || 0), 0);
-              const grandOngkir = rekapShipments.reduce((s, x) => s + Number(x.raw?.ongkir || x.raw?.shippingCost || 0), 0);
-              const grandTotal = rekapShipments.reduce((s, x) => s + Number(x.raw?.total || x.raw?.totalTagihan || 0), 0);
+              const grandOngkir = rekapShipments.reduce((s, x) => s + x._ongkir, 0);
+              const grandTotal = rekapShipments.reduce((s, x) => s + x._total, 0);
 
               return (
                 <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #bfdbfe" }}>
@@ -6908,8 +6952,8 @@ function rateDocId(productType, model, process) {
                           </thead>
                           <tbody>
                             {rekapShipments.map((s, idx) => {
-                              const ongkir = Number(s.raw?.ongkir || s.raw?.shippingCost || 0);
-                              const total = Number(s.raw?.total || s.raw?.totalTagihan || 0);
+                              const ongkir = s._ongkir;
+                              const total = s._total;
                               const produkNama = s.items.length > 0
                                 ? s.items.map((it) => it.nama).filter(Boolean).join(", ")
                                 : s.produk || "-";
