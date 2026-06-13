@@ -1499,6 +1499,7 @@ export default function App() {
   const [productionEntries, setProductionEntries] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [shipments, setShipments] = useState([]);
+  const [shipmentBatches, setShipmentBatches] = useState([]);
   const [payrollExpenses, setPayrollExpenses] = useState([]);
   const [gajianHistory, setGajianHistory] = useState([]);
   const [showFormGajianLama, setShowFormGajianLama] = useState(false);
@@ -1540,6 +1541,9 @@ export default function App() {
     catatan: "",
   });
   const [modeKoreksi, setModeKoreksi] = useState(false); // izinkan input ulang untuk order selesai
+  const [activeRekapTab, setActiveRekapTab] = useState("gaji"); // sub-tab rekap: gaji | pengiriman
+  const [editOngkirBatch, setEditOngkirBatch] = useState(null); // {id, groupId, ongkir}
+  const [editOngkirValue, setEditOngkirValue] = useState("");
 
 
   const resetProdForm = React.useCallback(() => {
@@ -1720,6 +1724,15 @@ export default function App() {
     });
   }, [writeCachedData]);
 
+  const refreshShipmentBatches = React.useCallback(() => {
+    return getDocs(collection(db, "shipment_batches")).then((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setShipmentBatches(list);
+      writeCachedData("shipment_batches", list);
+      return list;
+    });
+  }, [writeCachedData]);
+
   const refreshKasbon = React.useCallback(() => {
     return getDocs(collection(db, C.KASBON)).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -1812,7 +1825,8 @@ export default function App() {
         jobs.push(
           forceRefresh("payroll_expenses", refreshPayroll),
           forceRefresh("gajian_history", refreshGajianHistory),
-          forceRefresh("kasbon", refreshKasbon)
+          forceRefresh("kasbon", refreshKasbon),
+          forceRefresh("shipment_batches", refreshShipmentBatches)
         );
       }
 
@@ -1832,6 +1846,7 @@ export default function App() {
     refreshProduksi,
     refreshProductionEntries,
     refreshShipments,
+    refreshShipmentBatches,
     refreshWorkRates,
     refreshMasterPekerja,
     refreshMaterials,
@@ -1956,8 +1971,9 @@ export default function App() {
       loadOnce("gajian_history", refreshGajianHistory).catch((e) => console.warn("Gagal memuat gajian:", e));
       loadOnce("kasbon", refreshKasbon).catch((e) => console.warn("Gagal memuat kasbon:", e));
       loadOnce("materials", refreshMaterials).catch((e) => console.warn("Gagal memuat kain:", e));
+      loadOnce("shipment_batches", refreshShipmentBatches).catch((e) => console.warn("Gagal memuat batch pengiriman:", e));
     }
-  }, [user, tab, loadOnce, refreshMaterials, refreshWorkRates, refreshMasterPekerja, refreshShipments, refreshPayroll, refreshGajianHistory, refreshKasbon]);
+  }, [user, tab, loadOnce, refreshMaterials, refreshWorkRates, refreshMasterPekerja, refreshShipments, refreshShipmentBatches, refreshPayroll, refreshGajianHistory, refreshKasbon]);
 
 
   // PERFORMA: debounce search 250ms agar tidak filter ulang semua data
@@ -2618,6 +2634,40 @@ export default function App() {
       catatan: "Pengiriman sisa",
     });
     setModal("kirim");
+  }
+
+  async function saveOngkirBatch(batchId, groupId, newOngkir) {
+    if (!batchId && !groupId) return;
+    setIsSaving(true);
+    try {
+      const ongkirVal = Number(String(newOngkir).replace(/\D/g, "")) || 0;
+      // Update semua shipment_batches dengan groupId yang sama
+      const batchSnaps = await getDocs(collection(db, "shipment_batches"));
+      const wb = writeBatch(db);
+      let updated = 0;
+      batchSnaps.forEach((docSnap) => {
+        const d = docSnap.data();
+        const sameGroup = groupId && (d.groupId === groupId || d.noteNumber === groupId);
+        const sameId = !groupId && docSnap.id === batchId;
+        if (sameGroup || sameId) {
+          wb.update(doc(db, "shipment_batches", docSnap.id), { ongkir: ongkirVal, updatedAt: new Date().toISOString() });
+          updated++;
+        }
+      });
+      if (updated === 0 && batchId) {
+        await updateDoc(doc(db, "shipment_batches", batchId), { ongkir: ongkirVal, updatedAt: new Date().toISOString() });
+      } else {
+        await wb.commit();
+      }
+      setEditOngkirBatch(null);
+      setEditOngkirValue("");
+      await refreshDataSaatIni();
+      showToast(`✅ Ongkir berhasil disimpan: Rp ${ongkirVal.toLocaleString("id-ID")}`, 3000);
+    } catch (err) {
+      alert("Gagal simpan ongkir: " + err.message);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function hapusShipment(shipment) {
@@ -6417,10 +6467,81 @@ function rateDocId(productType, model, process) {
 
             {/* Sub-tab Rekap */}
             <div className="flex rounded-2xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
+              {[{ id: "gaji", label: "💰 Rekap Gaji" }, { id: "pengiriman", label: "🚚 Daftar Pengiriman" }].map((t) => (
+                <button key={t.id} type="button" onClick={() => setActiveRekapTab(t.id)}
+                  className="flex-1 py-2 text-xs font-bold transition-colors"
+                  style={{ background: activeRekapTab === t.id ? "#7c3aed" : "#f5f3ff", color: activeRekapTab === t.id ? "#fff" : "#7c3aed" }}>
+                  {t.label}
+                </button>
+              ))}
             </div>
 
+            {/* ── Daftar Pengiriman ── */}
+            {activeRekapTab === "pengiriman" && (() => {
+              // Kelompokkan shipment_batches per groupId
+              const groupMap = new Map();
+              shipmentBatches.forEach((b) => {
+                const gid = b.groupId || b.noteNumber || b.id;
+                if (!groupMap.has(gid)) {
+                  groupMap.set(gid, { gid, batches: [], tanggal: b.tanggalKirim || b.date || "", ekspedisi: b.ekspedisi || b.courier || b.catatan || "-", ongkir: Number(b.ongkir ?? b.shippingCost ?? 0), totalPcs: 0, orders: [] });
+                }
+                const g = groupMap.get(gid);
+                if (!g.tanggal && (b.tanggalKirim || b.date)) g.tanggal = b.tanggalKirim || b.date;
+                if (g.ongkir === 0) g.ongkir = Number(b.ongkir ?? b.shippingCost ?? 0);
+                if (g.ekspedisi === "-" && (b.ekspedisi || b.courier || b.catatan)) g.ekspedisi = b.ekspedisi || b.courier || b.catatan || "-";
+                (b.items || []).forEach((it) => { g.totalPcs += Number(it.shippedQty ?? it.qtyKirim ?? it.qty ?? 0); });
+                if (b.orderId && !g.orders.includes(b.orderId)) g.orders.push(b.orderId);
+              });
+              const groups = [...groupMap.values()].sort((a, b) => (b.tanggal || "").localeCompare(a.tanggal || ""));
+              return (
+                <div className="space-y-2">
+                  {groups.length === 0 && <div className="text-center text-sm py-8" style={{ color: "#94a3b8" }}>Belum ada data pengiriman.</div>}
+                  {groups.map((g) => (
+                    <div key={g.gid} className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #e9d5ff" }}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-bold" style={{ color: "#1e293b" }}>
+                            {g.tanggal ? new Date(g.tanggal + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" }) : "-"}
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: "#64748b" }}>🚌 {g.ekspedisi} · {g.totalPcs.toLocaleString("id-ID")} pcs · {g.orders.length} pesanan</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs" style={{ color: "#94a3b8" }}>Ongkir</div>
+                          <div className="text-sm font-bold" style={{ color: g.ongkir > 0 ? "#059669" : "#ef4444" }}>
+                            {g.ongkir > 0 ? `Rp ${g.ongkir.toLocaleString("id-ID")}` : "Belum diisi"}
+                          </div>
+                        </div>
+                      </div>
+                      {editOngkirBatch?.gid === g.gid ? (
+                        <div className="flex gap-2 items-center">
+                          <input type="number" inputMode="numeric" placeholder="Nominal ongkir"
+                            value={editOngkirValue}
+                            onChange={(e) => setEditOngkirValue(e.target.value)}
+                            className="flex-1 rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
+                          <button type="button" disabled={isSaving}
+                            onClick={() => saveOngkirBatch(null, g.gid, editOngkirValue)}
+                            className="rounded-xl px-4 py-2 text-xs font-bold text-white"
+                            style={{ background: "#059669" }}>Simpan</button>
+                          <button type="button" onClick={() => { setEditOngkirBatch(null); setEditOngkirValue(""); }}
+                            className="rounded-xl px-3 py-2 text-xs font-bold"
+                            style={{ background: "#f1f5f9", color: "#64748b" }}>Batal</button>
+                        </div>
+                      ) : (
+                        <button type="button"
+                          onClick={() => { setEditOngkirBatch({ gid: g.gid }); setEditOngkirValue(g.ongkir > 0 ? String(g.ongkir) : ""); }}
+                          className="w-full rounded-xl py-2 text-xs font-bold"
+                          style={{ background: "#f5f3ff", color: "#7c3aed" }}>
+                          ✏️ Edit Ongkir
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
             {/* ── Rekap Gaji ── */}
-            {true && (<>
+            {activeRekapTab === "gaji" && (<>
             {/* Form Input Riwayat Gajian Lama */}
             <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
               <button
