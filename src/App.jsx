@@ -6850,6 +6850,96 @@ function rateDocId(productType, model, process) {
                 })}
               </div>
             )}
+
+            {/* ── REKAP PENGIRIMAN ── */}
+            {(() => {
+              // Filter shipments sesuai periode rekap
+              const rekapShipments = shipments
+                .filter((s) => {
+                  if (!s.tanggalKirim) return false;
+                  if (rekapDari && s.tanggalKirim < rekapDari) return false;
+                  if (rekapSampai && s.tanggalKirim > rekapSampai) return false;
+                  return true;
+                })
+                .sort((a, b) => (a.tanggalKirim > b.tanggalKirim ? -1 : 1));
+
+              const grandQty = rekapShipments.reduce((s, x) => s + Number(x.totalKirim || 0), 0);
+              const grandOngkir = rekapShipments.reduce((s, x) => s + Number(x.raw?.ongkir || x.raw?.shippingCost || 0), 0);
+              const grandTotal = rekapShipments.reduce((s, x) => s + Number(x.raw?.total || x.raw?.totalTagihan || 0), 0);
+
+              return (
+                <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #bfdbfe" }}>
+                  <div className="text-sm font-bold" style={{ color: "#1d4ed8" }}>🚚 Rekap Pengiriman</div>
+
+                  {rekapShipments.length === 0 ? (
+                    <div className="text-center text-slate-400 py-6 text-sm">
+                      {rekapDari && rekapSampai ? "Tidak ada pengiriman di periode ini." : "Pilih periode dulu untuk melihat rekap pengiriman."}
+                    </div>
+                  ) : (
+                    <>
+                      {/* Summary */}
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div className="rounded-xl bg-blue-50 p-2 text-center">
+                          <div className="text-slate-400">Total Kirim</div>
+                          <div className="font-bold text-blue-700">{grandQty.toLocaleString("id-ID")} pcs</div>
+                        </div>
+                        <div className="rounded-xl bg-orange-50 p-2 text-center">
+                          <div className="text-slate-400">Total Ongkir</div>
+                          <div className="font-bold text-orange-600">Rp {grandOngkir.toLocaleString("id-ID")}</div>
+                        </div>
+                        <div className="rounded-xl bg-emerald-50 p-2 text-center">
+                          <div className="text-slate-400">Total Tagihan</div>
+                          <div className="font-bold text-emerald-700">Rp {grandTotal.toLocaleString("id-ID")}</div>
+                        </div>
+                      </div>
+
+                      {/* Tabel */}
+                      <div className="overflow-x-auto rounded-xl" style={{ border: "1px solid #bfdbfe" }}>
+                        <table className="w-full text-xs" style={{ minWidth: 560 }}>
+                          <thead>
+                            <tr style={{ background: "#1d4ed8", color: "#fff" }}>
+                              <th className="px-3 py-2 text-left font-bold">Tanggal</th>
+                              <th className="px-3 py-2 text-left font-bold">Customer</th>
+                              <th className="px-3 py-2 text-left font-bold">Produk</th>
+                              <th className="px-3 py-2 text-right font-bold">Qty</th>
+                              <th className="px-3 py-2 text-right font-bold">Ongkir</th>
+                              <th className="px-3 py-2 text-right font-bold">Total Tagihan</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rekapShipments.map((s, idx) => {
+                              const ongkir = Number(s.raw?.ongkir || s.raw?.shippingCost || 0);
+                              const total = Number(s.raw?.total || s.raw?.totalTagihan || 0);
+                              const produkNama = s.items.length > 0
+                                ? s.items.map((it) => it.nama).filter(Boolean).join(", ")
+                                : s.produk || "-";
+                              return (
+                                <tr key={s.id} style={{ background: idx % 2 === 0 ? "#fff" : "#eff6ff" }}>
+                                  <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{s.tanggalKirim}</td>
+                                  <td className="px-3 py-2 font-semibold text-slate-800">{s.customer || "-"}</td>
+                                  <td className="px-3 py-2 text-slate-600">{produkNama}</td>
+                                  <td className="px-3 py-2 text-right font-semibold text-blue-700">{Number(s.totalKirim || 0).toLocaleString("id-ID")}</td>
+                                  <td className="px-3 py-2 text-right text-orange-600">{ongkir > 0 ? `Rp ${ongkir.toLocaleString("id-ID")}` : "-"}</td>
+                                  <td className="px-3 py-2 text-right font-bold text-emerald-700">{total > 0 ? `Rp ${total.toLocaleString("id-ID")}` : "-"}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ background: "#1e3a8a", color: "#fff" }}>
+                              <td className="px-3 py-2 font-bold" colSpan={3}>Grand Total</td>
+                              <td className="px-3 py-2 text-right font-bold">{grandQty.toLocaleString("id-ID")}</td>
+                              <td className="px-3 py-2 text-right font-bold">Rp {grandOngkir.toLocaleString("id-ID")}</td>
+                              <td className="px-3 py-2 text-right font-bold">Rp {grandTotal.toLocaleString("id-ID")}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         );
       })()}
