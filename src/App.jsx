@@ -18,6 +18,7 @@ import {
   collection,
   addDoc,
   getDocs,
+  getDoc,
   updateDoc,
   deleteDoc,
   doc,
@@ -2617,6 +2618,48 @@ export default function App() {
       catatan: "Pengiriman sisa",
     });
     setModal("kirim");
+  }
+
+  async function hapusShipment(shipment) {
+    const confirmed = await showConfirm(`Hapus pengiriman ${shipment.tanggalKirim || "-"} untuk ${shipment.customer || "-"}? Data di Gallery Kerudung juga akan diperbarui.`, { okLabel: "Ya, Hapus", okStyle: "danger", icon: "🗑️" });
+    if (!confirmed) return;
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      // Hapus dari collection shipments
+      batch.delete(doc(db, C.SHIPMENTS, shipment.id));
+
+      // Update order di Gallery Kerudung — hapus delivery yang punya groupId sama
+      const gid = shipment.raw?.groupId || shipment.raw?.noteNumber || "";
+      const orderId = shipment.raw?.orderId || shipment.raw?.pesananId || "";
+      if (orderId && gid) {
+        const orderRef = doc(db, "orders", orderId);
+        const orderSnap = await getDoc(orderRef);
+        if (orderSnap.exists()) {
+          const orderData = orderSnap.data();
+          const deliveries = Array.isArray(orderData.deliveries) ? orderData.deliveries : [];
+          const newDeliveries = deliveries.filter((d) => d.groupId !== gid && d.noteNumber !== gid);
+          // Hitung ulang shippedItems
+          const items = Array.isArray(orderData.items) ? orderData.items : [];
+          const shippedItems = items.map((base) => {
+            const totalShipped = newDeliveries.reduce((sum, d) => {
+              const found = (d.items || []).find((it) => (it.name || "").toLowerCase().trim() === (base.name || "").toLowerCase().trim());
+              return sum + Number(found?.shippedQty || found?.qty || 0);
+            }, 0);
+            return { name: base.name, orderedQty: Number(base.qty || 0), shippedQty: totalShipped, price: Number(base.price || base.hargaPcs || 0) };
+          });
+          batch.update(orderRef, { deliveries: newDeliveries, shippedItems, updatedAt: new Date().toISOString() });
+        }
+      }
+
+      await batch.commit();
+      await refreshData(["shipments"]);
+      showToast("✅ Pengiriman berhasil dihapus.", 3000);
+    } catch (err) {
+      alert("Gagal hapus: " + err.message);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function closeOverDeliveryOrder(order) {
@@ -7026,44 +7069,26 @@ function rateDocId(productType, model, process) {
                       )}
                     </div>
                     {relatedOrder && (
-                      <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="mt-3 grid grid-cols-3 gap-2">
                         {sisa > 0 ? (
-                          <Button
-                            type="button"
-                            onClick={() => openKirimSisaForOrder(relatedOrder)}
-                            className="text-xs"
-                            style={{ background: "linear-gradient(135deg,#0ea5e9,#2563eb)" }}
-                          >
+                          <Button type="button" onClick={() => openKirimSisaForOrder(relatedOrder)} className="text-xs" style={{ background: "linear-gradient(135deg,#0ea5e9,#2563eb)" }}>
                             🚚 Kirim Sisa
                           </Button>
                         ) : lebih > 0 ? (
-                          <Button
-                            type="button"
-                            onClick={() => closeOverDeliveryOrder(relatedOrder)}
-                            disabled={isSaving || relatedOrder.raw?.overDeliveryReviewed || relatedOrder.overDeliveryReviewed}
-                            className="text-xs"
-                            style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}
-                          >
+                          <Button type="button" onClick={() => closeOverDeliveryOrder(relatedOrder)} disabled={isSaving || relatedOrder.raw?.overDeliveryReviewed || relatedOrder.overDeliveryReviewed} className="text-xs" style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}>
                             {relatedOrder.raw?.overDeliveryReviewed || relatedOrder.overDeliveryReviewed ? "✅ Sudah Dicek" : "✅ Tandai Dicek"}
                           </Button>
                         ) : (
-                          <Button
-                            type="button"
-                            onClick={() => openPengirimanForOrder(relatedOrder)}
-                            className="text-xs"
-                            style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
-                          >
+                          <Button type="button" onClick={() => openPengirimanForOrder(relatedOrder)} className="text-xs" style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}>
                             Detail Order
                           </Button>
                         )}
-                        <Button
-                          type="button"
-                          onClick={() => { setPesananOnlyNeedCheck(false); setSearch(relatedOrder.invoice || relatedOrder.customer || ""); setTab("pesanan"); }}
-                          className="text-xs"
-                          style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}
-                        >
+                        <Button type="button" onClick={() => { setPesananOnlyNeedCheck(false); setSearch(relatedOrder.invoice || relatedOrder.customer || ""); setTab("pesanan"); }} className="text-xs" style={{ background: "linear-gradient(135deg,#64748b,#94a3b8)" }}>
                           Buka Pesanan
                         </Button>
+                        <button type="button" onClick={() => hapusShipment(k)} className="rounded-2xl text-xs font-bold py-2" style={{ background: "#fee2e2", color: "#dc2626" }}>
+                          🗑️ Hapus
+                        </button>
                       </div>
                     )}
                   </>
