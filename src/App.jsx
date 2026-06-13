@@ -6371,26 +6371,10 @@ function rateDocId(productType, model, process) {
 
             {/* Sub-tab Rekap */}
             <div className="flex rounded-2xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
-              {[
-                { id: "gaji", label: "💰 Gaji" },
-                { id: "borongan", label: "🧵 Borongan" },
-              ].map((st) => (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => setRekapSubTab(st.id)}
-                  className="flex-1 py-2 text-xs font-bold transition-all"
-                  style={{
-                    background: rekapSubTab === st.id ? "#7c3aed" : "#fff",
-                    color: rekapSubTab === st.id ? "#fff" : "#7c3aed",
-                    borderRight: "1px solid #e9d5ff",
-                  }}
-                >{st.label}</button>
-              ))}
             </div>
 
-            {/* ── SUB-TAB: GAJI ── */}
-            {rekapSubTab === "gaji" && (<>
+            {/* ── Rekap Gaji ── */}
+            {true && (<>
             {/* Form Input Riwayat Gajian Lama */}
             <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
               <button
