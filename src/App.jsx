@@ -2626,12 +2626,24 @@ export default function App() {
     setIsSaving(true);
     try {
       const batch = writeBatch(db);
+      const gid = shipment.raw?.groupId || shipment.raw?.noteNumber || "";
+      const orderId = shipment.raw?.orderId || shipment.raw?.pesananId || "";
+
       // Hapus dari collection shipments
       batch.delete(doc(db, C.SHIPMENTS, shipment.id));
 
+      // Hapus dari shipment_batches yang punya groupId sama
+      if (gid) {
+        const batchSnap = await getDocs(collection(db, C.SHIPMENT_BATCHES));
+        batchSnap.docs.forEach((d) => {
+          const data = d.data();
+          if (data.groupId === gid || data.noteNumber === gid) {
+            batch.delete(d.ref);
+          }
+        });
+      }
+
       // Update order di Gallery Kerudung — hapus delivery yang punya groupId sama
-      const gid = shipment.raw?.groupId || shipment.raw?.noteNumber || "";
-      const orderId = shipment.raw?.orderId || shipment.raw?.pesananId || "";
       if (orderId && gid) {
         const orderRef = doc(db, "orders", orderId);
         const orderSnap = await getDoc(orderRef);
@@ -2639,7 +2651,6 @@ export default function App() {
           const orderData = orderSnap.data();
           const deliveries = Array.isArray(orderData.deliveries) ? orderData.deliveries : [];
           const newDeliveries = deliveries.filter((d) => d.groupId !== gid && d.noteNumber !== gid);
-          // Hitung ulang shippedItems
           const items = Array.isArray(orderData.items) ? orderData.items : [];
           const shippedItems = items.map((base) => {
             const totalShipped = newDeliveries.reduce((sum, d) => {
@@ -2653,7 +2664,7 @@ export default function App() {
       }
 
       await batch.commit();
-      await refreshData(["shipments"]);
+      await refreshData(["shipments", "shipment_batches"]);
       showToast("✅ Pengiriman berhasil dihapus.", 3000);
     } catch (err) {
       alert("Gagal hapus: " + err.message);
