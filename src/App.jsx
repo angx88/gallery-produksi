@@ -1349,6 +1349,7 @@ export default function App() {
   const initialRekapPeriod = useMemo(() => currentSundayToSaturdayPeriod(), []);
   const [rekapDari, setRekapDari] = useState(initialRekapPeriod.dari);
   const [rekapSampai, setRekapSampai] = useState(initialRekapPeriod.sampai);
+  const [rekapSubTab, setRekapSubTab] = useState("gaji"); // gaji | pengiriman | borongan
   const rekapManualPeriodRef = useRef(false);
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -6367,6 +6368,29 @@ function rateDocId(productType, model, process) {
               </div>
             )}
 
+            {/* Sub-tab Rekap */}
+            <div className="flex rounded-2xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
+              {[
+                { id: "gaji", label: "💰 Gaji" },
+                { id: "pengiriman", label: "🚚 Pengiriman" },
+                { id: "borongan", label: "🧵 Borongan" },
+              ].map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() => setRekapSubTab(st.id)}
+                  className="flex-1 py-2 text-xs font-bold transition-all"
+                  style={{
+                    background: rekapSubTab === st.id ? "#7c3aed" : "#fff",
+                    color: rekapSubTab === st.id ? "#fff" : "#7c3aed",
+                    borderRight: "1px solid #e9d5ff",
+                  }}
+                >{st.label}</button>
+              ))}
+            </div>
+
+            {/* ── SUB-TAB: GAJI ── */}
+            {rekapSubTab === "gaji" && (<>
             {/* Form Input Riwayat Gajian Lama */}
             <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
               <button
@@ -6851,6 +6875,9 @@ function rateDocId(productType, model, process) {
               </div>
             )}
 
+            {/* ── SUB-TAB: PENGIRIMAN ── */}
+            </>)}
+            {rekapSubTab === "pengiriman" && (<>
             {/* ── REKAP PENGIRIMAN ── */}
             {(() => {
               // Bangun lookup: groupId → { ongkir, total } dari order.deliveries
@@ -7002,6 +7029,7 @@ function rateDocId(productType, model, process) {
                 </div>
               );
             })()}
+            </>)}
           </div>
         );
       })()}
