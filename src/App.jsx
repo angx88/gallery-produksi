@@ -2664,7 +2664,7 @@ export default function App() {
       }
 
       await batch.commit();
-      await refreshData(["shipments", "shipment_batches"]);
+      await refreshDataSaatIni();
       showToast("✅ Pengiriman berhasil dihapus.", 3000);
     } catch (err) {
       alert("Gagal hapus: " + err.message);
