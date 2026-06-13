@@ -3450,9 +3450,7 @@ function rateDocId(productType, model, process) {
         ? processQtyForOrder(order.id, entryForm.process)
         : processQtyForOrderModel(order.id, entryForm.process, cleanModel);
       const nextQty = alreadyQty + entryQty;
-      if (limit > 0 && nextQty > limit) {
-        return showToast(`⚠️ Qty ${entryForm.process} melebihi batas. Batas: ${limit} pcs, sudah input: ${alreadyQty} pcs, input baru: ${entryForm.qty} pcs.`, 5000);
-      }
+
     }
 
     const entryId = `entry_${safeDocId(cleanEmployeeName, "worker")}_${safeDocId(entryForm.orderId || "umum", "order")}_${safeDocId(entryForm.process, "process")}_${safeDocId(cleanModel || "all", "model")}_${safeDocId(entryForm.tanggal, "date")}`;
@@ -3507,9 +3505,7 @@ function rateDocId(productType, model, process) {
             .filter((w) => normalizeProcessKey(w.process) === processKey)
             .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
             .reduce((sum, w) => sum + Number(w.qty || 0), 0);
-          if (limit > 0 && alreadyInWorkers + Number(entryPayload.qty || 0) > limit) {
-            throw new Error(`Qty ${entryPayload.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${entryPayload.qty} pcs.`);
-          }
+
         }
 
         transaction.set(entryRef, entryPayload);
@@ -4073,9 +4069,7 @@ function rateDocId(productType, model, process) {
             .reduce((sum, e) => sum + Number(e.qty || 0), 0)
         : processQtyForOrderModel(editOrder.id, editEntryModal.process, nextModel, editEntryModal.id);
       const combinedQty = alreadyQty + nextQty;
-      if (limit > 0 && combinedQty > limit) {
-        return showToast(`⚠️ Qty ${editEntryModal.process} melebihi batas. Batas: ${limit} pcs, sudah input lain: ${alreadyQty} pcs, qty baru: ${editEntryForm.qty} pcs.`, 5000);
-      }
+
     }
 
     const entryRef = doc(db, C.PRODUCTION_ENTRIES, editEntryModal.id);
@@ -4136,9 +4130,7 @@ function rateDocId(productType, model, process) {
                 .filter((w) => normalizeProcessKey(w.process) === processKey)
                 .filter((w) => generalProcess || normalizeModelKey(w.model || "") === modelKey)
                 .reduce((sum, w) => sum + Number(w.qty || 0), 0);
-              if (limit > 0 && alreadyInWorkers + Number(updates.qty || 0) > limit) {
-                throw new Error(`Qty ${liveEntry.process} melebihi batas produksi. Batas ${limit} pcs, sudah input ${alreadyInWorkers} pcs, input baru ${updates.qty} pcs.`);
-              }
+
             }
             const nextWorkers = liveWorkers.map((w) => {
               if (w.entryId !== liveEntry.id) return w;
