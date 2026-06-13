@@ -6855,17 +6855,17 @@ function rateDocId(productType, model, process) {
             {(() => {
               // Bangun lookup: groupId → { ongkir, total } dari order.deliveries
               // Total dihitung dari qty terkirim × harga order.items (harga dari Gallery Kerudung)
-              const groupTotals = {};
+              const groupTotals = {}; // key: groupId
+              const dateTotals = {}; // key: `${tanggal}__${customer}` untuk data lama tanpa groupId
+
               orders.forEach((order) => {
                 const rawOrder = order.raw || order;
                 const deliveries = Array.isArray(rawOrder.deliveries) ? rawOrder.deliveries : [];
                 const orderItems = Array.isArray(rawOrder.items) && rawOrder.items.length > 0
-                  ? rawOrder.items
-                  : [];
+                  ? rawOrder.items : [];
+                const customer = (rawOrder.customer || order.customer || "").toLowerCase().trim();
 
                 deliveries.forEach((d) => {
-                  const gid = d.groupId || d.noteNumber || "";
-                  if (!gid) return;
                   const ongkir = Number(d.ongkir || d.shippingCost || 0);
 
                   // Hitung total dari qty terkirim × harga order.items
@@ -6874,7 +6874,6 @@ function rateDocId(productType, model, process) {
                   dItems.forEach((dItem) => {
                     const shippedQty = Number(dItem.shippedQty || dItem.qty || 0);
                     if (shippedQty <= 0) return;
-                    // Cari harga dari order.items berdasarkan nama atau itemIndex
                     const matched = orderItems.find((oi, idx) =>
                       (dItem.itemIndex !== undefined ? Number(dItem.itemIndex) === idx : false) ||
                       (oi.name && dItem.name && oi.name.toLowerCase().trim() === dItem.name.toLowerCase().trim())
@@ -6884,9 +6883,22 @@ function rateDocId(productType, model, process) {
                   });
 
                   const total = itemsTotal + ongkir;
-                  if (!groupTotals[gid]) groupTotals[gid] = { ongkir: 0, total: 0 };
-                  groupTotals[gid].ongkir += ongkir;
-                  groupTotals[gid].total += total;
+
+                  // Data baru: pakai groupId
+                  const gid = d.groupId || d.noteNumber || "";
+                  if (gid) {
+                    if (!groupTotals[gid]) groupTotals[gid] = { ongkir: 0, total: 0 };
+                    groupTotals[gid].ongkir += ongkir;
+                    groupTotals[gid].total += total;
+                  } else {
+                    // Data lama tanpa groupId: pakai tanggal + customer
+                    const tgl = d.date || d.tanggal || d.tanggalKirim || "";
+                    if (!tgl) return;
+                    const dateKey = `${tgl}__${customer}`;
+                    if (!dateTotals[dateKey]) dateTotals[dateKey] = { ongkir: 0, total: 0 };
+                    dateTotals[dateKey].ongkir += ongkir;
+                    dateTotals[dateKey].total += total;
+                  }
                 });
               });
 
@@ -6900,9 +6912,15 @@ function rateDocId(productType, model, process) {
                 })
                 .map((s) => {
                   const gid = s.raw?.groupId || s.raw?.noteNumber || "";
-                  const gt = groupTotals[gid] || {};
-                  const ongkir = gt.ongkir || Number(s.raw?.ongkir || s.raw?.shippingCost || 0);
-                  const total = gt.total || Number(s.raw?.total || s.raw?.totalTagihan || s.raw?.totalTagihanBatch || 0);
+                  const gt = groupTotals[gid] || null;
+                  // Fallback untuk data lama: pakai tanggal + customer
+                  const customer = (s.customer || "").toLowerCase().trim();
+                  const tgl = s.tanggalKirim || "";
+                  const dateKey = `${tgl}__${customer}`;
+                  const dt = !gt ? (dateTotals[dateKey] || null) : null;
+                  const source = gt || dt || {};
+                  const ongkir = source.ongkir || Number(s.raw?.ongkir || s.raw?.shippingCost || 0);
+                  const total = source.total || Number(s.raw?.total || s.raw?.totalTagihan || s.raw?.totalTagihanBatch || 0);
                   return { ...s, _ongkir: ongkir, _total: total };
                 })
                 .sort((a, b) => (a.tanggalKirim > b.tanggalKirim ? -1 : 1));
