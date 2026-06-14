@@ -22,8 +22,6 @@ import {
   updateDoc,
   deleteDoc,
   doc,
-  query,
-  where,
   runTransaction,
   writeBatch,
 } from "firebase/firestore";
@@ -1936,6 +1934,7 @@ export default function App() {
           loadOnce("work_rates", refreshWorkRates),
           loadOnce("master_pekerja", refreshMasterPekerja),
           loadOnce("shipments", refreshShipments),
+          loadOnce("shipment_batches", refreshShipmentBatches),
         ]);
       } catch (e) {
         if (!cancelled) {
@@ -1946,7 +1945,7 @@ export default function App() {
     })();
 
     return () => { cancelled = true; };
-  }, [user, loadOnce, refreshOrders, refreshProduksi, refreshProductionEntries, refreshWorkRates, refreshMasterPekerja, refreshShipments, showToast]);
+  }, [user, loadOnce, refreshOrders, refreshProduksi, refreshProductionEntries, refreshWorkRates, refreshMasterPekerja, refreshShipments, refreshShipmentBatches, showToast]);
 
   useEffect(() => {
     if (!user) return;
@@ -2641,16 +2640,14 @@ export default function App() {
     setIsSaving(true);
     try {
       const ongkirVal = Number(String(newOngkir).replace(/\D/g, "")) || 0;
-      // Update semua shipment_batches dengan groupId yang sama
-      const batchSnaps = await getDocs(collection(db, "shipment_batches"));
+      // Pakai state shipmentBatches — tidak perlu getDocs ulang ke Firestore
       const wb = writeBatch(db);
       let updated = 0;
-      batchSnaps.forEach((docSnap) => {
-        const d = docSnap.data();
-        const sameGroup = groupId && (d.groupId === groupId || d.noteNumber === groupId);
-        const sameId = !groupId && docSnap.id === batchId;
+      (shipmentBatches || []).forEach((b) => {
+        const sameGroup = groupId && (b.groupId === groupId || b.noteNumber === groupId);
+        const sameId = !groupId && b.id === batchId;
         if (sameGroup || sameId) {
-          wb.update(doc(db, "shipment_batches", docSnap.id), { ongkir: ongkirVal, updatedAt: new Date().toISOString() });
+          wb.update(doc(db, "shipment_batches", b.id), { ongkir: ongkirVal, updatedAt: new Date().toISOString() });
           updated++;
         }
       });
@@ -2661,7 +2658,7 @@ export default function App() {
       }
       setEditOngkirBatch(null);
       setEditOngkirValue("");
-      await refreshDataSaatIni();
+      await refreshShipmentBatches(); // targeted — hanya refresh collection yang berubah
       showToast(`✅ Ongkir berhasil disimpan: Rp ${ongkirVal.toLocaleString("id-ID")}`, 3000);
     } catch (err) {
       alert("Gagal simpan ongkir: " + err.message);
@@ -2682,13 +2679,11 @@ export default function App() {
       // Hapus dari collection shipments
       batch.delete(doc(db, C.SHIPMENTS, shipment.id));
 
-      // Hapus dari shipment_batches yang punya groupId sama
+      // Hapus dari shipment_batches yang punya groupId sama — pakai state, tidak perlu getDocs
       if (gid) {
-        const batchSnap = await getDocs(collection(db, C.SHIPMENT_BATCHES));
-        batchSnap.docs.forEach((d) => {
-          const data = d.data();
-          if (data.groupId === gid || data.noteNumber === gid) {
-            batch.delete(d.ref);
+        (shipmentBatches || []).forEach((b) => {
+          if (b.groupId === gid || b.noteNumber === gid) {
+            batch.delete(doc(db, C.SHIPMENT_BATCHES, b.id));
           }
         });
       }
@@ -2714,7 +2709,7 @@ export default function App() {
       }
 
       await batch.commit();
-      await refreshDataSaatIni();
+      await Promise.all([refreshShipments(), refreshOrders(), refreshShipmentBatches()]);
       showToast("✅ Pengiriman berhasil dihapus.", 3000);
     } catch (err) {
       alert("Gagal hapus: " + err.message);
@@ -3251,13 +3246,8 @@ function rateDocId(productType, model, process) {
 
     setIsSaving(true);
     try {
-      // Pengaman tambahan: cek langsung ke Firestore, bukan hanya state lokal.
-      // Ini mencegah duplikat kalau data lokal belum refresh atau pernah ada dokumen produksi lama dengan ID berbeda.
-      const existingProduksiSnap = await getDocs(query(collection(db, C.PRODUKSI), where("orderId", "==", order.id)));
-      if (!existingProduksiSnap.empty) {
-        await refreshProduksi();
-        throw new Error("Pesanan ini sudah masuk produksi. Data produksi tidak dibuat dobel.");
-      }
+      // Cek duplikat dari state lokal sudah dilakukan di line atas (produksiByOrderId.has).
+      // runTransaction di bawah menjadi pengaman terakhir di level Firestore.
 
       await runTransaction(db, async (transaction) => {
         const prodSnap = await transaction.get(prodRef);
@@ -4120,19 +4110,19 @@ function rateDocId(productType, model, process) {
     try {
       if (type === "rate") { await deleteDoc(doc(db, C.WORK_RATES, id)); await refreshWorkRates(); }
       if (type === "entry") {
-        const payrollSnap = await getDocs(query(collection(db, C.PAYROLL_EXPENSES), where("entryId", "==", id)));
+        // Pakai state lokal — tidak perlu getDocs ke Firestore
+        const relatedPayroll = (payrollExpenses || []).filter((p) => p.entryId === id);
         const batch = writeBatch(db);
         batch.delete(doc(db, C.PRODUCTION_ENTRIES, id));
-        payrollSnap.docs.forEach((d) => batch.delete(d.ref));
+        relatedPayroll.forEach((p) => batch.delete(doc(db, C.PAYROLL_EXPENSES, p.id)));
 
         // Hapus dokumen PRODUKSI terkait jika tidak ada entry lain yang masih memakainya
         const deletedEntry = confirmDelete?.entry;
         const produksiId = deletedEntry?.produksiId;
         if (produksiId) {
-          const siblingsSnap = await getDocs(
-            query(collection(db, C.PRODUCTION_ENTRIES), where("produksiId", "==", produksiId))
+          const remainingSiblings = (productionEntries || []).filter(
+            (e) => e.id !== id && (e.produksiId === produksiId || e.productionId === produksiId)
           );
-          const remainingSiblings = siblingsSnap.docs.filter((d) => d.id !== id);
           if (remainingSiblings.length === 0) {
             batch.delete(doc(db, C.PRODUKSI, produksiId));
           }
@@ -5495,13 +5485,13 @@ function rateDocId(productType, model, process) {
 
       <div className="grid grid-cols-5 gap-2 p-4">
         {[
-          { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋", onClick: () => { clearFocusedData(); setPesananOnlyNeedCheck(false); setSearch(""); setTab("pesanan"); } },
-          { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "⏳", onClick: () => { clearFocusedData(); setProduksiOnlyBelumSelesai(true); setSearch(""); setTab("produksi"); } },
-          { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "🧵", onClick: () => { clearFocusedData(); setProduksiOnlyBelumSelesai(false); setSearch(""); setTab("produksi"); } },
-          { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "✅", onClick: () => { clearFocusedData(); setPesananOnlyNeedCheck(false); setSearch("selesai"); setTab("pesanan"); } },
-          { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "🔎", onClick: () => { clearFocusedData(); setPesananOnlyNeedCheck(true); setNeedCheckContextId(""); setSearch(""); setTab("pesanan"); } },
+          { label: "Pesanan", value: stats.pesanan, color: "#6366f1", icon: "📋" },
+          { label: "Belum Produksi", value: stats.belum, color: "#f59e0b", icon: "⏳" },
+          { label: "Sedang", value: stats.proses, color: "#a855f7", icon: "🧵" },
+          { label: "Selesai", value: stats.selesai, color: "#10b981", icon: "✅" },
+          { label: "Perlu Dicek", value: stats.perluDicek, color: stats.perluDicek > 0 ? "#e11d48" : "#94a3b8", icon: "🔎" },
         ].map((s) => (
-          <div key={s.label} onClick={s.onClick} className="rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1px solid #fce7f3", cursor: "pointer" }}>
+          <div key={s.label} className="rounded-2xl p-2 text-center bg-white shadow-sm" style={{ border: "1px solid #fce7f3" }}>
             <div className="text-base">{s.icon}</div>
             <div className="text-lg font-bold" style={{ color: s.color }}>{s.value}</div>
             <div className="text-xs" style={{ color: "#94a3b8" }}>{s.label}</div>
@@ -5557,9 +5547,55 @@ function rateDocId(productType, model, process) {
           </div>
       </div>
 
+      {stats.belum > 0 && (
+        <div className="mx-4 mb-2 rounded-2xl px-4 py-3 flex items-center gap-3"
+          style={{ background: "linear-gradient(135deg,#fef3c7,#fde68a)", border: "1.5px solid #fbbf24" }}>
+          <span className="text-xl">⚠️</span>
+          <div className="flex-1">
+            <div className="text-xs font-bold" style={{ color: "#92400e" }}>{stats.belum} pesanan belum masuk produksi</div>
+            <div className="text-xs" style={{ color: "#b45309" }}>Tambahkan dari tab Produksi</div>
+          </div>
+          <button
+            onClick={() => { setTab("produksi"); setModal("produksi"); }}
+            className="text-xs font-bold px-3 py-1.5 rounded-full text-white"
+            style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
+          >
+            + Tambah
+          </button>
+        </div>
+      )}
 
-
-
+      {stats.perluDicek > 0 && (
+        <div className="mx-4 mb-2 rounded-2xl px-4 py-3"
+          style={{ background: "linear-gradient(135deg,#fff1f2,#fff7ed)", border: "1.5px solid #fb7185" }}>
+          <div className="flex items-start gap-3">
+            <span className="text-xl">🔎</span>
+            <div className="flex-1">
+              <div className="text-xs font-black" style={{ color: "#be123c" }}>{stats.perluDicek} pesanan perlu dicek</div>
+              <div className="text-xs mt-1" style={{ color: "#9f1239" }}>Keterangan ini membantu admin baru memahami kenapa pesanan tidak masuk kategori normal.</div>
+              <div className="mt-2 space-y-1">
+                {ordersPerluDicek.slice(0, 4).map((o) => (
+                  <div key={o.id} className="rounded-xl bg-white px-3 py-2 text-[11px]" style={{ border: "1px solid #fecdd3" }}>
+                    <div className="font-bold" style={{ color: "#2d1b69" }}>{o.customer} · {o.invoice}</div>
+                    <div style={{ color: "#be123c" }}>{o.alasan}</div>
+                  </div>
+                ))}
+                {ordersPerluDicek.length > 4 && (
+                  <div className="text-[11px] font-bold" style={{ color: "#be123c" }}>+ {ordersPerluDicek.length - 4} pesanan lain. Klik Buka untuk melihat daftar khusus pesanan perlu dicek.</div>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => { clearFocusedData(); setPesananOnlyNeedCheck(true); setNeedCheckContextId(""); setSearch(""); setTab("pesanan"); }}
+              className="text-xs font-bold px-3 py-1.5 rounded-full text-white shrink-0"
+              style={{ background: "linear-gradient(135deg,#e11d48,#f97316)" }}
+            >
+              Buka
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="sticky top-0 z-40 flex overflow-x-auto bg-white shadow-sm no-scrollbar" style={{ borderBottom: "2px solid #fce7f3" }}>
         {[
