@@ -2522,11 +2522,8 @@ export default function App() {
         if (!hasDeliveryDetail(order) && isLegacyDoneOrSentOrder(order) && ordered > 0 && shipped <= 0) shipped = ordered;
 
         const reasons = [];
-        if (isShortShipmentClosed(order)) {
-          reasons.push(`Kurang kirim final${raw.shortShipmentReason ? `: ${raw.shortShipmentReason}` : ""}. Sisa tidak dihitung sebagai tanggungan aktif.`);
-        }
         if (ordered <= 0) reasons.push("Qty/item pesanan kosong atau tidak terbaca.");
-        if (shipped > ordered && ordered > 0) reasons.push(`Kelebihan kirim ${fmtQty(shipped - ordered)} pcs. Pastikan sudah disetujui customer karena ikut tagihan.`);
+        if (shipped > ordered && ordered > 0 && !raw.overDeliveryReviewed) reasons.push(`Kelebihan kirim ${fmtQty(shipped - ordered)} pcs. Pastikan sudah disetujui customer karena ikut tagihan.`);
         if (shipped > 0 && shipped < ordered && !isShortShipmentClosed(order)) reasons.push(`Dikirim sebagian, sisa ${fmtQty(ordered - shipped)} pcs masih aktif.`);
         if (!belumNormal && !sedangProduksi && !selesaiNormal) reasons.push(`Status belum masuk kategori utama${order.status ? `: ${order.status}` : ""}.`);
         if (raw.deliveryStatus && !["Belum Dikirim", "Dikirim Sebagian", "Selesai", "Kelebihan Kirim", "Ditutup Kurang Kirim"].includes(raw.deliveryStatus)) {
