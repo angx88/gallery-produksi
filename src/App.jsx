@@ -6214,15 +6214,15 @@ function rateDocId(productType, model, process) {
                 ? boronganKandidatTarget
                 : filteredEntries.filter((e) => boronganTanpaPesananIds.has(e.id)))
             : boronganOnlyBelumSetor
-              ? filteredEntries.filter((e) => setorTotals(e).statusSetor !== "sudah_setor")
+              ? filteredEntries.filter((e) => (entryTotalsMap.get(e.id) || setorTotals(e)).statusSetor !== "sudah_setor")
               : boronganOnlyOverSetor
                 ? filteredEntries.filter((e) => {
-                    const totals = setorTotals(e);
+                    const totals = entryTotalsMap.get(e.id) || setorTotals(e);
                     return (Number(totals.qtySetor || 0) + Number(totals.qtyReject || 0)) > Number(e.qty || 0);
                   })
                 : filteredEntries
           ).map((e) => {
-            const totals = setorTotals(e);
+            const totals = entryTotalsMap.get(e.id) || setorTotals(e);
             const sudahSetor = totals.statusSetor === "sudah_setor";
             const setorSebagian = totals.statusSetor === "setor_sebagian";
             const qtyReject = Number(totals.qtyReject || 0);
@@ -6264,7 +6264,7 @@ function rateDocId(productType, model, process) {
               <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
                 <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
                 <button
-                  onClick={() => { const t = setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                  onClick={() => { const t = entryTotalsMap.get(e.id) || setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
                   className="rounded-xl px-3 py-1 text-xs font-bold text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
