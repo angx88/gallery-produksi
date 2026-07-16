@@ -4398,7 +4398,7 @@ function rateDocId(productType, model, process) {
       if (!okRelink) return;
     }
 
-    const totals = setorTotals(entry);
+    const totals = entryTotalsMap.get(entry.id) || setorTotals(entry);
     const hasSetor = Number(totals.qtySetor || 0) > 0 || Number(totals.qtyReject || 0) > 0;
     if (hasSetor) {
       const ok = await showConfirm(
@@ -4730,7 +4730,7 @@ function rateDocId(productType, model, process) {
       const periodeAsli = e.tanggal ? getMingguPeriod(e.tanggal) : null;
       const periode = periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : (e.tanggal || "-");
       const cust = e.customer || entryOrder?.customer || "-";
-      const sisaSetor = Number(setorTotals(e).sisaSetor || 0);
+      const sisaSetor = Number((entryTotalsMap.get(e.id) || setorTotals(e)).sisaSetor || 0);
       return `<div class="carry-item">
         <strong>${escapeHtml(e.process || "")}${model}</strong>
         <span>${escapeHtml(cust)}${e.invoice ? " · " + escapeHtml(e.invoice) : ""}</span>
@@ -5006,7 +5006,7 @@ function rateDocId(productType, model, process) {
         ctx.fill();
         ctx.fillStyle = "#b45309";
         ctx.font = "bold 15px Segoe UI, Arial";
-        ctx.fillText(`Tanggungan minggu lalu: ${(carryOver || []).reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0)} pcs`, 50, y + 34);
+        ctx.fillText(`Tanggungan minggu lalu: ${(carryOver || []).reduce((s, e) => s + Number((entryTotalsMap.get(e.id) || setorTotals(e)).sisaSetor || 0), 0)} pcs`, 50, y + 34);
         y += 72;
       }
 
@@ -5126,7 +5126,7 @@ function rateDocId(productType, model, process) {
   const byProses = {};
   filtered.forEach((e) => {
     const p = e.process || "Lainnya";
-    const allTotals = setorTotals(e);
+    const allTotals = entryTotalsMap.get(e.id) || setorTotals(e);
     const rangeTotals = setorTotalsFromHistory(setorHistoryInRange(e, rekapDari, rekapSampai));
     const inputInRange = inRange(e.tanggal);
     // Basis "Diberi" di Rekap tidak boleh hanya melihat tanggal pemberian.
@@ -5175,7 +5175,7 @@ function rateDocId(productType, model, process) {
     const inputInRange = inRange(e.tanggal);
     const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
     const rangeTotals = setorTotalsFromHistory(rangeHistory);
-    const allTotals = setorTotals(e);
+    const allTotals = entryTotalsMap.get(e.id) || setorTotals(e);
     if (!rekapMap[nama]) rekapMap[nama] = { pcsAwal: 0, pcsSetor: 0, pcsReject: 0, gaji: 0, belumSetor: 0, detail: [] };
     // Basis "Diberi" per pekerja: pekerjaan yang diberi dalam periode + pekerjaan lama yang disetor/reject dalam periode.
     // Jadi angka Diberi tidak lebih kecil dari Setor karena carry-over minggu sebelumnya.
@@ -5319,7 +5319,7 @@ function rateDocId(productType, model, process) {
 
   const boronganBelumMasukRekap = !rekapPeriodReady ? [] : productionEntries
     .map((e) => {
-      const totals = setorTotals(e);
+      const totals = entryTotalsMap.get(e.id) || setorTotals(e);
       const rangeHistory = setorHistoryInRange(e, rekapDari, rekapSampai);
       const rangeTotals = setorTotalsFromHistory(rangeHistory);
       const inputInRange = inRange(e.tanggal);
@@ -5379,7 +5379,7 @@ function rateDocId(productType, model, process) {
       totalBoronganBelumMasukPcs,
       totalBoronganBelumMasukGajiPotensi,
     };
-  }, [productionEntries, rekapDari, rekapSampai, workerNameOptions, modelNameOptions, payrollExpenses, orders, orderLookupForCards, gajianHistory]);
+  }, [productionEntries, rekapDari, rekapSampai, workerNameOptions, modelNameOptions, payrollExpenses, orders, orderLookupForCards, gajianHistory, entryTotalsMap]);
 
   if (authLoading) {
     return (
@@ -6652,7 +6652,7 @@ function rateDocId(productType, model, process) {
             {rekapDetailModal && (() => {
               const getCarryOver = (nama) => productionEntries.filter((e) =>
                 normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
-                setorTotals(e).sisaSetor > 0 &&
+                (entryTotalsMap.get(e.id) || setorTotals(e)).sisaSetor > 0 &&
                 dateBefore(e.tanggal, rekapDari)
               );
               const isAllTimeDetail = rekapDetailModal === "allTime";
@@ -6829,7 +6829,7 @@ function rateDocId(productType, model, process) {
                             // Selalu pakai entry asli dari productionEntries agar setorTotals
                             // tidak membaca field derived (qtySetor, statusSetor, dll) sebagai legacy data.
                             const rawEntry = productionEntries.find((pe) => pe.id === e.id) || e;
-                            const t = setorTotals(rawEntry);
+                            const t = entryTotalsMap.get(rawEntry.id) || setorTotals(rawEntry);
                             setSetorModal(rawEntry);
                             setSetorForm({ qtySetor: String(t.sisaSetor || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
                           }}
@@ -6892,10 +6892,10 @@ function rateDocId(productType, model, process) {
                   const sudahGajianPerkerja = sudahGajian(nama, rekapDari, rekapSampai);
                   const carryOver = productionEntries.filter((e) =>
                     normalizeWorkerNameKey(e.employeeName) === normalizeWorkerNameKey(nama) &&
-                    Number(setorTotals(e).sisaSetor || 0) > 0 &&
+                    Number((entryTotalsMap.get(e.id) || setorTotals(e)).sisaSetor || 0) > 0 &&
                     dateBefore(e.tanggal, rekapDari)
                   );
-                  const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0);
+                  const totalCarryOverPcs = carryOver.reduce((s, e) => s + Number((entryTotalsMap.get(e.id) || setorTotals(e)).sisaSetor || 0), 0);
                   return (
                   <div key={nama} className="rounded-xl overflow-hidden" style={{ border: "1px solid #e9d5ff" }}>
                     {/* Header pekerja */}
@@ -7393,7 +7393,7 @@ function rateDocId(productType, model, process) {
 
       {/* Modal Setor Hasil Borongan Bertahap */}
       {setorModal && (() => {
-        const modalTotals = setorTotals(setorModal);
+        const modalTotals = entryTotalsMap.get(setorModal.id) || setorTotals(setorModal);
         const sisa = Number(modalTotals.sisaSetor || 0);
         const inputSetor = Number(setorForm.qtySetor || 0);
         const inputReject = Number(setorForm.qtyReject || 0);
@@ -7841,7 +7841,7 @@ function rateDocId(productType, model, process) {
               placeholder="Opsional"
             />
 
-            {setorTotals(editEntryModal).statusSetor !== "belum_setor" && (
+            {(entryTotalsMap.get(editEntryModal.id) || setorTotals(editEntryModal)).statusSetor !== "belum_setor" && (
               <div className="rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#fef3c7", color: "#b45309" }}>
                 ⚠️ Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
               </div>
@@ -8155,13 +8155,13 @@ function rateDocId(productType, model, process) {
                             <span style={{ color: "#b45309" }}>
                               📅 {periodeAsli ? `${periodeAsli.dari} s/d ${periodeAsli.sampai}` : e.tanggal}
                             </span>
-                            <span className="font-bold" style={{ color: "#b45309" }}>{Number(setorTotals(e).sisaSetor || 0)} pcs · belum disetor</span>
+                            <span className="font-bold" style={{ color: "#b45309" }}>{Number((entryTotalsMap.get(e.id) || setorTotals(e)).sisaSetor || 0)} pcs · belum disetor</span>
                           </div>
                         </div>
                       );
                     })}
                     <div className="text-xs font-semibold text-center" style={{ color: "#b45309" }}>
-                      Total tanggungan: {carryOver.reduce((s, e) => s + Number(setorTotals(e).sisaSetor || 0), 0)} pcs
+                      Total tanggungan: {carryOver.reduce((s, e) => s + Number((entryTotalsMap.get(e.id) || setorTotals(e)).sisaSetor || 0), 0)} pcs
                     </div>
                   </div>
                 )}
