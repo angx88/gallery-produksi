@@ -513,7 +513,7 @@ function getMingguPeriod(dateStr) {
   const day = d.getDay();
   const minggu = new Date(d); minggu.setDate(d.getDate() - day);
   const sabtu = new Date(d); sabtu.setDate(d.getDate() + (6 - day));
-  return { dari: minggu.toISOString().slice(0, 10), sampai: sabtu.toISOString().slice(0, 10) };
+  return { dari: localDateStr(minggu), sampai: localDateStr(sabtu) };
 }
 
 function getMingguIni() { return getMingguPeriod(todayStr()); }
@@ -523,7 +523,7 @@ function getDaftarMinggu(n = 7) {
   const today = new Date();
   for (let i = 0; i < n; i++) {
     const d = new Date(today); d.setDate(today.getDate() - i * 7);
-    const period = getMingguPeriod(d.toISOString().slice(0, 10));
+    const period = getMingguPeriod(localDateStr(d));
     const key = period.dari + "_" + period.sampai;
     if (!hasil.find((x) => x.key === key)) hasil.push({ key, ...period });
   }
@@ -1348,7 +1348,6 @@ export default function App() {
   const initialRekapPeriod = useMemo(() => currentSundayToSaturdayPeriod(), []);
   const [rekapDari, setRekapDari] = useState(initialRekapPeriod.dari);
   const [rekapSampai, setRekapSampai] = useState(initialRekapPeriod.sampai);
-  const [rekapSubTab, setRekapSubTab] = useState("gaji"); // gaji | pengiriman | borongan
   const rekapManualPeriodRef = useRef(false);
   const [toast, setToast] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -1500,8 +1499,6 @@ export default function App() {
   const [shipmentBatches, setShipmentBatches] = useState([]);
   const [payrollExpenses, setPayrollExpenses] = useState([]);
   const [gajianHistory, setGajianHistory] = useState([]);
-  const [showFormGajianLama, setShowFormGajianLama] = useState(false);
-  const [formGajianLama, setFormGajianLama] = useState({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
 
   const previousOrderIdsRef = useRef(new Set());
   const firstOrderLoadRef = useRef(true);
@@ -4485,33 +4482,6 @@ function rateDocId(productType, model, process) {
   }
 
 
-  async function simpanGajianLama(form) {
-    if (!form.employeeName || !form.tanggalGaji || !form.periodeGajiDari || !form.periodeGajiSampai || !form.jumlah) {
-      return showToast("⚠️ Lengkapi semua field: nama pekerja, tanggal, periode, dan jumlah.", 3500);
-    }
-    const jumlah = nonNegativeMoney(form.jumlah);
-    if (jumlah <= 0) return showToast("⚠️ Jumlah gaji harus lebih dari 0.", 3000);
-    setIsSaving(true);
-    try {
-      await addDoc(collection(db, C.GAJIAN_HISTORY), {
-        employeeName: displayWorkerName(form.employeeName),
-        tanggalGaji: form.tanggalGaji,
-        periodeGajiDari: form.periodeGajiDari,
-        periodeGajiSampai: form.periodeGajiSampai,
-        jumlah,
-        source: "input_manual_lama",
-        createdAt: todayStr(),
-      });
-      showToast("✅ Riwayat gajian berhasil disimpan", 3000);
-      refreshGajianHistory();
-      setFormGajianLama({ employeeName: "", tanggalGaji: todayStr(), periodeGajiDari: "", periodeGajiSampai: "", jumlah: "" });
-    } catch (e) {
-      showToast(friendlyErrorMessage("Menyimpan data", e), 4000);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   // ── Helper Kasbon ────────────────────────────────────────────────────────────
   function kasbonAktifUntukPekerja(nama) {
     const key = normalizeWorkerNameKey(nama);
@@ -5116,7 +5086,8 @@ function rateDocId(productType, model, process) {
   }
 
   const rekapData = useMemo(() => {
-  const rekapPeriodReady = Boolean(rekapDari && rekapSampai);
+  const rekapRangeInvalid = Boolean(rekapDari && rekapSampai && rekapDari > rekapSampai);
+  const rekapPeriodReady = Boolean(rekapDari && rekapSampai) && !rekapRangeInvalid;
   const inRange = (tanggal) => rekapPeriodReady && dateInRange(tanggal, rekapDari, rekapSampai);
   const filtered = productionEntries.filter((e) => {
     const hasInputInRange = inRange(e.tanggal);
@@ -5359,6 +5330,7 @@ function rateDocId(productType, model, process) {
 
     return {
       rekapPeriodReady,
+      rekapRangeInvalid,
       inRange,
       filtered,
       byProses,
@@ -6346,6 +6318,7 @@ function rateDocId(productType, model, process) {
       {tab === "rekap" && (() => {
         const {
           rekapPeriodReady,
+          rekapRangeInvalid,
           inRange,
           filtered,
           byProses,
@@ -6396,7 +6369,12 @@ function rateDocId(productType, model, process) {
               </div>
             </div>
 
-            {!rekapPeriodReady && (
+            {rekapRangeInvalid && (
+              <div className="rounded-2xl bg-red-50 p-4 text-sm font-semibold" style={{ border: "1px solid #fecaca", color: "#b91c1c" }}>
+                ⚠️ Tanggal <strong>Dari</strong> tidak boleh setelah tanggal <strong>Sampai</strong>. Perbaiki dulu rentang tanggalnya.
+              </div>
+            )}
+            {!rekapPeriodReady && !rekapRangeInvalid && (
               <div className="rounded-2xl bg-yellow-50 p-4 text-sm font-semibold" style={{ border: "1px solid #fde68a", color: "#92400e" }}>
                 📌 Pilih tanggal <strong>Dari</strong> dan <strong>Sampai</strong> dulu untuk menampilkan rekap gaji.
               </div>
@@ -6429,10 +6407,14 @@ function rateDocId(productType, model, process) {
                 (b.items || []).forEach((it) => { g.totalPcs += Number(it.shippedQty ?? it.qtyKirim ?? it.qty ?? 0); });
                 if (b.orderId && !g.orders.includes(b.orderId)) g.orders.push(b.orderId);
               });
-              const groups = [...groupMap.values()].sort((a, b) => (b.tanggal || "").localeCompare(a.tanggal || ""));
+              const groups = rekapPeriodReady
+                ? [...groupMap.values()]
+                    .filter((g) => dateInRange(g.tanggal, rekapDari, rekapSampai))
+                    .sort((a, b) => (b.tanggal || "").localeCompare(a.tanggal || ""))
+                : [];
               return (
                 <div className="space-y-2">
-                  {groups.length === 0 && <div className="text-center text-sm py-8" style={{ color: "#94a3b8" }}>Belum ada data pengiriman.</div>}
+                  {rekapPeriodReady && groups.length === 0 && <div className="text-center text-sm py-8" style={{ color: "#94a3b8" }}>Belum ada data pengiriman pada periode ini.</div>}
                   {groups.map((g) => (
                     <div key={g.gid} className="rounded-2xl bg-white p-4 space-y-2" style={{ border: "1px solid #e9d5ff" }}>
                       <div className="flex items-start justify-between gap-2">
@@ -6479,73 +6461,6 @@ function rateDocId(productType, model, process) {
 
             {/* ── Rekap Gaji ── */}
             {activeRekapTab === "gaji" && (<>
-            {/* Form Input Riwayat Gajian Lama */}
-            <div className="rounded-2xl bg-white p-4 space-y-3" style={{ border: "1px solid #a7f3d0" }}>
-              <button
-                type="button"
-                onClick={() => setShowFormGajianLama((v) => !v)}
-                className="w-full flex items-center justify-between"
-              >
-                <div className="text-xs font-bold" style={{ color: "#065f46" }}>📝 Input Riwayat Gajian Lama</div>
-                <span className="text-xs" style={{ color: "#94a3b8" }}>{showFormGajianLama ? "▲ Tutup" : "▼ Buka"}</span>
-              </button>
-              {showFormGajianLama && (
-                <div className="space-y-2 pt-1">
-                  <div>
-                    <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Nama Pekerja</div>
-                    <select
-                      value={formGajianLama.employeeName}
-                      onChange={(e) => setFormGajianLama((f) => ({ ...f, employeeName: e.target.value }))}
-                      className="w-full rounded-xl border px-3 py-2 text-sm"
-                      style={{ borderColor: "#a7f3d0" }}
-                    >
-                      <option value="">-- Pilih Pekerja --</option>
-                      {workerNameOptions.map((w) => (
-                        <option key={w} value={w}>{displayWorkerName(w)}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Tanggal Digaji</div>
-                      <input type="date" value={formGajianLama.tanggalGaji}
-                        onChange={(v) => setFormGajianLama((f) => ({ ...f, tanggalGaji: inputValue(v) }))}
-                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
-                    </div>
-                    <div>
-                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Jumlah Dibayar</div>
-                      <input type="number" placeholder="0" value={formGajianLama.jumlah}
-                        onChange={(v) => setFormGajianLama((f) => ({ ...f, jumlah: inputValue(v) }))}
-                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Dari</div>
-                      <input type="date" value={formGajianLama.periodeGajiDari}
-                        onChange={(v) => setFormGajianLama((f) => ({ ...f, periodeGajiDari: inputValue(v) }))}
-                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
-                    </div>
-                    <div>
-                      <div className="text-[11px] mb-1" style={{ color: "#64748b" }}>Periode Sampai</div>
-                      <input type="date" value={formGajianLama.periodeGajiSampai}
-                        onChange={(v) => setFormGajianLama((f) => ({ ...f, periodeGajiSampai: inputValue(v) }))}
-                        className="w-full rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "#a7f3d0" }} />
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isSaving}
-                    onClick={() => simpanGajianLama(formGajianLama)}
-                    className="w-full rounded-xl py-2.5 text-sm font-bold text-white"
-                    style={{ background: "linear-gradient(135deg,#065f46,#16a34a)" }}
-                  >
-                    {isSaving ? "Menyimpan..." : "💾 Simpan Riwayat Gajian"}
-                  </button>
-                </div>
-              )}
-            </div>
-
             {/* Daftar Riwayat Gajian Tersimpan */}
             {gajianHistory.length > 0 && (
               <div className="rounded-2xl bg-white p-4" style={{ border: "1px solid #a7f3d0" }}>
