@@ -1509,7 +1509,7 @@ export default function App() {
 
 
   const [prodForm, setProdForm] = useState({ orderId: "", tanggalMulai: todayStr(), catatan: "" });
-  const [rateForm, setRateForm] = useState({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
+  const [rateForm, setRateForm] = useState({ productType: "Kerudung", model: "", process: "Jahit", rate: "", partRates: {} });
   const [entryForm, setEntryForm] = useState({
     employeeName: "",
     orderId: "",
@@ -1519,6 +1519,7 @@ export default function App() {
     qty: "",
     tanggal: todayStr(),
     catatan: "",
+    bagian: "",
   });
   const [entryOrderSearch, setEntryOrderSearch] = useState("");
   const [kirimForm, setKirimForm] = useState({
@@ -1546,7 +1547,7 @@ export default function App() {
   }, []);
 
   const resetRateForm = React.useCallback(() => {
-    setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
+    setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "", partRates: {} });
   }, []);
 
   const resetEntryForm = React.useCallback(() => {
@@ -1559,6 +1560,7 @@ export default function App() {
       qty: "",
       tanggal: todayStr(),
       catatan: "",
+      bagian: "",
     });
   }, []);
 
@@ -3122,7 +3124,7 @@ export default function App() {
     const nextQty = nextModel
       ? String(Math.max(0, getOrderProcessLimit(order, entryForm.process, nextModel).limit - processQtyForOrderModel(order.id, entryForm.process, nextModel)) || "")
       : "";
-    setEntryForm((f) => ({ ...f, orderId: order.id, model: nextModel, qty: nextQty || f.qty }));
+    setEntryForm((f) => ({ ...f, orderId: order.id, model: nextModel, bagian: "", qty: nextQty || f.qty }));
     setEntryOrderSearch(`${order.customer || ""} ${order.invoice || order.orderNo || ""}`.trim());
   }
 
@@ -3132,15 +3134,17 @@ export default function App() {
       e.orderId === payload.orderId &&
       sameProcess(e.process, payload.process) &&
       normalizeModelKey(e.model) === normalizeModelKey(payload.model) &&
+      normalizeModelKey(e.bagian || "") === normalizeModelKey(payload.bagian || "") &&
       String(e.tanggal || "") === String(payload.tanggal || "")
     );
   }
 
-function rateDocId(productType, model, process) {
+function rateDocId(productType, model, process, bagian = "") {
   const typeKey = safeDocId(normalizeProductTypeKey(productType || "kerudung"), "type");
   const processKey = safeDocId(normalizeProcessKey(process || "proses") || lower(process || "proses"), "process");
   const modelKey = safeDocId(normalizeModelKey(model || "all"), "model");
-  return `rate_${typeKey}_${processKey}_${modelKey}`;
+  const bagianKey = normalizeModelKey(bagian || "");
+  return bagianKey ? `rate_${typeKey}_${processKey}_${modelKey}_${safeDocId(bagianKey, "bagian")}` : `rate_${typeKey}_${processKey}_${modelKey}`;
 }
 
   function effectiveRateValue(rawRate, employeeName) {
@@ -3151,16 +3155,18 @@ function rateDocId(productType, model, process) {
     return Number.isFinite(effective) ? Math.max(0, effective) : 0;
   }
 
-  function findRate(productType, model, process) {
-    const expectedId = rateDocId(productType, model, process);
+  function findRate(productType, model, process, bagian = "") {
+    const expectedId = rateDocId(productType, model, process, bagian);
     const typeKey = normalizeProductTypeKey(productType);
     const processKey = normalizeProcessKey(process);
     const modelKey = normalizeModelKey(model || "");
+    const bagianKey = normalizeModelKey(bagian || "");
     const matches = workRates.filter((r) =>
       normalizeProductTypeKey(r.productType) === typeKey && normalizeProcessKey(r.process) === processKey
+      && normalizeModelKey(r.bagian || "") === bagianKey
     );
     const exact = matches.filter((r) => normalizeModelKey(r.model || "") === modelKey);
-    const fallback = matches.filter((r) => {
+    const fallback = bagianKey ? [] : matches.filter((r) => {
       const rk = normalizeModelKey(r.model || "");
       return !rk || rk === "all" || rk === "umum" || rk === typeKey;
     });
@@ -3172,8 +3178,30 @@ function rateDocId(productType, model, process) {
     })[0] || null;
   }
 
-  function getRateForEmployee(productType, model, process, employeeName) {
-    const rate = findRate(productType, model, process);
+  // Produk komposit (mis. setelan anak): kembalikan daftar "Bagian" (Baju/Celana/dst) yang
+  // sudah diisi admin di HPP produk Gallery Kerudung, dibaca dari order.items[].hppMaterials.
+  // 2+ bagian berbeda = model komposit, perlu tarif & pencatatan borongan per bagian.
+  function getModelParts(modelName) {
+    const modelKey = normalizeModelKey(modelName || "");
+    if (!modelKey) return [];
+    const map = new Map();
+    (orders || []).forEach((o) => {
+      (o.items || []).forEach((it) => {
+        const itemKey = normalizeModelKey(it?.name || it?.item || "");
+        if (itemKey !== modelKey) return;
+        (Array.isArray(it?.hppMaterials) ? it.hppMaterials : []).forEach((m) => {
+          const part = String(m?.part || "").trim();
+          if (!part) return;
+          const key = normalizeModelKey(part);
+          if (!map.has(key)) map.set(key, part);
+        });
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
+  }
+
+  function getRateForEmployee(productType, model, process, employeeName, bagian = "") {
+    const rate = findRate(productType, model, process, bagian);
     if (!rate) return null;
     const effectiveRate = effectiveRateValue(rate.rate, employeeName);
     if (effectiveRate <= 0) return null;
@@ -3214,9 +3242,9 @@ function rateDocId(productType, model, process) {
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
   }
 
-  function getRatePreview(productType, model, process, employeeName) {
+  function getRatePreview(productType, model, process, employeeName, bagian = "") {
     if (!productType || !process || !model) return { status: "incomplete" };
-    const rate = findRate(productType, model, process);
+    const rate = findRate(productType, model, process, bagian);
     if (!rate) return { status: "missing" };
     const baseRate = Number(rate.rate || 0);
     const effectiveRate = effectiveRateValue(baseRate, employeeName);
@@ -3465,10 +3493,56 @@ function rateDocId(productType, model, process) {
     const cleanProductType = displayProductTypeName(rateForm.productType);
     const cleanProcess = rateForm.process;
     const cleanModel = canonicalByExisting(rateForm.model, modelNameOptions, "model");
-    const cleanRate = nonNegativeMoney(rateForm.rate || 0);
 
     if (!cleanProductType.trim()) return showToast("⚠️ Jenis produk wajib diisi", 3000);
     if (!cleanModel.trim()) return showToast("⚠️ Model wajib diisi sesuai Master Tarif", 3000);
+
+    // Model komposit (mis. setelan anak dengan Bagian Baju + Celana di HPP produk) butuh
+    // tarif terpisah per bagian, karena tiap bagian biasanya dikerjakan pekerja berbeda.
+    const modelParts = isModelSpecificProcess(cleanProcess) ? getModelParts(cleanModel) : [];
+    const isComposite = modelParts.length >= 2;
+
+    if (isComposite) {
+      const entries = modelParts.map((part) => ({ part, rate: nonNegativeMoney(rateForm.partRates?.[part] || 0) }));
+      const invalid = entries.find((e) => !Number.isFinite(e.rate) || e.rate <= 0);
+      if (invalid) return showToast(`⚠️ Tarif bagian "${invalid.part}" wajib diisi dan lebih dari 0`, 3500);
+      if (entries.some((e) => e.rate > 1000000)) return showToast("⚠️ Tarif terlalu besar. Periksa kembali.", 3000);
+
+      setIsSaving(true);
+      try {
+        await runTransaction(db, async (transaction) => {
+          const prepared = [];
+          for (const e of entries) {
+            const ref = doc(db, C.WORK_RATES, rateDocId(cleanProductType, cleanModel, cleanProcess, e.part));
+            const snap = await transaction.get(ref);
+            prepared.push({ ref, part: e.part, rate: e.rate, createdAt: snap.exists() ? (snap.data().createdAt || todayStr()) : todayStr() });
+          }
+          prepared.forEach((p) => {
+            transaction.set(p.ref, {
+              productType: cleanProductType,
+              model: cleanModel,
+              process: cleanProcess,
+              bagian: p.part,
+              rate: p.rate,
+              source: "gallery-produksi",
+              createdAt: p.createdAt,
+              updatedAt: new Date().toISOString(),
+            }, { merge: true });
+          });
+        });
+        await refreshWorkRates();
+        setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "", partRates: {} });
+        setModal(null);
+        showToast("✅ Tarif per bagian berhasil disimpan", 2500);
+      } catch (e) {
+        showToast(friendlyErrorMessage("Simpan tarif", e), 4000);
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
+    const cleanRate = nonNegativeMoney(rateForm.rate || 0);
     if (!Number.isFinite(cleanRate) || cleanRate <= 0) return showToast("⚠️ Tarif wajib diisi dan lebih dari 0", 3000);
     if (cleanRate > 1000000) return showToast("⚠️ Tarif terlalu besar. Periksa kembali.", 3000);
 
@@ -3489,7 +3563,7 @@ function rateDocId(productType, model, process) {
         }, { merge: true });
       });
       await refreshWorkRates();
-      setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "" });
+      setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "", partRates: {} });
       setModal(null);
       showToast("✅ Tarif berhasil disimpan", 2500);
     } catch (e) {
@@ -3510,7 +3584,17 @@ function rateDocId(productType, model, process) {
     const cleanEmployeeName = canonicalByExisting(entryForm.employeeName, workerNameOptions, "worker");
     const cleanProductType = displayProductTypeName(entryForm.productType);
     const cleanModel = canonicalByExisting(entryForm.model, modelNameOptions, "model");
-    const rate = getRateForEmployee(cleanProductType, cleanModel, entryForm.process, cleanEmployeeName);
+
+    // Model komposit (mis. setelan anak) wajib pilih Bagian (Baju/Celana/dst) supaya
+    // tarif dan pengaitan ke pesanan benar per bagian, bukan kepakai tarif satu stel utuh.
+    const modelParts = isModelSpecificProcess(entryForm.process) ? getModelParts(cleanModel) : [];
+    const isComposite = modelParts.length >= 2;
+    if (isComposite && !entryForm.bagian.trim()) {
+      return showToast("⚠️ Model ini punya beberapa bagian. Pilih Bagian (misal Baju/Celana) dulu.", 3500);
+    }
+    const cleanBagian = isComposite ? entryForm.bagian.trim() : "";
+
+    const rate = getRateForEmployee(cleanProductType, cleanModel, entryForm.process, cleanEmployeeName, cleanBagian);
     if (!rate) return showToast("⚠️ Tarif belum ada di Master Tarif. Buat tarif dulu.", 3500);
 
     const order = orders.find((o) => o.id === entryForm.orderId);
@@ -3525,6 +3609,7 @@ function rateDocId(productType, model, process) {
       orderId: entryForm.orderId || "",
       process: entryForm.process,
       model: cleanModel,
+      bagian: cleanBagian,
       tanggal: entryForm.tanggal,
     };
 
@@ -3541,7 +3626,7 @@ function rateDocId(productType, model, process) {
 
     }
 
-    const entryId = `entry_${safeDocId(cleanEmployeeName, "worker")}_${safeDocId(entryForm.orderId || "umum", "order")}_${safeDocId(entryForm.process, "process")}_${safeDocId(cleanModel || "all", "model")}_${safeDocId(entryForm.tanggal, "date")}`;
+    const entryId = `entry_${safeDocId(cleanEmployeeName, "worker")}_${safeDocId(entryForm.orderId || "umum", "order")}_${safeDocId(entryForm.process, "process")}_${safeDocId(cleanModel || "all", "model")}${cleanBagian ? "_" + safeDocId(cleanBagian, "bagian") : ""}_${safeDocId(entryForm.tanggal, "date")}`;
     const entryRef = doc(db, C.PRODUCTION_ENTRIES, entryId);
     const prodRef = prod?.id ? doc(db, C.PRODUKSI, prod.id) : null;
 
@@ -3556,6 +3641,7 @@ function rateDocId(productType, model, process) {
         item: order?.item || "",
         productType: cleanProductType,
         model: cleanModel,
+        bagian: cleanBagian,
         process: entryForm.process,
         qty: entryQty,
         rate: effectiveRate,
@@ -3626,6 +3712,7 @@ function rateDocId(productType, model, process) {
         qty: "",
         tanggal: todayStr(),
         catatan: "",
+        bagian: "",
       });
       setModal(null);
     } catch (e) {
@@ -4184,7 +4271,7 @@ function rateDocId(productType, model, process) {
 
         let newRate = nonNegativeMoney(liveEntry.rate || 0);
         if (!hasSetor) {
-          const rateInfo = getRateForEmployee(liveEntry.productType || editEntryModal.productType || "Kerudung", nextModel, liveEntry.process, liveEntry.employeeName);
+          const rateInfo = getRateForEmployee(liveEntry.productType || editEntryModal.productType || "Kerudung", nextModel, liveEntry.process, liveEntry.employeeName, liveEntry.bagian || "");
           if (!rateInfo) throw new Error("Tarif belum ada di Master Tarif. Silakan buat tarif baru di menu Master Tarif.");
           newRate = nonNegativeMoney(rateInfo.rate || 0);
         }
@@ -6249,7 +6336,7 @@ function rateDocId(productType, model, process) {
                 <div className="flex justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="font-bold" style={{ color: "#2d1b69" }}>👤 {displayWorkerName(e.employeeName)}</div>
-                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}</div>
+                    <div className="text-xs mt-1" style={{ color: "#a855f7" }}>{e.productType} · {e.process}{e.model ? ` · ${e.model}` : ""}{e.bagian ? ` · ${e.bagian}` : ""}</div>
                     {e.invoice && <div className="text-xs" style={{ color: "#94a3b8" }}>🧾 {e.invoice}</div>}
                     <div className="text-xs" style={{ color: "#94a3b8" }}>📅 {e.tanggal}</div>
                     {!e.orderId && !e.pesananId && (
@@ -7112,7 +7199,7 @@ function rateDocId(productType, model, process) {
             <div key={r.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               <div className="flex justify-between items-start gap-3">
                 <div>
-                  <div className="font-bold" style={{ color: "#2d1b69" }}>{r.productType}{r.model ? ` · ${r.model}` : ""}</div>
+                  <div className="font-bold" style={{ color: "#2d1b69" }}>{r.productType}{r.model ? ` · ${r.model}` : ""}{r.bagian ? ` · ${r.bagian}` : ""}</div>
                   <div className="text-xs" style={{ color: "#a855f7" }}>{r.process}</div>
                 </div>
                 <div className="text-right">
@@ -7230,14 +7317,17 @@ function rateDocId(productType, model, process) {
             <Select label="Jenis Produk" value={entryForm.productType} onChange={(v) => setEntryForm((f) => ({ ...f, productType: v }))}>
               {PRODUCT_TYPES.map((p) => <option key={p}>{p}</option>)}
             </Select>
-            <Select label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "" }))}>
+            <Select label="Proses" value={entryForm.process} onChange={(v) => setEntryForm((f) => ({ ...f, process: v, model: "", bagian: "" }))}>
               {ALL_PROCESSES.map((p) => <option key={p}>{p}</option>)}
             </Select>
 
             {(() => {
               const selectedOrder = orders.find((o) => o.id === entryForm.orderId);
               const rateModels = getRateModelOptions(entryForm.productType, entryForm.process, selectedOrder);
-              const selectedPreview = getRatePreview(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName);
+              const modelParts = isModelSpecificProcess(entryForm.process) ? getModelParts(entryForm.model) : [];
+              const isComposite = modelParts.length >= 2;
+              const effectiveBagian = isComposite ? entryForm.bagian : "";
+              const selectedPreview = getRatePreview(entryForm.productType, entryForm.model, entryForm.process, entryForm.employeeName, effectiveBagian);
               const { limit, label } = selectedOrder && entryForm.model
                 ? getOrderProcessLimit(selectedOrder, entryForm.process, entryForm.model)
                 : { limit: 0, label: "pesanan" };
@@ -7250,7 +7340,7 @@ function rateDocId(productType, model, process) {
                   <Select
                     label="Model / Acuan Tarif"
                     value={entryForm.model}
-                    onChange={(v) => setEntryForm((f) => ({ ...f, model: v, qty: sisaQty > 0 ? String(sisaQty) : f.qty }))}
+                    onChange={(v) => setEntryForm((f) => ({ ...f, model: v, bagian: "", qty: sisaQty > 0 ? String(sisaQty) : f.qty }))}
                   >
                     <option value="">{isModelSpecificProcess(entryForm.process) ? "-- Pilih model dari pesanan terkait --" : "-- Pilih acuan tarif dari Master Tarif --"}</option>
                     {rateModels.map((name) => <option key={name} value={name}>{name}</option>)}
@@ -7267,10 +7357,25 @@ function rateDocId(productType, model, process) {
                         : `Tarif belum ada di Master Tarif untuk ${entryForm.productType} · ${entryForm.process}. Silakan buat tarif baru di menu Master Tarif.`}
                     </div>
                   )}
+                  {isComposite && (
+                    <div>
+                      <Select
+                        label="Bagian"
+                        value={entryForm.bagian}
+                        onChange={(v) => setEntryForm((f) => ({ ...f, bagian: v }))}
+                      >
+                        <option value="">-- Pilih bagian yang dikerjakan --</option>
+                        {modelParts.map((part) => <option key={part} value={part}>{part}</option>)}
+                      </Select>
+                      <div className="mt-1 text-[11px] font-semibold" style={{ color: "#64748b" }}>
+                        Model ini komposit ({modelParts.join(" + ")}) — pilih bagian yang benar-benar dikerjakan pekerja ini, supaya tarif dan gaji akurat.
+                      </div>
+                    </div>
+                  )}
                   {selectedPreview.status === "found" && (
                     <div className="rounded-2xl border p-3 text-xs" style={{ background: "#ecfdf5", borderColor: "#86efac", color: "#166534" }}>
                       <div className="font-black">✅ Tarif yang dipakai</div>
-                      <div className="mt-1 font-bold">{entryForm.productType} · {entryForm.process} · {entryForm.model}</div>
+                      <div className="mt-1 font-bold">{entryForm.productType} · {entryForm.process} · {entryForm.model}{effectiveBagian ? ` · ${effectiveBagian}` : ""}</div>
                       <div className="mt-1 text-base font-black">{money(selectedPreview.effectiveRate)} / pcs</div>
                       {normalizeWorkerNameKey(entryForm.employeeName).includes("konveksi") && (
                         <div className="mt-1 text-[11px] font-semibold">Tarif Master {money(selectedPreview.baseRate)} / pcs · Tarif Konveksi {money(selectedPreview.effectiveRate)} / pcs</div>
@@ -7414,7 +7519,31 @@ function rateDocId(productType, model, process) {
                 </div>
               )}
             </div>
-            <Input label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
+            {(() => {
+              const modelParts = isModelSpecificProcess(rateForm.process) ? getModelParts(rateForm.model) : [];
+              if (modelParts.length >= 2) {
+                return (
+                  <div className="space-y-2">
+                    <div className="rounded-2xl border p-3 text-xs font-bold" style={{ background: "#eff6ff", borderColor: "#bfdbfe", color: "#1e40af" }}>
+                      🧵 Model ini komposit ({modelParts.join(" + ")}) — isi tarif per bagian, karena biasanya dikerjakan pekerja berbeda.
+                    </div>
+                    {modelParts.map((part) => (
+                      <Input
+                        key={part}
+                        label={`Tarif ${part} per pcs`}
+                        type="number"
+                        value={rateForm.partRates?.[part] || ""}
+                        onChange={(v) => setRateForm((f) => ({ ...f, partRates: { ...f.partRates, [part]: v } }))}
+                        placeholder="Contoh: 2000"
+                      />
+                    ))}
+                  </div>
+                );
+              }
+              return (
+                <Input label="Tarif per pcs" type="number" value={rateForm.rate} onChange={(v) => setRateForm((f) => ({ ...f, rate: v }))} placeholder="Contoh: 2000" />
+              );
+            })()}
             <Button onClick={addWorkRate} disabled={isSaving} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
               Simpan Tarif
             </Button>
