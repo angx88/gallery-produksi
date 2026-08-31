@@ -3702,7 +3702,38 @@ function rateDocId(productType, model, process, bagian = "") {
         }
       });
 
-      await Promise.all([refreshProductionEntries(), refreshProduksi()]);
+      // HEMAT KUOTA: tidak baca ulang seluruh koleksi production_entries/produksi ke Firestore.
+      // Kita sudah tahu persis data yang baru saja ditulis (entryPayload), jadi cukup update
+      // state lokal + cache localStorage supaya tampilan langsung sinkron tanpa extra reads.
+      // Data asli di Firestore tetap benar (ditulis lewat transaction di atas) — kalaupun state
+      // lokal ini pernah meleset karena ada perubahan bersamaan dari perangkat lain, tombol
+      // "Refresh Data" atau cache 12 jam akan menyinkronkan ulang seperti biasa.
+      const newEntry = { id: entryId, ...entryPayload };
+      setProductionEntries((prev) => {
+        const next = [...prev, newEntry];
+        writeCachedData("production_entries", next);
+        return next;
+      });
+      if (prodRef && prod?.id) {
+        const newWorker = {
+          employeeName: entryPayload.employeeName,
+          process: entryPayload.process,
+          productType: entryPayload.productType,
+          model: entryPayload.model,
+          qty: entryPayload.qty,
+          tanggal: entryPayload.tanggal,
+          entryId,
+        };
+        setProduksi((prev) => {
+          const next = prev.map((p) => (
+            p.id === prod.id
+              ? { ...p, workers: [...(Array.isArray(p.workers) ? p.workers : []), newWorker], updatedAt: todayStr() }
+              : p
+          ));
+          writeCachedData("produksi", next);
+          return next;
+        });
+      }
       setEntryForm({
         employeeName: "",
         orderId: "",
