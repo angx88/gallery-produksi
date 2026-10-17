@@ -1345,7 +1345,7 @@ export default function App() {
   const [setorModal, setSetorModal] = useState(null); // entry object yang akan disetor
   const [setorForm, setSetorForm] = useState({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
   const [editEntryModal, setEditEntryModal] = useState(null); // entry yang sedang diedit
-  const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "" });
+  const [editEntryForm, setEditEntryForm] = useState({ qty: "", tanggal: "", catatan: "", model: "", setorRows: [] });
   const [slipPreview, setSlipPreview] = useState(null); // { nama, r, dari, sampai }
   const [cicilanKasbonInput, setCicilanKasbonInput] = useState(""); // nominal cicilan kasbon yang diinput user di slip sebelum gajian
   const [rekapDetailModal, setRekapDetailModal] = useState(null); // sudah | belum | total | pekerja | setor | belumSetor
@@ -1582,7 +1582,7 @@ export default function App() {
 
   const closeEditEntryModal = React.useCallback(() => {
     setEditEntryModal(null);
-    setEditEntryForm({ qty: "", tanggal: "", catatan: "", model: "" });
+    setEditEntryForm({ qty: "", tanggal: "", catatan: "", model: "", setorRows: [] });
   }, []);
 
   // Cache localStorage lama dimatikan (penuh -> QuotaExceededError). Data kini disimpan di IndexedDB
@@ -4231,6 +4231,14 @@ function rateDocId(productType, model, process, bagian = "") {
       tanggal: entry.tanggal || todayStr(),
       catatan: entry.catatan || "",
       model: entry.model || "",
+      // Riwayat setor yang bisa dikoreksi (jumlah setor / reject per setoran)
+      setorRows: normalizeSetorHistory(productionEntries.find((pe) => pe.id === entry.id) || entry).map((h) => ({
+        id: h.id,
+        tanggalSetor: h.tanggalSetor,
+        rate: h.rate,
+        qtySetor: String(h.qtySetor || 0),
+        qtyReject: String(h.qtyReject || 0),
+      })),
     });
   }
 
@@ -4238,6 +4246,15 @@ function rateDocId(productType, model, process, bagian = "") {
     if (!editEntryModal) return;
     const nextQty = nonNegativeQty(editEntryForm.qty || 0);
     if (!Number.isFinite(nextQty) || nextQty <= 0) return showToast("⚠️ Qty wajib diisi dan harus lebih dari 0.", 3000);
+    const formSetorRows = (editEntryForm.setorRows || []).map((r) => ({
+      id: r.id,
+      qtySetor: Number(r.qtySetor === "" ? 0 : r.qtySetor),
+      qtyReject: Number(r.qtyReject === "" ? 0 : r.qtyReject),
+    }));
+    if (formSetorRows.some((r) => !Number.isFinite(r.qtySetor) || !Number.isFinite(r.qtyReject) || r.qtySetor < 0 || r.qtyReject < 0 || !Number.isInteger(r.qtySetor) || !Number.isInteger(r.qtyReject))) {
+      return showToast("⚠️ Jumlah setor/reject harus angka bulat, tidak boleh minus.", 3500);
+    }
+    let setorChanged = false;
 
     const nextModel = canonicalByExisting(editEntryForm.model || editEntryModal.model || "", modelNameOptions, "model");
 
@@ -4267,11 +4284,73 @@ function rateDocId(productType, model, process, bagian = "") {
         const liveTotals = setorTotals(liveEntry);
         const hasSetor = Number(liveTotals.qtySetor || 0) > 0 || Number(liveTotals.qtyReject || 0) > 0;
 
+        // ── Koreksi riwayat setor (jumlah setor / reject per setoran) ──
+        const liveHistory = normalizeSetorHistory(liveEntry);
+        const formById = new Map(formSetorRows.map((r) => [r.id, r]));
+        const changedRows = liveHistory.filter((h) => {
+          const f = formById.get(h.id);
+          return f && (f.qtySetor !== Number(h.qtySetor || 0) || f.qtyReject !== Number(h.qtyReject || 0));
+        });
+        let setorUpdates = null;
+        const payrollWrites = [];
+        if (changedRows.length > 0) {
+          const nextHistory = liveHistory.map((h) => {
+            const f = formById.get(h.id);
+            if (!f || !changedRows.includes(h)) return h;
+            return {
+              ...h,
+              qtySetor: f.qtySetor,
+              qtyReject: f.qtyReject,
+              totalWageSetor: f.qtySetor * Number(h.rate || 0),
+              koreksiAt: new Date().toISOString(),
+              koreksiDari: { qtySetor: Number(h.qtySetor || 0), qtyReject: Number(h.qtyReject || 0) },
+            };
+          });
+          const nextQtySetor = nextHistory.reduce((sum, h) => sum + Number(h.qtySetor || 0), 0);
+          const nextQtyReject = nextHistory.reduce((sum, h) => sum + Number(h.qtyReject || 0), 0);
+          const qtyAwal = Number(liveEntry.qty || 0);
+          if (nextQtySetor + nextQtyReject > qtyAwal) {
+            throw new Error(`Total setor + reject (${nextQtySetor + nextQtyReject} pcs) melebihi jumlah diberikan (${qtyAwal} pcs).`);
+          }
+          const nextSisa = Math.max(0, qtyAwal - nextQtySetor - nextQtyReject);
+          setorUpdates = {
+            setorHistory: nextHistory,
+            qtySetor: nextQtySetor,
+            qtyReject: nextQtyReject,
+            totalWageSetor: nextHistory.reduce((sum, h) => sum + Number(h.totalWageSetor || 0), 0),
+            sisaSetor: nextSisa,
+            statusSetor: (nextQtySetor + nextQtyReject) <= 0 ? "belum_setor" : nextSisa <= 0 ? "sudah_setor" : "setor_sebagian",
+          };
+
+          // Gaji per setoran (payroll_expenses) ikut disesuaikan agar rekap & pengeluaran Gallery Kerudung benar.
+          // Semua baca dilakukan sebelum tulis (aturan transaksi Firestore).
+          for (const h of changedRows) {
+            const f = formById.get(h.id);
+            const known = (payrollExpenses || []).find((p) => p.entryId === liveEntry.id && p.setorBatchId === h.id);
+            const payRef = doc(db, C.PAYROLL_EXPENSES, known?.id || `payroll_setor_${safeDocId(liveEntry.id, "entry")}_${safeDocId(h.id, "batch")}`);
+            const paySnap = await transaction.get(payRef);
+            if (paySnap.exists()) {
+              payrollWrites.push({
+                ref: payRef,
+                data: {
+                  totalPcs: f.qtySetor,
+                  totalAmount: f.qtySetor * Number(h.rate || 0),
+                  qtyReject: f.qtyReject,
+                  sisaSetor: nextSisa,
+                  updatedAt: todayStr(),
+                },
+              });
+            }
+          }
+          setorChanged = true;
+        }
+
         const modelChanged = normalizeModelKey(nextModel) !== normalizeModelKey(liveEntry.model || "");
         const qtyChanged = Number(liveEntry.qty || 0) !== nextQty;
         const tanggalChanged = String(liveEntry.tanggal || "") !== String(editEntryForm.tanggal || "");
 
-        if (hasSetor && (modelChanged || qtyChanged || tanggalChanged)) {
+        const hasSetorAfter = setorUpdates ? (setorUpdates.qtySetor + setorUpdates.qtyReject) > 0 : hasSetor;
+        if (hasSetor && hasSetorAfter && (modelChanged || qtyChanged || tanggalChanged)) {
           throw new Error("Entry yang sudah disetor tidak bisa diubah qty/model/tanggal karena sudah terkait payroll. Hapus setor/payroll terkait atau buat koreksi baru.");
         }
 
@@ -4291,6 +4370,7 @@ function rateDocId(productType, model, process, bagian = "") {
           updatedAt: todayStr(),
         };
         updates.model = nextModel;
+        if (setorUpdates) Object.assign(updates, setorUpdates);
 
         if (prodRef) {
           const prodSnap = await transaction.get(prodRef);
@@ -4332,10 +4412,14 @@ function rateDocId(productType, model, process, bagian = "") {
         }
 
         transaction.update(entryRef, withSync(updates));
+        payrollWrites.forEach((w) => transaction.update(w.ref, withSync(w.data)));
       });
 
       setEditEntryModal(null);
-      showToast("✅ Entry berhasil diupdate", 3000);
+      showToast(setorChanged ? "✅ Jumlah setor & gaji setor berhasil dikoreksi" : "✅ Entry berhasil diupdate", 3000);
+      if (setorChanged) {
+        await Promise.all([refreshProductionEntries(), refreshPayroll()]).catch((err) => console.warn("Refresh setelah koreksi setor gagal:", err));
+      }
     } catch (e) {
       showToast(friendlyErrorMessage("Update data", e), 4000);
     } finally {
@@ -6317,7 +6401,7 @@ function rateDocId(productType, model, process, bagian = "") {
                 )}
                 {selisih > 0 && (
                   <button
-                    onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: String(selisih), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                    onClick={() => { setSetorModal(e); setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
                     className="mt-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
                     style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                   >
@@ -6329,7 +6413,7 @@ function rateDocId(productType, model, process, bagian = "") {
               <div className="mt-3 flex items-center justify-between rounded-2xl px-3 py-2" style={{ background: "#fefce8", border: "1px solid #fde68a" }}>
                 <span className="text-xs font-bold" style={{ color: "#b45309" }}>🟡 Belum Setor</span>
                 <button
-                  onClick={() => { const t = entryTotalsMap.get(e.id) || setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: String(t.sisaSetor || e.qty || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
+                  onClick={() => { const t = entryTotalsMap.get(e.id) || setorTotals(e); setSetorModal(e); setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" }); }}
                   className="rounded-xl px-3 py-1 text-xs font-bold text-white"
                   style={{ background: "linear-gradient(135deg,#ec4899,#a855f7)" }}
                 >
@@ -6839,7 +6923,7 @@ function rateDocId(productType, model, process, bagian = "") {
                             const rawEntry = productionEntries.find((pe) => pe.id === e.id) || e;
                             const t = entryTotalsMap.get(rawEntry.id) || setorTotals(rawEntry);
                             setSetorModal(rawEntry);
-                            setSetorForm({ qtySetor: String(t.sisaSetor || ""), qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
+                            setSetorForm({ qtySetor: "", qtyReject: "", tanggalSetor: todayStr(), catatan: "" });
                           }}
                           className="mt-3 w-full rounded-xl py-2 text-xs font-bold text-white"
                           style={{ background: "linear-gradient(135deg,#f97316,#ec4899)" }}
@@ -7449,7 +7533,7 @@ function rateDocId(productType, model, process, bagian = "") {
               type="number"
               value={setorForm.qtySetor}
               onChange={(v) => setSetorForm((f) => ({ ...f, qtySetor: v }))}
-              placeholder={`Maks ${sisa} pcs`}
+              placeholder={`0 (maks ${sisa} pcs)`}
             />
             <Input
               label="Qty Reject (pcs) — opsional"
@@ -7891,9 +7975,34 @@ function rateDocId(productType, model, process, bagian = "") {
               placeholder="Opsional"
             />
 
-            {(entryTotalsMap.get(editEntryModal.id) || setorTotals(editEntryModal)).statusSetor !== "belum_setor" && (
-              <div className="rounded-xl px-3 py-2 text-xs font-semibold" style={{ background: "#fef3c7", color: "#b45309" }}>
-                ⚠️ Entry ini sudah pernah disetor. Perubahan qty tidak otomatis mengubah riwayat setor & payroll.
+            {(editEntryForm.setorRows || []).length > 0 && (
+              <div className="rounded-2xl p-3 space-y-2" style={{ background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                <div className="text-sm font-bold" style={{ color: "#15803d" }}>✅ Riwayat setor (bisa dikoreksi)</div>
+                {(editEntryForm.setorRows || []).map((r, idx) => (
+                  <div key={r.id || idx} className="rounded-xl p-2" style={{ background: "white", border: "1px solid #dcfce7" }}>
+                    <div className="text-xs font-semibold mb-1" style={{ color: "#64748b" }}>📅 {r.tanggalSetor} · {money(r.rate)}/pcs</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input
+                        label="Setor (pcs)"
+                        type="number"
+                        value={r.qtySetor}
+                        onChange={(v) => setEditEntryForm((f) => ({ ...f, setorRows: f.setorRows.map((x, i) => i === idx ? { ...x, qtySetor: v } : x) }))}
+                        placeholder="0"
+                      />
+                      <Input
+                        label="Reject (pcs)"
+                        type="number"
+                        value={r.qtyReject}
+                        onChange={(v) => setEditEntryForm((f) => ({ ...f, setorRows: f.setorRows.map((x, i) => i === idx ? { ...x, qtyReject: v } : x) }))}
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="text-xs mt-1" style={{ color: "#7c3aed" }}>Gaji setor: {money(Number(r.qtySetor || 0) * Number(r.rate || 0))}</div>
+                  </div>
+                ))}
+                <div className="text-xs" style={{ color: "#b45309" }}>
+                  ⚠️ Gaji setor ikut disesuaikan. Jika setoran ini sudah dibayar di gajian, catatan gajian tidak ikut berubah.
+                </div>
               </div>
             )}
 
