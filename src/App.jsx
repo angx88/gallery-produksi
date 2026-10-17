@@ -17,10 +17,8 @@ import { db, auth } from "./firebase";
 import {
   collection,
   addDoc,
-  getDocs,
   getDoc,
   updateDoc,
-  deleteDoc,
   doc,
   runTransaction,
   writeBatch,
@@ -32,6 +30,9 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import "./index.css";
+import { getDocsSynced, withSync, deleteDocSynced, deleteWithTombstone, clearLegacyLocalCache, requestFullSync } from "./syncCache";
+
+clearLegacyLocalCache(["gallery-produksi:v1:"]);
 
 /*
   Gallery Produksi
@@ -60,21 +61,6 @@ const C = {
 };
 
 const KONVEKSI_RATE_DEDUCTION = 500;
-
-const FIRESTORE_CACHE_VERSION = "v1";
-const FIRESTORE_CACHE_TTL_MS = 1000 * 60 * 60 * 12; // 12 jam, cukup untuk hemat reads harian
-
-function safeReadJson(value, fallback = null) {
-  try {
-    return value ? JSON.parse(value) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function canUseLocalStorage() {
-  return typeof window !== "undefined" && !!window.localStorage;
-}
 
 function inputValue(valueOrEvent) {
   if (valueOrEvent && typeof valueOrEvent === "object" && "target" in valueOrEvent) {
@@ -1599,27 +1585,10 @@ export default function App() {
     setEditEntryForm({ qty: "", tanggal: "", catatan: "", model: "" });
   }, []);
 
-  const cacheStorageKey = React.useCallback((key) => {
-    const uid = user?.uid || "anon";
-    return `gallery-produksi:${FIRESTORE_CACHE_VERSION}:${uid}:${key}`;
-  }, [user?.uid]);
-
-  const readCachedData = React.useCallback((key) => {
-    if (!canUseLocalStorage()) return null;
-    const payload = safeReadJson(window.localStorage.getItem(cacheStorageKey(key)), null);
-    if (!payload || !Array.isArray(payload.data)) return null;
-    if (Date.now() - Number(payload.savedAt || 0) > FIRESTORE_CACHE_TTL_MS) return null;
-    return payload.data;
-  }, [cacheStorageKey]);
-
-  const writeCachedData = React.useCallback((key, data) => {
-    if (!canUseLocalStorage() || !Array.isArray(data)) return;
-    try {
-      window.localStorage.setItem(cacheStorageKey(key), JSON.stringify({ savedAt: Date.now(), data }));
-    } catch (e) {
-      console.warn("Cache localStorage penuh/tidak tersedia:", e);
-    }
-  }, [cacheStorageKey]);
+  // Cache localStorage lama dimatikan (penuh -> QuotaExceededError). Data kini disimpan di IndexedDB
+  // dan hanya perubahan yang dibaca dari Firestore — lihat src/syncCache.js.
+  const readCachedData = React.useCallback(() => null, []);
+  const writeCachedData = React.useCallback(() => {}, []);
 
   const applyCachedData = React.useCallback((key) => {
     const cached = readCachedData(key);
@@ -1666,7 +1635,7 @@ export default function App() {
   // HEMAT KUOTA: tidak memakai onSnapshot realtime untuk collection besar.
   // Data dimuat sekali saat app dibuka / saat tab terkait dibuka, lalu di-refresh manual setelah write.
   const refreshOrders = React.useCallback(() => {
-    return getDocs(collection(db, C.ORDERS)).then((snap) => {
+    return getDocsSynced(db, C.ORDERS).then((snap) => {
       const list = snap.docs.map((d) => safeOrder({ id: d.id, ...d.data() }));
       setOrders(list);
       writeCachedData("orders", list);
@@ -1677,7 +1646,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshProduksi = React.useCallback(() => {
-    return getDocs(collection(db, C.PRODUKSI)).then((snap) => {
+    return getDocsSynced(db, C.PRODUKSI).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setProduksi(list);
       writeCachedData("produksi", list);
@@ -1686,7 +1655,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshProductionEntries = React.useCallback(() => {
-    return getDocs(collection(db, C.PRODUCTION_ENTRIES)).then((snap) => {
+    return getDocsSynced(db, C.PRODUCTION_ENTRIES).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setProductionEntries(list);
       writeCachedData("production_entries", list);
@@ -1695,7 +1664,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshWorkRates = React.useCallback(() => {
-    return getDocs(collection(db, C.WORK_RATES)).then((snap) => {
+    return getDocsSynced(db, C.WORK_RATES).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setWorkRates(list);
       writeCachedData("work_rates", list);
@@ -1704,7 +1673,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshMasterPekerja = React.useCallback(() => {
-    return getDocs(collection(db, "master_pekerja")).then((snap) => {
+    return getDocsSynced(db, "master_pekerja").then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setMasterPekerja(list);
       writeCachedData("master_pekerja", list);
@@ -1713,7 +1682,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshShipments = React.useCallback(() => {
-    return getDocs(collection(db, C.SHIPMENTS)).then((snap) => {
+    return getDocsSynced(db, C.SHIPMENTS).then((snap) => {
       const list = snap.docs.map((d) => safeShipment({ id: d.id, ...d.data() }));
       setShipments(list);
       writeCachedData("shipments", list);
@@ -1722,7 +1691,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshShipmentBatches = React.useCallback(() => {
-    return getDocs(collection(db, "shipment_batches")).then((snap) => {
+    return getDocsSynced(db, "shipment_batches").then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setShipmentBatches(list);
       writeCachedData("shipment_batches", list);
@@ -1731,7 +1700,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshKasbon = React.useCallback(() => {
-    return getDocs(collection(db, C.KASBON)).then((snap) => {
+    return getDocsSynced(db, C.KASBON).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setKasbonList(list);
       writeCachedData("kasbon", list);
@@ -1740,7 +1709,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshMaterials = React.useCallback(() => {
-    return getDocs(collection(db, C.MATERIALS)).then((snap) => {
+    return getDocsSynced(db, C.MATERIALS).then((snap) => {
       const list = snap.docs.map((d) => safeMaterial({ id: d.id, ...d.data() }));
       setMaterials(list);
       writeCachedData("materials", list);
@@ -1749,7 +1718,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshPayroll = React.useCallback(() => {
-    return getDocs(collection(db, C.PAYROLL_EXPENSES)).then((snap) => {
+    return getDocsSynced(db, C.PAYROLL_EXPENSES).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setPayrollExpenses(list);
       writeCachedData("payroll_expenses", list);
@@ -1758,7 +1727,7 @@ export default function App() {
   }, [writeCachedData]);
 
   const refreshGajianHistory = React.useCallback(() => {
-    return getDocs(collection(db, C.GAJIAN_HISTORY)).then((snap) => {
+    return getDocsSynced(db, C.GAJIAN_HISTORY).then((snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setGajianHistory(list);
       writeCachedData("gajian_history", list);
@@ -1788,6 +1757,7 @@ export default function App() {
   const refreshDataSaatIni = React.useCallback(async () => {
     if (!user || isRefreshingData) return;
     setIsRefreshingData(true);
+    requestFullSync(); // tombol Refresh = ambil data terbaru lengkap dari server
 
     const forceRefresh = async (key, loader) => {
       const result = await loader();
@@ -1926,6 +1896,7 @@ export default function App() {
       try {
         // Core data yang dibutuhkan agar dashboard/menu utama tetap berjalan.
         // Semua getDocs sekali jalan, tidak realtime listener, supaya tidak boros reads.
+        showToast("⏳ Memuat data…", 120000); // supaya angka 0 tidak disangka data hilang
         await Promise.all([
           loadOnce("orders", refreshOrders),
           loadOnce("produksi", refreshProduksi),
@@ -1935,6 +1906,7 @@ export default function App() {
           loadOnce("shipments", refreshShipments),
           loadOnce("shipment_batches", refreshShipmentBatches),
         ]);
+        if (!cancelled) showToast("✅ Data siap", 1200);
       } catch (e) {
         if (!cancelled) {
           console.warn("Gagal memuat data awal:", e);
@@ -2643,12 +2615,12 @@ export default function App() {
         const sameGroup = groupId && (b.groupId === groupId || b.noteNumber === groupId);
         const sameId = !groupId && b.id === batchId;
         if (sameGroup || sameId) {
-          wb.update(doc(db, "shipment_batches", b.id), { ongkir: ongkirVal, updatedAt: new Date().toISOString() });
+          wb.update(doc(db, "shipment_batches", b.id), withSync({ ongkir: ongkirVal, updatedAt: new Date().toISOString() }));
           updated++;
         }
       });
       if (updated === 0 && batchId) {
-        await updateDoc(doc(db, "shipment_batches", batchId), { ongkir: ongkirVal, updatedAt: new Date().toISOString() });
+        await updateDoc(doc(db, "shipment_batches", batchId), withSync({ ongkir: ongkirVal, updatedAt: new Date().toISOString() }));
       } else {
         await wb.commit();
       }
@@ -2673,13 +2645,13 @@ export default function App() {
       const orderId = shipment.raw?.orderId || shipment.raw?.pesananId || "";
 
       // Hapus dari collection shipments
-      batch.delete(doc(db, C.SHIPMENTS, shipment.id));
+      deleteWithTombstone(db, batch, doc(db, C.SHIPMENTS, shipment.id));
 
       // Hapus dari shipment_batches yang punya groupId sama — pakai state, tidak perlu getDocs
       if (gid) {
         (shipmentBatches || []).forEach((b) => {
           if (b.groupId === gid || b.noteNumber === gid) {
-            batch.delete(doc(db, C.SHIPMENT_BATCHES, b.id));
+            deleteWithTombstone(db, batch, doc(db, C.SHIPMENT_BATCHES, b.id));
           }
         });
       }
@@ -2700,7 +2672,7 @@ export default function App() {
             }, 0);
             return { name: base.name, orderedQty: Number(base.qty || 0), shippedQty: totalShipped, price: Number(base.price || base.hargaPcs || 0) };
           });
-          batch.update(orderRef, { deliveries: newDeliveries, shippedItems, updatedAt: new Date().toISOString() });
+          batch.update(orderRef, withSync({ deliveries: newDeliveries, shippedItems, updatedAt: new Date().toISOString() }));
         }
       }
 
@@ -2724,7 +2696,7 @@ export default function App() {
     if (!ok) return;
     setIsSaving(true);
     try {
-      await updateDoc(doc(db, C.ORDERS, order.id), {
+      await updateDoc(doc(db, C.ORDERS, order.id), withSync({
         status: "Kelebihan Kirim",
         deliveryStatus: "Kelebihan Kirim",
         shippingStatus: "Kelebihan Kirim",
@@ -2733,7 +2705,7 @@ export default function App() {
         statusProduksi: "Selesai",
         produksiStatus: "Selesai",
         updatedAt: todayStr(),
-      });
+      }));
       await Promise.all([refreshOrders(), refreshProduksi(), refreshShipments()]);
       showToast("✅ Lebih kirim sudah ditandai dicek.", 3000);
     } catch (e) {
@@ -2924,9 +2896,12 @@ export default function App() {
 
     setIsSaving(true);
     try {
-      const batch = writeBatch(db);
-      deletableRows.forEach((row) => batch.delete(doc(db, C.PRODUKSI, row.id)));
-      await batch.commit();
+      // Tiap hapus = 2 operasi (hapus + catatan hapus); batas Firestore 500 operasi per batch.
+      for (let i = 0; i < deletableRows.length; i += 200) {
+        const batch = writeBatch(db);
+        deletableRows.slice(i, i + 200).forEach((row) => deleteWithTombstone(db, batch, doc(db, C.PRODUKSI, row.id)));
+        await batch.commit();
+      }
       setProduksi((prev) => (prev || []).filter((row) => !deletableRows.some((del) => del.id === row.id)));
       await refreshProduksi();
       showToast(`✅ ${deletableRows.length} produksi duplikat dibersihkan.`, 3500);
@@ -3275,7 +3250,7 @@ function rateDocId(productType, model, process, bagian = "") {
         const prodSnap = await transaction.get(prodRef);
         if (prodSnap.exists()) throw new Error("Pesanan ini sudah masuk produksi.");
 
-        transaction.set(prodRef, {
+        transaction.set(prodRef, withSync({
           orderId: order.id,
           invoice: order.invoice,
           customer: order.customer,
@@ -3292,16 +3267,16 @@ function rateDocId(productType, model, process, bagian = "") {
           createdAt: todayStr(),
           updatedAt: todayStr(),
           history: [{ tanggal: todayStr(), status: "Antri", catatan: "Masuk produksi" }],
-        });
+        }));
 
-        transaction.update(orderRef, {
+        transaction.update(orderRef, withSync({
           statusProduksi: "Antri",
           produksiStatus: "Antri",
           produksiSource: "gallery-produksi",
           produksiUpdatedAt: todayStr(),
           status: isSentStatus(order.status) || lower(order.status) === "lunas" ? order.status : "Proses",
           updatedAt: todayStr(),
-        });
+        }));
       });
 
       await Promise.all([refreshOrders(), refreshProduksi()]);
@@ -3396,7 +3371,7 @@ function rateDocId(productType, model, process, bagian = "") {
         const liveIdx = statusOrder.indexOf(liveStatus);
         if (liveIdx >= newIdx) return; // Data server sudah sama/lebih maju, jangan overwrite.
 
-        transaction.update(prodRef, {
+        transaction.update(prodRef, withSync({
           status: newStatus,
           updatedAt: todayStr(),
           history: [
@@ -3407,17 +3382,17 @@ function rateDocId(productType, model, process, bagian = "") {
               catatan: `Otomatis dari progress setor borongan (${newStatus})`,
             },
           ],
-        });
+        }));
 
         if (orderRef) {
-          transaction.update(orderRef, {
+          transaction.update(orderRef, withSync({
             statusProduksi: newStatus,
             produksiStatus: newStatus,
             produksiSource: "gallery-produksi",
             produksiUpdatedAt: todayStr(),
             ...(newStatus === "Selesai" ? { status: "Selesai Produksi" } : {}),
             updatedAt: todayStr(),
-          });
+          }));
         }
       });
       await Promise.all([refreshProduksi(), refreshOrders()]);
@@ -3458,18 +3433,18 @@ function rateDocId(productType, model, process, bagian = "") {
           liveOrder = orderSnap.data();
         }
 
-        transaction.update(prodRef, {
+        transaction.update(prodRef, withSync({
           status: newStatus,
           updatedAt: todayStr(),
           history: [
             ...(Array.isArray(liveProd.history) ? liveProd.history : []),
             { tanggal: todayStr(), status: newStatus, catatan: "Update status manual" },
           ],
-        });
+        }));
 
         if (orderRef && orderStatusBaru) {
           const currentOrderStatus = String(liveOrder?.status || "");
-          transaction.update(orderRef, {
+          transaction.update(orderRef, withSync({
             statusProduksi: newStatus,
             produksiStatus: newStatus,
             produksiSource: "gallery-produksi",
@@ -3478,7 +3453,7 @@ function rateDocId(productType, model, process, bagian = "") {
               ? {}
               : { status: newStatus === "Selesai" ? "Selesai Produksi" : orderStatusBaru }),
             updatedAt: todayStr(),
-          });
+          }));
         }
       });
       showToast("✅ Status produksi diperbarui", 2500);
@@ -3518,7 +3493,7 @@ function rateDocId(productType, model, process, bagian = "") {
             prepared.push({ ref, part: e.part, rate: e.rate, createdAt: snap.exists() ? (snap.data().createdAt || todayStr()) : todayStr() });
           }
           prepared.forEach((p) => {
-            transaction.set(p.ref, {
+            transaction.set(p.ref, withSync({
               productType: cleanProductType,
               model: cleanModel,
               process: cleanProcess,
@@ -3527,7 +3502,7 @@ function rateDocId(productType, model, process, bagian = "") {
               source: "gallery-produksi",
               createdAt: p.createdAt,
               updatedAt: new Date().toISOString(),
-            }, { merge: true });
+            }), { merge: true });
           });
         });
         await refreshWorkRates();
@@ -3552,7 +3527,7 @@ function rateDocId(productType, model, process, bagian = "") {
     try {
       await runTransaction(db, async (transaction) => {
         const snap = await transaction.get(rateRef);
-        transaction.set(rateRef, {
+        transaction.set(rateRef, withSync({
           productType: cleanProductType,
           model: cleanModel,
           process: cleanProcess,
@@ -3560,7 +3535,7 @@ function rateDocId(productType, model, process, bagian = "") {
           source: "gallery-produksi",
           createdAt: snap.exists() ? (snap.data().createdAt || todayStr()) : todayStr(),
           updatedAt: new Date().toISOString(),
-        }, { merge: true });
+        }), { merge: true });
       });
       await refreshWorkRates();
       setRateForm({ productType: "Kerudung", model: "", process: "Jahit", rate: "", partRates: {} });
@@ -3682,9 +3657,9 @@ function rateDocId(productType, model, process, bagian = "") {
 
         }
 
-        transaction.set(entryRef, entryPayload);
+        transaction.set(entryRef, withSync(entryPayload));
         if (prodRef) {
-          transaction.update(prodRef, {
+          transaction.update(prodRef, withSync({
             workers: [
               ...liveWorkers,
               {
@@ -3698,7 +3673,7 @@ function rateDocId(productType, model, process, bagian = "") {
               },
             ],
             updatedAt: todayStr(),
-          });
+          }));
         }
       });
 
@@ -3802,7 +3777,7 @@ function rateDocId(productType, model, process, bagian = "") {
         const nextSisa = Math.max(0, Number(liveEntry.qty || 0) - nextQtySetor - nextQtyReject);
         const nextStatusSetor = nextSisa <= 0 ? "sudah_setor" : "setor_sebagian";
 
-        transaction.update(entryRef, {
+        transaction.update(entryRef, withSync({
           setorHistory: nextHistory,
           qtySetor: nextQtySetor,
           qtyReject: nextQtyReject,
@@ -3812,10 +3787,10 @@ function rateDocId(productType, model, process, bagian = "") {
           tanggalSetor,
           catatanSetor: setorForm.catatan || "",
           updatedAt: todayStr(),
-        });
+        }));
 
         if (totalWageSetor > 0) {
-          transaction.set(payrollRef, {
+          transaction.set(payrollRef, withSync({
             source: "gallery-produksi",
             type: "gaji_borongan",
             employeeName: displayWorkerName(liveEntry.employeeName),
@@ -3834,7 +3809,7 @@ function rateDocId(productType, model, process, bagian = "") {
             qtyAwal: liveEntry.qty,
             qtyReject,
             sisaSetor: nextSisa,
-          });
+          }));
         }
 
         nextHistoryForStatus = nextHistory;
@@ -4068,7 +4043,7 @@ function rateDocId(productType, model, process, bagian = "") {
             total: Number(it.shippedQty || 0) * Number(it.price || 0),
           }));
 
-          transaction.set(shipmentRef, {
+          transaction.set(shipmentRef, withSync({
             pesananId: order.id,
             orderId: order.id,
             groupId,
@@ -4106,9 +4081,9 @@ function rateDocId(productType, model, process, bagian = "") {
             note: kirimForm.catatan || "",
             source: "gallery-produksi",
             createdAt: todayStr(),
-          });
+          }));
 
-          transaction.update(row.orderRef, {
+          transaction.update(row.orderRef, withSync({
             status: orderStatus,
             shippingStatus,
             deliveryStatus,
@@ -4129,24 +4104,24 @@ function rateDocId(productType, model, process, bagian = "") {
             produksiSource: "gallery-produksi",
             produksiUpdatedAt: todayStr(),
             updatedAt: todayStr(),
-          });
+          }));
 
           if (row.prodRef && productionDoneByDelivery && row.prod?.status !== "Selesai") {
-            transaction.update(row.prodRef, {
+            transaction.update(row.prodRef, withSync({
               status: "Selesai",
               updatedAt: todayStr(),
               history: [
                 ...(Array.isArray(row.prodSnapData?.history) ? row.prodSnapData.history : []),
                 { tanggal: todayStr(), status: "Selesai", catatan: "Otomatis selesai karena pengiriman sudah memenuhi pesanan" },
               ],
-            });
+            }));
           }
         }
 
         if (batchItems.length > 0) {
           const batchOrderIds = [...new Set(batchOrderSummaries.map((o) => o.orderId).filter(Boolean))];
           const batchInvoices = [...new Set(batchOrderSummaries.map((o) => o.invoice).filter(Boolean))];
-          transaction.set(batchRef, {
+          transaction.set(batchRef, withSync({
             groupId,
             noteNumber: groupId,
             shipmentType: selectedOrders.length > 1 ? "combined_customer" : "single_order",
@@ -4175,7 +4150,7 @@ function rateDocId(productType, model, process, bagian = "") {
             totalTagihanBatch: batchItems.reduce((s, i) => s + Number(i.total || 0), 0) + ongkirAmount,
             totalHppBatch: batchItems.reduce((s, i) => s + Number(i.qtyKirim || i.shippedQty || i.qty || 0) * Number(i.hppPerPcs || i.bahanCost || 0), 0),
             status: "Aktif",
-          });
+          }));
         }
       });
 
@@ -4220,13 +4195,13 @@ function rateDocId(productType, model, process, bagian = "") {
     const { type, id } = confirmDelete;
     setConfirmDelete(null);
     try {
-      if (type === "rate") { await deleteDoc(doc(db, C.WORK_RATES, id)); await refreshWorkRates(); }
+      if (type === "rate") { await deleteDocSynced(db, doc(db, C.WORK_RATES, id)); await refreshWorkRates(); }
       if (type === "entry") {
         // Pakai state lokal — tidak perlu getDocs ke Firestore
         const relatedPayroll = (payrollExpenses || []).filter((p) => p.entryId === id);
         const batch = writeBatch(db);
-        batch.delete(doc(db, C.PRODUCTION_ENTRIES, id));
-        relatedPayroll.forEach((p) => batch.delete(doc(db, C.PAYROLL_EXPENSES, p.id)));
+        deleteWithTombstone(db, batch, doc(db, C.PRODUCTION_ENTRIES, id));
+        relatedPayroll.forEach((p) => deleteWithTombstone(db, batch, doc(db, C.PAYROLL_EXPENSES, p.id)));
 
         // Hapus dokumen PRODUKSI terkait jika tidak ada entry lain yang masih memakainya
         const deletedEntry = confirmDelete?.entry;
@@ -4236,7 +4211,7 @@ function rateDocId(productType, model, process, bagian = "") {
             (e) => e.id !== id && (e.produksiId === produksiId || e.productionId === produksiId)
           );
           if (remainingSiblings.length === 0) {
-            batch.delete(doc(db, C.PRODUKSI, produksiId));
+            deleteWithTombstone(db, batch, doc(db, C.PRODUKSI, produksiId));
           }
         }
 
@@ -4349,14 +4324,14 @@ function rateDocId(productType, model, process, bagian = "") {
                 process: liveEntry.process || w.process,
               };
             });
-            transaction.update(prodRef, {
+            transaction.update(prodRef, withSync({
               workers: nextWorkers,
               updatedAt: todayStr(),
-            });
+            }));
           }
         }
 
-        transaction.update(entryRef, updates);
+        transaction.update(entryRef, withSync(updates));
       });
 
       setEditEntryModal(null);
@@ -4478,9 +4453,9 @@ function rateDocId(productType, model, process, bagian = "") {
           });
         }
 
-        kasbonRollbackUpdates.forEach(({ ref, payload }) => transaction.update(ref, payload));
-        transaction.delete(markerRef);
-        transaction.delete(historyRef);
+        kasbonRollbackUpdates.forEach(({ ref, payload }) => transaction.update(ref, withSync(payload)));
+        deleteWithTombstone(db, transaction, markerRef);
+        deleteWithTombstone(db, transaction, historyRef);
       });
       showToast("↩️ Status gajian dibatalkan dan kasbon dikembalikan", 3500);
       refreshKasbon();
@@ -4548,14 +4523,14 @@ function rateDocId(productType, model, process, bagian = "") {
           const oldWorkers = Array.isArray(oldProdSnap.data().workers) ? oldProdSnap.data().workers : [];
           const nextOldWorkers = oldWorkers.filter((w) => w.entryId !== entry.id);
           if (nextOldWorkers.length !== oldWorkers.length) {
-            transaction.update(oldProdRef, {
+            transaction.update(oldProdRef, withSync({
               workers: nextOldWorkers,
               updatedAt: todayStr(),
-            });
+            }));
           }
         }
 
-        transaction.update(entryRef, {
+        transaction.update(entryRef, withSync({
           orderId: kaitkanOrderId,
           pesananId: kaitkanOrderId,
           invoice: targetOrder.invoice || "",
@@ -4567,7 +4542,7 @@ function rateDocId(productType, model, process, bagian = "") {
           updatedAt: new Date().toISOString(),
           linkedAt: new Date().toISOString(),
           linkedBy: user?.email || user?.uid || "",
-        });
+        }));
 
         if (prodRef && prodSnap?.exists()) {
           const liveWorkers = Array.isArray(prodSnap.data().workers) ? prodSnap.data().workers : [];
@@ -4581,10 +4556,10 @@ function rateDocId(productType, model, process, bagian = "") {
             entryId: entry.id,
           };
           const hasWorker = liveWorkers.some((w) => w.entryId === entry.id);
-          transaction.update(prodRef, {
+          transaction.update(prodRef, withSync({
             workers: hasWorker ? liveWorkers.map((w) => w.entryId === entry.id ? { ...w, ...nextWorker } : w) : [...liveWorkers, nextWorker],
             updatedAt: todayStr(),
-          });
+          }));
         }
       });
 
@@ -4691,16 +4666,16 @@ function rateDocId(productType, model, process, bagian = "") {
           const updatedCicilan = [...existingCicilan, newCicilan];
           const totalCicilan = updatedCicilan.reduce((s, c) => s + nonNegativeMoney(c.jumlah || 0), 0);
           const sisaBaru = Math.max(0, nonNegativeMoney(kasbon.data.jumlah || 0) - totalCicilan);
-          transaction.update(kasbon.ref, {
+          transaction.update(kasbon.ref, withSync({
             cicilan: updatedCicilan,
             sisaKasbon: sisaBaru,
             status: sisaBaru <= 0 ? "lunas" : "aktif",
             updatedAt: new Date().toISOString(),
-          });
+          }));
           sisaPotong -= actualPotong;
         }
 
-        transaction.set(markerRef, {
+        transaction.set(markerRef, withSync({
           source: "gallery-produksi-gaji-marker",
           type: "status_gajian_periode",
           employeeName: employeeDisplay,
@@ -4717,9 +4692,9 @@ function rateDocId(productType, model, process, bagian = "") {
           totalReject: Number(r?.pcsReject || 0),
           detailCount: Array.isArray(r?.detail) ? r.detail.length : 0,
           createdAt: todayStr(),
-        });
+        }));
 
-        transaction.set(historyRef, {
+        transaction.set(historyRef, withSync({
           employeeName: employeeDisplay,
           tanggalGaji: todayStr(),
           periodeGajiDari: dari,
@@ -4731,7 +4706,7 @@ function rateDocId(productType, model, process, bagian = "") {
           totalReject: Number(r?.pcsReject || 0),
           source: "tandai_sudah_gajian",
           createdAt: todayStr(),
-        });
+        }));
       });
 
       const toastMsg = actualPotonganKasbon > 0
@@ -4751,7 +4726,7 @@ function rateDocId(productType, model, process, bagian = "") {
   async function hapusGajianHistory(id) {
     if (!(await showConfirm("Hapus riwayat gajian ini?", { okLabel: "Hapus", okStyle: "danger", icon: "🗑️" }))) return;
     try {
-      await deleteDoc(doc(db, C.GAJIAN_HISTORY, id));
+      await deleteDocSynced(db, doc(db, C.GAJIAN_HISTORY, id));
       await refreshGajianHistory();
       showToast("🗑️ Riwayat gajian dihapus", 2500);
     } catch (e) {
