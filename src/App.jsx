@@ -7240,19 +7240,11 @@ function rateDocId(productType, model, process, bagian = "") {
               : kirimOnlyBelumLengkap
                 ? filteredShipments.filter((k) => kirimBelumLengkapIds.has(k.orderId) || kirimBelumLengkapIds.has(k.pesananId) || kirimBelumLengkapIds.has(findRelatedOrderForShipmentRow(k)?.id))
                 : filteredShipments;
-            const shipmentIssuePriority = (k) => {
-              const relatedOrder = findRelatedOrderForShipmentRow(k);
-              const ordered = relatedOrder ? dashboardTotalOrderedQty(relatedOrder) : (k.items || []).reduce((s, item) => s + Number(item.qtyPesan || item.orderedQty || 0), 0);
-              const shipped = relatedOrder ? dashboardTotalShippedQty(relatedOrder) : (k.items || []).reduce((s, item) => s + Number(item.qtyKirim || item.shippedQty || item.qty || 0), 0);
-              if (ordered > 0 && shipped > ordered) return 0;
-              if (ordered > 0 && shipped < ordered) return 1;
-              return 2;
-            };
+            // Urutan: tanggal kirim terbaru di atas, lalu yang terakhir dicatat.
             const displayed = [...displayedBase].sort((a, b) => {
-              const pa = shipmentIssuePriority(a);
-              const pb = shipmentIssuePriority(b);
-              if (pa !== pb) return pa - pb;
-              return String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || ""));
+              const byDate = String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || ""));
+              if (byDate !== 0) return byDate;
+              return String(b.raw?.createdAt || "").localeCompare(String(a.raw?.createdAt || ""));
             });
             if (displayed.length === 0) return <Empty text={focusedKirimOrderId ? "Data kiriman terkait tidak ditemukan. Coba tampilkan semua atau cek pesanan." : kirimOnlyBelumLengkap ? "Semua pengiriman sudah lengkap" : "Tidak ada data pengiriman"} />;
             return displayed.map((k) => {
