@@ -802,7 +802,7 @@ export default function App() {
 
     return orders
       .filter((o) => {
-        const txt = `${o.customer} ${o.item} ${o.invoice} ${o.status} ${o.warna}`.toLowerCase();
+        const txt = `${o.customer} ${o.item} ${(o.items || []).map((it) => it?.name || "").join(" ")} ${o.invoice} ${o.status} ${o.warna}`.toLowerCase();
         return q === "" || txt.includes(q);
       })
       .sort((a, b) => {
@@ -993,9 +993,10 @@ export default function App() {
       if (p.status === "Selesai") return 1;
       return 0;
     };
+    const orderItemNames = new Map(orders.map((o) => [String(o.id || "").trim(), (o.items || []).map((it) => it?.name || "").join(" ")]));
     return [...produksi]
       .filter((p) => {
-        const txt = `${p.customer} ${p.item} ${p.invoice} ${p.status}`.toLowerCase();
+        const txt = `${p.customer} ${p.item} ${(Array.isArray(p.items) ? p.items : []).map((it) => it?.name || it?.nama || "").join(" ")} ${orderItemNames.get(String(p.orderId || "").trim()) || ""} ${p.invoice} ${p.status}`.toLowerCase();
         return q === "" || txt.includes(q);
       })
       .sort((a, b) => {
@@ -1007,7 +1008,7 @@ export default function App() {
           String(a.tanggalMulai || a.updatedAt || a.createdAt || "")
         );
       });
-  }, [produksi, q]);
+  }, [produksi, orders, q]);
 
   const filteredEntries = useMemo(() => {
     const statusPriority = (e) => {
@@ -1024,7 +1025,7 @@ export default function App() {
         return String(b.tanggal || "").localeCompare(String(a.tanggal || "")); // dalam grup: terbaru di atas
       })
       .filter((e) => {
-        const txt = `${e.employeeName} ${e.productType} ${e.model} ${e.process} ${e.invoice}`.toLowerCase();
+        const txt = `${e.employeeName} ${e.productType} ${e.model} ${e.item || ""} ${e.customer || ""} ${e.process} ${e.invoice}`.toLowerCase();
         return q === "" || txt.includes(q);
       });
   }, [productionEntries, q, entryTotalsMap]);
@@ -1147,7 +1148,7 @@ export default function App() {
 
     return rows
       .filter((s) => {
-        const txt = `${s.customer} ${s.produk} ${s.invoice} ${s.ekspedisi}`.toLowerCase();
+        const txt = `${s.customer} ${s.produk} ${(Array.isArray(s.items) ? s.items : []).map((it) => it?.nama || it?.name || "").join(" ")} ${s.invoice} ${s.ekspedisi}`.toLowerCase();
         return q === "" || txt.includes(q);
       })
       .sort((a, b) => String(b.tanggalKirim || "").localeCompare(String(a.tanggalKirim || "")));
@@ -6112,7 +6113,7 @@ function rateDocId(productType, model, process, bagian = "") {
           <Button onClick={() => setModal("tarif")} className="w-full" style={{ background: "linear-gradient(135deg,#a855f7,#ec4899)" }}>
             🏷️ + Tambah Tarif Borongan
           </Button>
-          {workRates.map((r) => (
+          {workRates.filter((r) => q === "" || `${r.productType || ""} ${r.model || ""} ${r.bagian || ""} ${r.process || ""}`.toLowerCase().includes(q)).map((r) => (
             <div key={r.id} className="rounded-3xl bg-white p-4 shadow-sm" style={{ border: "1px solid #fce7f3" }}>
               <div className="flex justify-between items-start gap-3">
                 <div>
